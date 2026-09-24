@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ForceForge</title>
+  <link rel="stylesheet" href="styles/slds/slds.css">
+  <style>
+    body {
+      width: 380px;
+      min-height: 200px;
+      margin: 0;
+      padding: 0;
+      font-family: 'Salesforce Sans', Arial, sans-serif;
+    }
+    .popup-container {
+      padding: 12px;
+    }
+    .popup-header {
+      text-align: center;
+      padding: 12px 0;
+      border-bottom: 1px solid #dddbda;
+      margin-bottom: 12px;
+    }
+    .popup-header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+      color: #032d60;
+    }
+    .popup-header p {
+      font-size: 11px;
+      color: #514f4d;
+      margin: 4px 0 0 0;
+    }
+    .popup-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .popup-btn {
+      display: block;
+      width: 100%;
+      padding: 10px 16px;
+      border: 1px solid #dddbda;
+      border-radius: 4px;
+      background: #fff;
+      color: #032d60;
+      font-size: 13px;
+      cursor: pointer;
+      text-align: left;
+      text-decoration: none;
+    }
+    .popup-btn:hover {
+      background: #f3f2f2;
+      border-color: #0070d2;
+    }
+    .popup-btn.primary {
+      background: #0070d2;
+      color: #fff;
+      border-color: #0070d2;
+      text-align: center;
+      font-weight: 600;
+    }
+    .popup-btn.primary:hover {
+      background: #005fb2;
+    }
+    .popup-btn .btn-icon {
+      margin-right: 8px;
+    }
+    .popup-footer {
+      margin-top: 12px;
+      padding-top: 8px;
+      border-top: 1px solid #dddbda;
+      text-align: center;
+      font-size: 10px;
+      color: #747474;
+    }
+    .popup-footer a {
+      color: #0070d2;
+      text-decoration: none;
+    }
+    .config-warning {
+      background: #fe9339;
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .config-warning a {
+      color: #fff;
+      text-decoration: underline;
+    }
+    .org-info {
+      background: #f3f2f2;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #514f4d;
+      margin-bottom: 8px;
+    }
+    .org-info strong {
+      color: #032d60;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="react.js"></script>
+  <script src="react-dom.js"></script>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

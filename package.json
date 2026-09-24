@@ -1,0 +1,15 @@
+{
+  "name": "sf-object-creator",
+  "version": "1.0.0",
+  "description": "AI-Powered Salesforce Object & Field Creator Chrome Extension",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.js",
+    "copy-react": "node scripts/copy-react.js"
+  },
+  "devDependencies": {},
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

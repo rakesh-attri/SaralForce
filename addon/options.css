@@ -1,0 +1,171 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Salesforce Sans', Arial, sans-serif;
+  background: #f3f2f2;
+  color: #333;
+}
+
+.options-container {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.options-header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.options-header h1 {
+  font-size: 22px;
+  font-weight: 700;
+  color: #032d60;
+  margin: 0 0 8px 0;
+}
+
+.options-header .subtitle {
+  font-size: 13px;
+  color: #514f4d;
+  margin: 0;
+}
+
+.options-section {
+  background: #fff;
+  border: 1px solid #dddbda;
+  border-radius: 6px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.options-section h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #032d60;
+  margin: 0 0 16px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #dddbda;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.form-control {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #c9c7c5;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #333;
+  background: #fff;
+}
+
+.form-control:focus {
+  outline: none;
+  border-color: #0070d2;
+  box-shadow: 0 0 0 1px #0070d2;
+}
+
+.input-with-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.input-with-toggle .form-control {
+  flex: 1;
+}
+
+.toggle-btn {
+  padding: 8px 12px;
+  border: 1px solid #c9c7c5;
+  border-radius: 4px;
+  background: #f3f2f2;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toggle-btn:hover {
+  background: #dddbda;
+}
+
+.help-text {
+  font-size: 11px;
+  color: #747474;
+  margin: 4px 0 0 0;
+}
+
+.button-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.btn-primary {
+  background: #0070d2;
+  color: #fff;
+  border-color: #0070d2;
+}
+
+.btn-primary:hover {
+  background: #005fb2;
+}
+
+.btn-secondary {
+  background: #fff;
+  color: #0070d2;
+  border-color: #0070d2;
+}
+
+.btn-secondary:hover {
+  background: #f3f2f2;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.test-result {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.test-success {
+  background: #2e844a;
+  color: #fff;
+}
+
+.test-error {
+  background: #c23934;
+  color: #fff;
+}
+
+.test-testing {
+  background: #fe9339;
+  color: #fff;
+}

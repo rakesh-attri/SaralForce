@@ -1,0 +1,313 @@
+/* Salesforce Lightning Design System - Minimal Core Styles */
+/* This is a subset of SLDS for the extension UI */
+
+/* Reset */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+  -ms-text-size-adjust: 100%;
+}
+
+body {
+  font-family: 'Salesforce Sans', Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #333;
+  background: #f3f2f2;
+  margin: 0;
+  padding: 0;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  font-weight: 700;
+}
+
+h1 { font-size: 24px; }
+h2 { font-size: 20px; }
+h3 { font-size: 16px; }
+h4 { font-size: 14px; }
+h5 { font-size: 13px; }
+h6 { font-size: 12px; }
+
+p { margin: 0 0 8px 0; }
+
+a {
+  color: #0070d2;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Layout Utilities */
+.slds-page-header {
+  padding: 12px 16px;
+  background: #fafaf9;
+  border-bottom: 1px solid #dddbda;
+}
+
+.slds-page-header__row {
+  display: flex;
+  align-items: center;
+}
+
+.slds-page-header__col-title {
+  flex: 1;
+}
+
+.slds-theme_shade {
+  background: #f3f2f2;
+}
+
+/* Buttons */
+.slds-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border: 1px solid #dddbda;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #fff;
+  color: #333;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.slds-button:hover {
+  background: #f3f2f2;
+}
+
+.slds-button_neutral {
+  background: #fff;
+  border-color: #dddbda;
+  color: #333;
+}
+
+.slds-button_neutral:hover {
+  background: #f3f2f2;
+  border-color: #0070d2;
+}
+
+.slds-button_brand {
+  background: #0070d2;
+  border-color: #0070d2;
+  color: #fff;
+}
+
+.slds-button_brand:hover {
+  background: #005fb2;
+}
+
+/* Form Elements */
+.form-control {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #333;
+  background: #fff;
+  border: 1px solid #c9c7c5;
+  border-radius: 4px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.form-control:focus {
+  outline: none;
+  border-color: #0070d2;
+  box-shadow: 0 0 0 1px #0070d2;
+}
+
+.form-control:disabled {
+  background: #f3f2f2;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+select.form-control {
+  appearance: auto;
+}
+
+textarea.form-control {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* Tables */
+.slds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.slds-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-weight: 600;
+  color: #514f4d;
+  border-bottom: 2px solid #dddbda;
+  white-space: nowrap;
+}
+
+.slds-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f3f2f2;
+  vertical-align: top;
+}
+
+.slds-table_bordered th,
+.slds-table_bordered td {
+  border: 1px solid #dddbda;
+}
+
+.slds-table_striped tr:nth-child(even) {
+  background: #fafaf9;
+}
+
+.slds-table tr:hover {
+  background: #f3f2f2;
+}
+
+/* Grid */
+.slds-grid {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.slds-col {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Text Alignment */
+.slds-text-align_center {
+  text-align: center;
+}
+
+.slds-text-align_right {
+  text-align: right;
+}
+
+/* Spacing Utilities */
+.slds-p-around_medium {
+  padding: 16px;
+}
+
+.slds-p-vertical_small {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.slds-m-bottom_small {
+  margin-bottom: 8px;
+}
+
+.slds-m-bottom_medium {
+  margin-bottom: 16px;
+}
+
+/* Border Utilities */
+.slds-border_bottom {
+  border-bottom: 1px solid #dddbda;
+}
+
+.slds-border_top {
+  border-top: 1px solid #dddbda;
+}
+
+/* Visibility */
+.hide {
+  display: none !important;
+}
+
+/* Truncate */
+.slds-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Scrollable */
+.slds-scrollable_x {
+  overflow-x: auto;
+}
+
+/* Icon */
+.slds-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.slds-icon_x-small {
+  width: 16px;
+  height: 16px;
+}
+
+.slds-icon_text-default {
+  color: #747474;
+}
+
+/* Tabs */
+.slds-tabs_scoped__nav {
+  display: flex;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-bottom: 2px solid #dddbda;
+}
+
+.slds-tabs_scoped__item {
+  padding: 8px 16px;
+  font-size: 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  color: #514f4d;
+}
+
+.slds-tabs_scoped__item:hover {
+  color: #0070d2;
+}
+
+.slds-tabs_scoped__item.slds-is-active {
+  color: #0070d2;
+  border-bottom-color: #0070d2;
+  font-weight: 600;
+}
+
+.slds-tabs_scoped__link {
+  text-decoration: none;
+}
+
+/* Theme */
+.slds-theme_shade {
+  background-color: #f3f2f2;
+}
+
+/* Media Object */
+.slds-media {
+  display: flex;
+  align-items: flex-start;
+}
+
+.slds-media__body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .slds-grid {
+    flex-direction: column;
+  }
+}

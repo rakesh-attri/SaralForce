@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jai Shri Ram</title>
+<!--
+  ForceForge farewell page.
+  Fully self-contained (inline CSS + inline SVG, zero external assets).
+
+  HOSTING (required — Chrome only allows http/https uninstall URLs):
+    1. Push this repo to GitHub.
+    2. GitHub repo → Settings → Pages → "Deploy from a branch" →
+       Branch: main, Folder: / (or /docs if you move this file there).
+    3. Copy your Pages URL, e.g. https://<user>.github.io/<repo>/addon/goodbye.html
+    4. Paste it into addon/background.js → setUninstallURL("...") and reload
+       the extension on chrome://extensions.
+-->
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Noto Sans Devanagari", "Mangal", Georgia, serif;
+    background: linear-gradient(180deg, #3b1300 0%, #7a2a00 22%, #e06a00 48%, #ff9a2e 66%, #ffd27a 100%);
+    min-height: 100vh;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    position: relative;
+    color: #fff;
+  }
+
+  /* Sun */
+  .sun {
+    position: absolute;
+    top: 8%;
+    left: 50%;
+    width: 180px;
+    height: 180px;
+    margin-left: -90px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #fff8e1 0%, #ffe082 35%, #ff9800 70%, rgba(255,152,0,0) 72%);
+    box-shadow: 0 0 120px 60px rgba(255, 183, 77, 0.55);
+    animation: sunPulse 6s ease-in-out infinite;
+    z-index: 1;
+  }
+  @keyframes sunPulse {
+    0%, 100% { transform: scale(1); opacity: 0.95; }
+    50% { transform: scale(1.06); opacity: 1; }
+  }
+
+  /* Floating petals / diya sparks */
+  .petal {
+    position: absolute;
+    bottom: -20px;
+    border-radius: 60% 0 60% 0;
+    background: radial-gradient(circle at 30% 30%, #ffe0b2, #ff7043);
+    opacity: 0.85;
+    animation: rise linear infinite;
+    z-index: 3;
+  }
+  @keyframes rise {
+    0% { transform: translateY(0) rotate(0deg); opacity: 0; }
+    10% { opacity: 0.9; }
+    100% { transform: translateY(-110vh) rotate(320deg); opacity: 0; }
+  }
+
+  /* Temple + flags scene */
+  .scene {
+    position: relative;
+    width: min(920px, 96vw);
+    z-index: 2;
+    margin-top: 24vh;
+  }
+  .scene svg { display: block; width: 100%; height: auto; }
+
+  .flag-wave {
+    transform-box: fill-box;
+    transform-origin: left center;
+    animation: wave 2.6s ease-in-out infinite;
+  }
+  .flag-wave.d2 { animation-delay: -0.9s; }
+  .flag-wave.d3 { animation-delay: -1.7s; }
+  @keyframes wave {
+    0%, 100% { transform: skewY(0deg) scaleX(1); }
+    50% { transform: skewY(4deg) scaleX(0.96); }
+  }
+
+  .flame {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation: flick 1.6s ease-in-out infinite;
+  }
+  @keyframes flick {
+    0%, 100% { transform: scaleY(1) scaleX(1); opacity: 0.95; }
+    30% { transform: scaleY(1.12) scaleX(0.94); opacity: 1; }
+    60% { transform: scaleY(0.94) scaleX(1.05); opacity: 0.9; }
+  }
+
+  /* Greeting */
+  .greeting {
+    position: absolute;
+    top: 24%;
+    left: 0;
+    right: 0;
+    text-align: center;
+    z-index: 4;
+    padding: 0 16px;
+    animation: fadeUp 2.2s ease-out both;
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(26px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .greeting .om {
+    font-size: clamp(28px, 5vw, 54px);
+    color: #ffe9c4;
+    text-shadow: 0 0 24px rgba(255, 200, 90, 0.9), 0 2px 6px rgba(60, 20, 0, 0.6);
+    letter-spacing: 0.35em;
+    margin-bottom: 10px;
+  }
+  .greeting h1 {
+    font-size: clamp(44px, 9vw, 96px);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #fff7e6;
+    text-shadow:
+      0 0 18px rgba(255, 220, 150, 0.95),
+      0 0 70px rgba(255, 140, 0, 0.8),
+      0 3px 8px rgba(60, 20, 0, 0.65);
+  }
+  .greeting .en {
+    margin-top: 8px;
+    font-size: clamp(16px, 3vw, 26px);
+    letter-spacing: 0.5em;
+    text-indent: 0.5em;
+    color: #ffedd2;
+    text-shadow: 0 2px 6px rgba(60, 20, 0, 0.6);
+    font-family: Georgia, serif;
+  }
+
+  /* Ground glow */
+  .ground {
+    width: 100%;
+    height: 90px;
+    background: radial-gradient(ellipse at 50% 0%, rgba(255, 214, 140, 0.5), rgba(60, 20, 0, 0.55) 70%);
+    z-index: 2;
+  }
+</style>
+</head>
+<body>
+  <div class="sun"></div>
+
+  <div class="greeting">
+    <div class="om">॥ ॐ ॥</div>
+    <h1>जय श्री राम</h1>
+    <div class="en">JAI SHRI RAM</div>
+  </div>
+
+  <div class="scene">
+    <svg viewBox="0 0 920 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Temple with saffron flags at sunrise">
+      <defs>
+        <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#8a4b16"/>
+          <stop offset="1" stop-color="#4a2408"/>
+        </linearGradient>
+        <linearGradient id="stoneLight" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#b06a24"/>
+          <stop offset="1" stop-color="#5e2f0c"/>
+        </linearGradient>
+        <linearGradient id="flag" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#ff7b00"/>
+          <stop offset="1" stop-color="#e04e00"/>
+        </linearGradient>
+        <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="#ffe9b0" stop-opacity="0.9"/>
+          <stop offset="1" stop-color="#ffe9b0" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <!-- ground aura -->
+      <ellipse cx="460" cy="352" rx="430" ry="30" fill="url(#glow)"/>
+
+      <!-- base platform -->
+      <rect x="120" y="318" width="680" height="26" rx="4" fill="url(#stone)"/>
+      <rect x="150" y="298" width="620" height="24" rx="4" fill="url(#stoneLight)"/>
+
+      <!-- main shrine -->
+      <rect x="380" y="210" width="160" height="92" fill="url(#stone)"/>
+      <rect x="410" y="238" width="100" height="64" rx="46" fill="#1d0d02"/>
+      <ellipse cx="460" cy="270" rx="26" ry="30" fill="#ffca7a" opacity="0.85"/>
+      <rect x="360" y="198" width="200" height="16" rx="4" fill="url(#stoneLight)"/>
+
+      <!-- shikhara tiers -->
+      <rect x="392" y="170" width="136" height="30" rx="4" fill="url(#stoneLight)"/>
+      <rect x="406" y="142" width="108" height="30" rx="4" fill="url(#stone)"/>
+      <rect x="420" y="114" width="80" height="30" rx="4" fill="url(#stoneLight)"/>
+      <rect x="434" y="88" width="52" height="28" rx="4" fill="url(#stone)"/>
+      <!-- kalash -->
+      <circle cx="460" cy="74" r="10" fill="#ffcf6e"/>
+      <rect x="457" y="30" width="6" height="36" fill="#5e2f0c"/>
+      <!-- main flag -->
+      <g class="flag-wave">
+        <polygon points="463,32 548,46 463,62" fill="url(#flag)"/>
+        <text x="492" y="54" font-size="16" fill="#fff3d6" text-anchor="middle">ॐ</text>
+      </g>
+
+      <!-- left dome -->
+      <rect x="230" y="252" width="110" height="50" fill="url(#stone)"/>
+      <path d="M230 252 Q285 190 340 252 Z" fill="url(#stoneLight)"/>
+      <circle cx="285" cy="212" r="7" fill="#ffcf6e"/>
+      <rect x="283" y="182" width="4" height="24" fill="#5e2f0c"/>
+      <g class="flag-wave d2">
+        <polygon points="287,184 340,192 287,202" fill="url(#flag)"/>
+      </g>
+
+      <!-- right dome -->
+      <rect x="580" y="252" width="110" height="50" fill="url(#stone)"/>
+      <path d="M580 252 Q635 190 690 252 Z" fill="url(#stoneLight)"/>
+      <circle cx="635" cy="212" r="7" fill="#ffcf6e"/>
+      <rect x="633" y="182" width="4" height="24" fill="#5e2f0c"/>
+      <g class="flag-wave d3">
+        <polygon points="637,184 690,192 637,202" fill="url(#flag)"/>
+      </g>
+
+      <!-- side flag poles -->
+      <rect x="120" y="180" width="6" height="122" fill="#5e2f0c"/>
+      <g class="flag-wave d2">
+        <polygon points="126,182 196,194 126,208" fill="url(#flag)"/>
+        <text x="152" y="202" font-size="13" fill="#fff3d6" text-anchor="middle">ॐ</text>
+      </g>
+      <rect x="794" y="180" width="6" height="122" fill="#5e2f0c"/>
+      <g class="flag-wave d3">
+        <polygon points="794,182 724,194 794,208" fill="url(#flag)"/>
+        <text x="768" y="202" font-size="13" fill="#fff3d6" text-anchor="middle">ॐ</text>
+      </g>
+
+      <!-- diyas -->
+      <g>
+        <ellipse cx="200" cy="330" rx="16" ry="6" fill="#3a1a05"/>
+        <ellipse class="flame" cx="200" cy="320" rx="6" ry="11" fill="#ffb300"/>
+        <ellipse class="flame" cx="200" cy="322" rx="3" ry="6" fill="#fff3c4"/>
+        <ellipse cx="720" cy="330" rx="16" ry="6" fill="#3a1a05"/>
+        <ellipse class="flame" cx="720" cy="320" rx="6" ry="11" fill="#ffb300"/>
+        <ellipse class="flame" cx="720" cy="322" rx="3" ry="6" fill="#fff3c4"/>
+        <ellipse cx="460" cy="336" rx="20" ry="7" fill="#3a1a05"/>
+        <ellipse class="flame" cx="460" cy="324" rx="7" ry="13" fill="#ffb300"/>
+        <ellipse class="flame" cx="460" cy="327" rx="3.5" ry="7" fill="#fff3c4"/>
+      </g>
+    </svg>
+  </div>
+  <div class="ground"></div>
+
+  <script>
+    // Gentle rising petals (pure decoration, no dependencies).
+    (function () {
+      var colors = ["#ffd9a0", "#ffab66", "#ff8a3d", "#ffe9c4"];
+      function spawn() {
+        var p = document.createElement("div");
+        p.className = "petal";
+        var size = 6 + Math.random() * 10;
+        p.style.width = size + "px";
+        p.style.height = size + "px";
+        p.style.left = Math.random() * 100 + "vw";
+        p.style.background = colors[Math.floor(Math.random() * colors.length)];
+        p.style.animationDuration = (7 + Math.random() * 7) + "s";
+        document.body.appendChild(p);
+        setTimeout(function () { p.remove(); }, 15000);
+      }
+      for (var i = 0; i < 14; i++) setTimeout(spawn, i * 450);
+      setInterval(spawn, 1600);
+    })();
+  </script>
+</body>
+</html>
