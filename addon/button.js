@@ -4,6 +4,7 @@
   let sfHost = null;
   let sidebarOpen = false;
   let sidebarContainer = null;
+  let sidebarExpanded = false;
 
   function getHostFromUrl(url) {
     try {
@@ -106,7 +107,7 @@
         height: 100vh;
         z-index: 2147483646;
         box-shadow: -4px 0 24px rgba(0,0,0,0.2);
-        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         transform: translateX(100%);
         background: #fff;
       `;
@@ -187,8 +188,53 @@
       `;
       iframe.src = chrome.runtime.getURL(`object-creator.html?host=${sfHost}`);
 
+      // Floating expand/collapse pill pinned to the panel's left edge (center).
+      // Lives outside the iframe so it never covers app content.
+      const resizeBtn = document.createElement("button");
+      resizeBtn.id = "sf-object-creator-resize";
+      resizeBtn.type = "button";
+      resizeBtn.title = "Expand panel";
+      resizeBtn.style.cssText = `
+        position: absolute;
+        left: -18px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 18px;
+        height: 64px;
+        padding: 0;
+        border: none;
+        border-radius: 8px 0 0 8px;
+        background: #032d60;
+        color: #fff;
+        cursor: pointer;
+        font-size: 12px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: -2px 0 8px rgba(0,0,0,0.25);
+        opacity: 0.85;
+        z-index: 2;
+        font-family: 'Salesforce Sans', Arial, sans-serif;
+      `;
+      resizeBtn.innerHTML = "&#187;";
+      resizeBtn.addEventListener("mouseenter", () => resizeBtn.style.opacity = "1");
+      resizeBtn.addEventListener("mouseleave", () => resizeBtn.style.opacity = "0.85");
+      resizeBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // Expanded = min(920px, 75vw); skip when the window is too narrow to grow.
+        const maxW = Math.min(920, window.innerWidth * 0.75);
+        if (!sidebarExpanded && maxW <= 485) return;
+        sidebarExpanded = !sidebarExpanded;
+        sidebarContainer.style.width = sidebarExpanded ? "min(920px, 75vw)" : "480px";
+        resizeBtn.innerHTML = sidebarExpanded ? "&#171;" : "&#187;";
+        resizeBtn.title = sidebarExpanded ? "Collapse panel" : "Expand panel";
+      });
+
       sidebarContainer.appendChild(header);
       sidebarContainer.appendChild(iframe);
+      sidebarContainer.appendChild(resizeBtn);
       document.body.appendChild(sidebarContainer);
 
       // Store session for the iframe to pick up
@@ -225,6 +271,7 @@
       sidebarContainer = null;
     }, 300);
     sidebarOpen = false;
+    sidebarExpanded = false;
     document.getElementById("sf-object-creator-btn")?.style.setProperty("opacity", "0.6");
   }
 

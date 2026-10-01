@@ -240,8 +240,10 @@ class OptionsApp extends React.Component {
 
       h("div", {className: "options-section"},
         h("h2", null, "About"),
-        h("p", null, "ForceForge uses AI to help you design and create Salesforce custom objects and fields from natural language descriptions. Future releases will add data export, SOQL import/export, and org info tools."),
-        h("p", null, "Your API key is stored locally in your browser and never shared with third parties.")
+        h("p", null, "ForceForge is an AI Object Builder & Org Toolkit for Salesforce. Describe the data you want to capture in plain language and it drafts a complete custom object with fields — refine it in chat, improve prompts with one click, then deploy straight to your org."),
+        h("p", null, "The built-in Inspector adds a SOQL runner with AI error fixes, Apex execution, record browser, CSV export and import, user management, debug-log viewer with AI analysis, org info, and app-tab assignment. Works with OpenAI, Anthropic Claude, Google Gemini, or any OpenAI-compatible endpoint using your own API key."),
+        h("p", null, "Your API key is stored locally in your browser and never shared. Org data stays between your browser and Salesforce — only the text you type reaches your chosen AI provider."),
+        h("p", {style: {fontSize: "12px", color: "#706e6b"}}, "Developed by ©Bhajan Mandali · Independent project, not affiliated with Salesforce.")
       )
     );
   }

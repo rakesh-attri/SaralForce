@@ -114,13 +114,35 @@ function flattenRecord(rec) {
   return out;
 }
 
+// ─── Shared: open-in-Salesforce ────────────────────────────────────────────
+// 15/18-char Salesforce Id validation (same rule as object-creator.js).
+function ffIsSfId(value) {
+  const v = String(value || "").trim();
+  return /^[a-zA-Z0-9]{15}$/.test(v) || /^[a-zA-Z0-9]{18}$/.test(v);
+}
+
+function ffRecordUrl(id) {
+  return "https://" + sfConn.instanceHostname + "/" + id;
+}
+
+function openRecordInSf(id, e) {
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  if (!ffIsSfId(id) || !sfConn.instanceHostname) return;
+  window.open(ffRecordUrl(id), "_blank");
+}
+
 function ResultTable({columns, rows, maxRows, onRowClick, rowHint}) {
   const shown = rows.slice(0, maxRows || 200);
   if (!columns.length) return h("div", {className: "insp-empty"}, "No rows");
+  // Trailing ↗ column only when at least one visible row carries a record Id
+  // (Id-less grids like the parsed-log table render exactly as before).
+  const idField = columns.includes("Id") ? "Id" : null;
+  const showOpen = !!idField && shown.some(r => r && ffIsSfId(r[idField]));
   return h("div", {className: "insp-table-wrap"},
     h("table", {className: "insp-table"},
       h("thead", null,
-        h("tr", null, columns.map(c => h("th", {key: c}, c)))
+        h("tr", null, columns.map(c => h("th", {key: c}, c)),
+          showOpen && h("th", {key: "__open", className: "insp-open-col"}, ""))
       ),
       h("tbody", null,
         shown.map((row, i) =>
@@ -133,7 +155,16 @@ function ResultTable({columns, rows, maxRows, onRowClick, rowHint}) {
             columns.map(c =>
               h("td", {key: c, title: row[c] == null ? "" : String(row[c])},
                 row[c] == null ? "" : String(row[c]))
-            )
+            ),
+            showOpen && h("td", {key: "__open", className: "insp-open-col"},
+              ffIsSfId(row[idField]) && h("a", {
+                href: ffRecordUrl(row[idField]),
+                target: "_blank",
+                rel: "noreferrer",
+                className: "insp-open-link",
+                title: "Open in Salesforce",
+                onClick: (e) => e.stopPropagation()
+              }, "↗"))
           )
         )
       )
@@ -318,6 +349,9 @@ function SoqlTab() {
   const [error, setError] = React.useState(null);
   const [result, setResult] = ffUseSession("soql", "result", null);
   const [limit, setLimit] = ffUseSession("soql", "limit", 500);
+  const [soqlDetail, setSoqlDetail] = ffUseSession("soql", "detail", null);
+  const [soqlDetailLoading, setSoqlDetailLoading] = React.useState(false);
+  const [detailHint, setDetailHint] = React.useState(null);
   const [useLlm, setUseLlm] = React.useState(() => ffLoadJson("ff_soql_use_llm", false));
   const [fixing, setFixing] = React.useState(false);
   const [suggestion, setSuggestion] = React.useState(null);
@@ -368,6 +402,8 @@ function SoqlTab() {
     setError(null);
     setSuggestion(null);
     setFixError(null);
+    setSoqlDetail(null);
+    setDetailHint(null);
     try {
       const r = await runSoql(q, limit);
       const flat = r.records.map(flattenRecord);
@@ -386,6 +422,49 @@ function SoqlTab() {
       if (useLlm) askLlmForFix(q, e.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // PATCH changed fields, then paint them immediately (same as RecordsTab).
+  const saveSoqlDetailChanges = async (obj, id, changes) => {
+    await sfConn.rest(
+      `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`,
+      {method: "PATCH", body: changes});
+    setSoqlDetail(prev => {
+      if (!prev || prev.id !== id) return prev;
+      return {
+        ...prev,
+        rows: prev.rows.map(r => Object.prototype.hasOwnProperty.call(changes, r.api)
+          ? {...r, value: changes[r.api] == null ? null : String(changes[r.api])}
+          : r)
+      };
+    });
+  };
+
+  // "Show all data" for a SOQL row: needs an Id in the row and a simple
+  // SELECT ... FROM <Object> executed query. The object is parsed from
+  // result.query (not the live textarea) so post-run edits can't misresolve it.
+  const openSoqlDetail = async (row) => {
+    const id = row && (row.Id || row.id);
+    if (!id) {
+      setDetailHint("Select Id in your query to use Show all data.");
+      return;
+    }
+    const m = /\bfrom\s+([a-zA-Z0-9_]+)/i.exec(String((result && result.query) || ""));
+    if (!m) {
+      setDetailHint("Show all data needs a simple SELECT ... FROM <Object> query.");
+      return;
+    }
+    setDetailHint(null);
+    setSoqlDetailLoading(true);
+    try {
+      const d = await ffDescribeObject(m[1]);
+      const rec = await fetchFullRecord(m[1], id);
+      setSoqlDetail({id, obj: m[1], rows: buildDetailRows(rec, d.fields || [])});
+    } catch (e) {
+      setDetailHint(`Could not load the full record: ${e.message}`);
+    } finally {
+      setSoqlDetailLoading(false);
     }
   };
 
@@ -638,7 +717,20 @@ function SoqlTab() {
     result && h("div", {className: "insp-meta"},
       `${result.totalSize} row(s) · pages OK · query ends LIMIT ${/\blimit\s+(\d+)/i.exec(result.query)?.[1] || "—"}`
     ),
-    result && h(ResultTable, {columns: result.columns, rows: result.rows, maxRows: 300})
+    result && h(ResultTable, {
+      columns: result.columns,
+      rows: result.rows,
+      maxRows: 300,
+      onRowClick: openSoqlDetail,
+      rowHint: "Click to show all data"
+    }),
+    detailHint && h("div", {className: "insp-meta"}, detailHint),
+    (soqlDetailLoading || soqlDetail) && h(RecordDetailPanel, {
+      detail: soqlDetail,
+      loading: soqlDetailLoading,
+      onBack: () => setSoqlDetail(null),
+      onSave: saveSoqlDetailChanges
+    }),
   );
 }
 
@@ -1173,6 +1265,298 @@ async function recordsListObjects() {
   return list;
 }
 
+// ─── Shared: "Show all data" record detail ────────────────────────────────
+// Full-record fetch (REST retrieve returns every field) shaped into sorted
+// {api, label, type, value} rows, plus the detail panel both Records and
+// SOQL tabs render. Labels/types come from describe metadata; unknown
+// fields fall back to inferred types.
+function buildDetailRows(rec, metaFields) {
+  const meta = {};
+  for (const f of metaFields || []) meta[f.name] = f;
+  const detailRows = [];
+  for (const [k, v] of Object.entries(rec || {})) {
+    if (k === "attributes") continue;
+    const m = meta[k] || {};
+    let type = m.type || "";
+    if (!type) {
+      type = v == null ? "" : typeof v === "boolean" ? "boolean" : typeof v === "number" ? "number" : "string";
+    }
+    let value = v;
+    if (value && typeof value === "object") {
+      value = Array.isArray(value) ? JSON.stringify(value) : (value.Name || value.name || JSON.stringify(value));
+    }
+    detailRows.push({
+      api: k,
+      label: m.label || (k === "Id" ? "Record ID" : ""),
+      type,
+      value: value == null || value === "" ? null : String(value),
+      editable: k !== "Id" && m.updateable === true &&
+        !["address", "location", "base64", "anyType"].includes(m.type),
+      options: normalizePicklistValues(m.picklistValues)
+    });
+  }
+  detailRows.sort((a, b) => a.api.localeCompare(b.api));
+  return detailRows;
+}
+
+// Accepts raw describe picklistValues ([{active, value}]) or the already
+// flattened active-value arrays kept by tab state.
+function normalizePicklistValues(picklistValues) {
+  const picks = [];
+  for (const p of picklistValues || []) {
+    if (p && typeof p === "object") {
+      if (p.active !== false && p.value != null) picks.push(String(p.value));
+    } else if (p != null) {
+      picks.push(String(p));
+    }
+  }
+  return picks;
+}
+
+async function fetchFullRecord(obj, id) {
+  return sfConn.rest(
+    `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`,
+    {useCache: false});
+}
+
+// Render an ISO instant for a datetime-local input (browser-local wall time).
+function toLocalInput(s) {
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return String(s).slice(0, 16);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function detailDraftSeed(row) {
+  if (row.value == null) return row.type === "boolean" ? "false" : "";
+  const s = String(row.value);
+  if (row.type === "boolean") return s.toLowerCase() === "true" ? "true" : "false";
+  if (row.type === "date") return s.slice(0, 10);
+  if (row.type === "datetime") return toLocalInput(s);
+  return s;
+}
+
+function draftDiffers(row, draftVal) {
+  const orig = row.value == null ? "" : String(row.value);
+  if (row.type === "boolean") return (String(draftVal) === "true") !== (orig.toLowerCase() === "true");
+  if (row.type === "date") return String(draftVal) !== orig.slice(0, 10);
+  if (row.type === "datetime") return String(draftVal) !== toLocalInput(orig);
+  return String(draftVal) !== orig;
+}
+
+function coerceDetailValue(row, draftVal) {
+  if (draftVal === "" || draftVal == null) return null;
+  if (row.type === "boolean") return draftVal === "true";
+  if (row.type === "datetime") {
+    const t = Date.parse(String(draftVal));
+    if (isNaN(t)) throw new Error(`${row.api}: "${draftVal}" is not a valid date/time.`);
+    return new Date(t).toISOString();
+  }
+  if (["int", "double", "currency", "percent"].includes(row.type)) {
+    const n = Number(draftVal);
+    if (!Number.isFinite(n)) throw new Error(`${row.api}: "${draftVal}" is not a number.`);
+    return n;
+  }
+  return String(draftVal);
+}
+
+function RecordDetailPanel({detail, loading, onBack, onSave}) {
+  const [editingApi, setEditingApi] = React.useState(null);
+  const [drafts, setDrafts] = React.useState({});
+  const [saving, setSaving] = React.useState(false);
+  const [saveMsg, setSaveMsg] = React.useState(null);
+  const [saveErr, setSaveErr] = React.useState(null);
+  const recordKey = detail ? `${detail.obj}/${detail.id}` : "";
+  React.useEffect(() => {
+    setEditingApi(null);
+    setDrafts({});
+    setSaveMsg(null);
+    setSaveErr(null);
+  }, [recordKey]);
+  // Esc closes the modal (editor Esc is handled inside the input and
+  // stops propagation, so it only cancels the cell edit).
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onBack(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onBack]);
+  const canEdit = !loading && !saving && !!onSave;
+  const changed = detail
+    ? detail.rows.filter(r => r.editable && drafts[r.api] !== undefined && draftDiffers(r, drafts[r.api]))
+    : [];
+  const startEdit = (row) => {
+    if (!row.editable || !canEdit) return;
+    setSaveMsg(null);
+    setSaveErr(null);
+    setDrafts(prev => (prev[row.api] !== undefined
+      ? prev
+      : {...prev, [row.api]: detailDraftSeed(row)}));
+    setEditingApi(row.api);
+  };
+  const closeEditor = (discard) => {
+    if (discard && editingApi) {
+      const api = editingApi;
+      setDrafts(prev => {
+        const next = {...prev};
+        delete next[api];
+        return next;
+      });
+    }
+    setEditingApi(null);
+  };
+  const cancelAll = () => {
+    setDrafts({});
+    setEditingApi(null);
+    setSaveMsg(null);
+    setSaveErr(null);
+  };
+  const doSave = async () => {
+    if (!detail || !changed.length || saving) return;
+    setSaving(true);
+    setSaveErr(null);
+    setSaveMsg(null);
+    try {
+      const payload = {};
+      for (const r of changed) payload[r.api] = coerceDetailValue(r, drafts[r.api]);
+      await onSave(detail.obj, detail.id, payload);
+      setDrafts({});
+      setEditingApi(null);
+      setSaveMsg(`Saved ${changed.length} field${changed.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      setSaveErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const renderEditor = (row) => {
+    const val = drafts[row.api] !== undefined ? drafts[row.api] : detailDraftSeed(row);
+    const set = (v) => setDrafts(prev => ({...prev, [row.api]: v}));
+    const common = {
+      className: "insp-edit-input",
+      disabled: saving,
+      onKeyDown: (e) => {
+        if (e.key === "Escape") { e.stopPropagation(); closeEditor(true); }
+        if (e.key === "Enter" && row.type !== "textarea" && !/longtext/i.test(String(row.type))) {
+          e.preventDefault();
+          setEditingApi(null);
+        }
+      },
+      onClick: (e) => e.stopPropagation()
+    };
+    if (row.type === "boolean") {
+      return h("input", {...common,
+        type: "checkbox",
+        checked: val === "true",
+        onChange: (e) => set(e.target.checked ? "true" : "false")});
+    }
+    if (row.type === "picklist" && row.options && row.options.length) {
+      const opts = (val === "" || row.options.includes(val)) ? row.options : [...row.options, val];
+      return h("select", {...common, value: val, onChange: (e) => set(e.target.value)},
+        h("option", {key: "", value: ""}, "(Blank)"),
+        opts.map(o => h("option", {key: o, value: o}, o)));
+    }
+    if (row.type === "textarea" || /longtext/i.test(String(row.type))) {
+      return h("textarea", {...common, rows: 2, value: val, onChange: (e) => set(e.target.value)});
+    }
+    if (row.type === "date") {
+      return h("input", {...common, type: "date", value: String(val).slice(0, 10),
+        onChange: (e) => set(e.target.value)});
+    }
+    if (row.type === "datetime") {
+      return h("input", {...common, type: "datetime-local", value: String(val).slice(0, 16),
+        onChange: (e) => set(e.target.value)});
+    }
+    if (["int", "double", "currency", "percent"].includes(row.type)) {
+      return h("input", {...common, type: "number", value: val, onChange: (e) => set(e.target.value)});
+    }
+    return h("input", {...common, type: "text", value: val, onChange: (e) => set(e.target.value)});
+  };
+  const renderValue = (row) => {
+    if (editingApi === row.api) return renderEditor(row);
+    const hasDraft = drafts[row.api] !== undefined && draftDiffers(row, drafts[row.api]);
+    const shown = hasDraft ? String(drafts[row.api]) : (row.value == null ? "(Blank)" : row.value);
+    return h("span", null,
+      shown,
+      hasDraft && h("span", {className: "insp-dirty-dot", title: "Unsaved change"}, " *"));
+  };
+  return h("div", {
+      className: "ff-modal-overlay",
+      onMouseDown: (e) => { if (e.target === e.currentTarget) onBack(); }
+    },
+    h("div", {className: "ff-modal", role: "dialog", "aria-modal": "true"},
+      h("div", {className: "ff-modal-head"},
+        h("div", {className: "ff-modal-title"}, "Show all data",
+          detail && h("span", {className: "ff-modal-sub"},
+            ` - ${detail.obj} / ${detail.id} (${detail.rows.length} fields)`)),
+        h("button", {className: "ff-modal-x", title: "Close (Esc)", onClick: onBack}, "\u00d7")
+      ),
+      h("div", {className: "insp-toolbar"},
+      detail && ffIsSfId(detail.id) && h("button", {
+        className: "btn btn-secondary btn-sm",
+        title: "Open this record in Salesforce",
+        onClick: (e) => openRecordInSf(detail.id, e)
+        }, "Open in Salesforce ↗"),
+      detail && h("span", {className: "insp-meta"},
+        "Click an editable value to change it - Esc cancels the current edit")
+    ),
+    loading && h("div", {className: "insp-meta"}, "Loading full record…"),
+    detail && h("div", {className: "ff-modal-body"},
+      h("div", {className: "insp-table-wrap"},
+      h("table", {className: "insp-table"},
+        h("thead", null,
+          h("tr", null,
+            h("th", null, "Field API Name"),
+            h("th", null, "Label"),
+            h("th", null, "Type"),
+            h("th", null, "Value")
+          )
+        ),
+        h("tbody", null,
+          detail.rows.map(r => {
+            const isEditing = editingApi === r.api;
+            const hasDraft = drafts[r.api] !== undefined && draftDiffers(r, drafts[r.api]);
+            const canStart = r.editable && canEdit;
+            return h("tr", {key: r.api},
+              h("td", null, r.api),
+              h("td", null, r.label),
+              h("td", null, r.type),
+              h("td", {
+                className: [
+                  (!hasDraft && r.value == null) ? "insp-blank" : "",
+                  canStart ? "insp-cell-editable" : "",
+                  hasDraft ? "insp-cell-dirty" : ""
+                ].join(" "),
+                title: canStart ? (isEditing ? "" : "Click to edit") : (r.value == null ? "" : r.value),
+                onClick: canStart && !isEditing ? () => startEdit(r) : undefined
+              }, renderValue(r))
+            );
+          })
+        )
+      )
+    ),
+    ),
+    (changed.length > 0 || saveMsg || saveErr) && h("div", {className: "insp-edit-bar"},
+      changed.length > 0 && h("span", {className: "insp-meta"},
+        `${changed.length} field${changed.length === 1 ? "" : "s"} changed`),
+      saveMsg && h("span", {className: "insp-save-ok"}, saveMsg),
+      saveErr && h("span", {className: "insp-error"}, saveErr),
+      h("span", {className: "insp-edit-actions"},
+        changed.length > 0 && h("button", {
+          className: "btn btn-danger btn-sm",
+          disabled: saving,
+          onClick: cancelAll
+        }, "Cancel"),
+        changed.length > 0 && h("button", {
+          className: "btn btn-primary btn-sm",
+          disabled: saving,
+          onClick: doSave
+        }, saving ? "Saving..." : "Save")
+      ),
+    ),
+    ),
+  );
+}
+
 function RecordsTab() {
   const [objects, setObjects] = React.useState([]);
   const [objLoading, setObjLoading] = React.useState(false);
@@ -1231,7 +1615,9 @@ function RecordsTab() {
         `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/describe`,
         {useCache: false});
       const fieldList = (d.fields || []).map(f => ({
-        name: f.name, label: f.label, type: f.type
+        name: f.name, label: f.label, type: f.type,
+        updateable: f.updateable, nillable: f.nillable,
+        picklistValues: (f.picklistValues || []).filter(p => p.active).map(p => String(p.value))
       }));
       setFields(fieldList);
       setChecked(pickDefaultFields(fieldList));
@@ -1308,8 +1694,7 @@ function RecordsTab() {
     downloadText(`${objInput.trim() || "records"}.csv`, toCsv(columns, rows));
   };
 
-  // "Show all data": fetch the FULL record (REST retrieve returns every
-  // field) and render Field API Name | Label | Type | Value.
+  // "Show all data": fetch the FULL record and shape it via the shared helper.
   const openDetail = async (row) => {
     const obj = objInput.trim();
     const id = row && (row.Id || row.id);
@@ -1317,37 +1702,31 @@ function RecordsTab() {
     setDetailLoading(true);
     setError(null);
     try {
-      const rec = await sfConn.rest(
-        `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`,
-        {useCache: false});
-      const meta = {};
-      for (const f of fields) meta[f.name] = f;
-      const detailRows = [];
-      for (const [k, v] of Object.entries(rec || {})) {
-        if (k === "attributes") continue;
-        const m = meta[k] || {};
-        let type = m.type || "";
-        if (!type) {
-          type = v == null ? "" : typeof v === "boolean" ? "boolean" : typeof v === "number" ? "number" : "string";
-        }
-        let value = v;
-        if (value && typeof value === "object") {
-          value = Array.isArray(value) ? JSON.stringify(value) : (value.Name || value.name || JSON.stringify(value));
-        }
-        detailRows.push({
-          api: k,
-          label: m.label || (k === "Id" ? "Record ID" : ""),
-          type,
-          value: value == null || value === "" ? null : String(value)
-        });
-      }
-      detailRows.sort((a, b) => a.api.localeCompare(b.api));
-      setDetail({id, obj, rows: detailRows});
+      const rec = await fetchFullRecord(obj, id);
+      setDetail({id, obj, rows: buildDetailRows(rec, fields)});
     } catch (e) {
       setError(e.message);
     } finally {
       setDetailLoading(false);
     }
+  };
+
+  // PATCH changed fields, then paint them immediately: the server accepted
+  // the payload, so there is no need to wait for another round trip (and no
+  // stale-value flash while a re-fetch is in flight).
+  const saveDetailChanges = async (obj, id, changes) => {
+    await sfConn.rest(
+      `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`,
+      {method: "PATCH", body: changes});
+    setDetail(prev => {
+      if (!prev || prev.id !== id) return prev;
+      return {
+        ...prev,
+        rows: prev.rows.map(r => Object.prototype.hasOwnProperty.call(changes, r.api)
+          ? {...r, value: changes[r.api] == null ? null : String(changes[r.api])}
+          : r)
+      };
+    });
   };
 
   return h("div", {className: "insp-panel"},
@@ -1434,42 +1813,13 @@ function RecordsTab() {
       columns, rows, maxRows: 500,
       onRowClick: (row) => openDetail(row)
     }),
-    (detailLoading || detail) && h("div", {className: "insp-detail"},
-      h("div", {className: "insp-toolbar"},
-        h("button", {
-          className: "btn btn-secondary btn-sm",
-          onClick: () => setDetail(null)
-        }, "← Back to list"),
-        detail && h("span", {className: "insp-meta"},
-          `Show all data: ${detail.obj} / ${detail.id} (${detail.rows.length} fields)`)
-      ),
-      detailLoading && h("div", {className: "insp-meta"}, "Loading full record…"),
-      detail && h("div", {className: "insp-table-wrap"},
-        h("table", {className: "insp-table"},
-          h("thead", null,
-            h("tr", null,
-              h("th", null, "Field API Name"),
-              h("th", null, "Label"),
-              h("th", null, "Type"),
-              h("th", null, "Value")
-            )
-          ),
-          h("tbody", null,
-            detail.rows.map(r =>
-              h("tr", {key: r.api},
-                h("td", null, r.api),
-                h("td", null, r.label),
-                h("td", null, r.type),
-                h("td", {
-                  className: r.value == null ? "insp-blank" : "",
-                  title: r.value == null ? "" : r.value
-                }, r.value == null ? "(Blank)" : r.value)
-              )
-            )
-          )
-        )
-      )
-    )
+    (detailLoading || detail) && h(RecordDetailPanel, {
+      detail,
+      loading: detailLoading,
+      onBack: () => setDetail(null),
+      onSave: saveDetailChanges
+    }),
+    // Detail markup consolidated into RecordDetailPanel (see Shared section).
   );
 }
 
@@ -2771,7 +3121,12 @@ function UsersTab() {
         h("button", {
           className: "btn btn-secondary btn-sm",
           onClick: copyId
-        }, "Copy Id")
+        }, "Copy Id"),
+        ffIsSfId(sel.Id) && h("button", {
+          className: "btn btn-secondary btn-sm",
+          title: "Open this user in Salesforce",
+          onClick: (e) => openRecordInSf(sel.Id, e)
+        }, "Open ↗")
       )
     ),
     sel && cloneOpen && h("div", {className: "insp-kv"},
@@ -4105,7 +4460,8 @@ function LogsTab() {
               ),
               h("div", {className: "logs-card-actions", onClick: e => e.stopPropagation()},
                 h("button", {
-                  className: "btn btn-secondary btn-sm",
+                  className: "btn btn-secondary btn-sm" +
+                    (analyzingId === lg.Id ? " btn-busy" : (a && a.text ? " btn-ok" : "")),
                   disabled: analyzingId === lg.Id,
                   title: a && a.text
                     ? "Already analyzed — click to show the saved result (no new AI call)"
@@ -4167,12 +4523,12 @@ function LogsTab() {
                 }, selAnalysis && selAnalysis.text ? "↻ Re-run (new AI call)" : "Analyze")
               ),
               selAnalysis && selAnalysis.text &&
-                h("div", {className: "insp-meta"},
+                h("div", {className: "insp-status-ok"},
                   "Saved result shown — no AI call made."),
               selAnalysis && selAnalysis.pending &&
-                h("div", {className: "insp-meta"}, "Reading the log and asking the AI…"),
+                h("div", {className: "insp-status-info"}, "Reading the log and asking the AI…"),
               selAnalysis && selAnalysis.error === "NO_LLM_CONFIG" &&
-                h("div", {className: "insp-warn"},
+                h("div", {className: "insp-error"},
                   "No AI provider configured — set one up in Options to use the AI panel.",
                   h("button", {
                     className: "field-action-btn",
@@ -4185,7 +4541,7 @@ function LogsTab() {
               selAnalysis && selAnalysis.text && h("div", {className: "logs-ai-text"},
                 selAnalysis.text,
                 h("button", {
-                  className: "field-action-btn",
+                  className: copied ? "field-action-btn btn-ok" : "field-action-btn",
                   style: {marginTop: "6px"},
                   onClick: copyAnalysis
                 }, copied ? "Copied ✓" : "Copy")
@@ -4199,7 +4555,7 @@ function LogsTab() {
                     "Ask what an error means, where it came from, or how to fix it…"),
                 selChat.map((m, i) =>
                   h("div", {key: i, className: `logs-bubble logs-bubble-${m.role}`}, m.text)),
-                chatBusy && h("div", {className: "logs-bubble logs-bubble-ai"}, "…")
+                chatBusy && h("div", {className: "logs-bubble logs-bubble-status"}, "…")
               ),
               h("div", {className: "logs-chat-row"},
                 h("input", {

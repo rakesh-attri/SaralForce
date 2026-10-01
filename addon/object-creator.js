@@ -497,6 +497,7 @@ class App extends React.Component {
       streamingText: "",
       isEnhancing: false,
       enhancedPreview: null,
+      lastFailedPrompt: null,
       deploymentStatus: saved?.deploymentStatus === "deploying" ? "complete" : (saved?.deploymentStatus || null),
       deploymentStep: saved?.deploymentStatus === "deploying" ? "Deployment complete!" : (saved?.deploymentStep || null),
       deploymentProgress: saved?.deploymentProgress || 0,
@@ -507,7 +508,6 @@ class App extends React.Component {
       activeChatId: null,
       selectedFields: saved?.selectedFields || null,
       showHistory: false,
-      showChat: false,
       visibilityMode: saved?.visibilityMode || "all",
       selectedProfiles: saved?.selectedProfiles || [],
       availableProfiles: saved?.availableProfiles || [],
@@ -632,8 +632,7 @@ class App extends React.Component {
       _appsTried: false,
       builderMode: "plan",
       isEnhancing: false,
-      enhancedPreview: null,
-      showChat: false
+      enhancedPreview: null
     }, () => {
       this._appsLoading = false;
       if (!hasValidConfig()) {
@@ -693,8 +692,7 @@ class App extends React.Component {
       _appsTried: false,
       builderMode: chat.builderMode || "plan",
       error: null,
-      activeChatId: chat.id,
-      showChat: true
+      activeChatId: chat.id
     }, () => {
       this._appsLoading = false;
       if (chat.currentProposal) {
@@ -727,8 +725,10 @@ class App extends React.Component {
     }));
   }
 
-  async sendMessage() {
-    const {userInput, currentProposal, messages} = this.state;
+  async sendMessage(promptOverride, opts = {}) {
+    const {currentProposal, messages} = this.state;
+    const userInput = promptOverride != null ? String(promptOverride) : this.state.userInput;
+    const echo = !opts || opts.echo !== false;
     if (!userInput.trim() || this.state.isGenerating) return;
 
     const config = getSavedConfig();
@@ -737,8 +737,8 @@ class App extends React.Component {
       return;
     }
 
-    this.addUserMessage(userInput);
-    this.setState({userInput: "", isGenerating: true, error: null, streamingText: "", enhancedPreview: null});
+    if (echo) this.addUserMessage(userInput);
+    this.setState({userInput: "", isGenerating: true, error: null, streamingText: "", enhancedPreview: null, lastFailedPrompt: null});
 
     try {
       const provider = getLLMProvider(config.provider);
@@ -767,7 +767,7 @@ class App extends React.Component {
         const validationErrors = validateProposal(proposal);
         if (validationErrors.length > 0) {
           this.addAssistantMessage(response, null);
-          this.setState({error: "Generated proposal has issues: " + validationErrors.join("; ")});
+          this.setState({error: "Generated proposal has issues: " + validationErrors.join("; "), lastFailedPrompt: userInput});
         } else {
           this.addAssistantMessage(response, proposal);
           this.setState({
@@ -791,11 +791,19 @@ class App extends React.Component {
       this.setState({
         error: `LLM Error: ${error.message}`,
         isGenerating: false,
-        streamingText: ""
+        streamingText: "",
+        lastFailedPrompt: userInput
       });
     }
 
     this.setState({isGenerating: false});
+  }
+
+  retrySend() {
+    const prompt = this.state.lastFailedPrompt;
+    if (!prompt || this.state.isGenerating) return;
+    // Silent resend: the failed prompt is already in history, so no echo.
+    this.sendMessage(prompt, {echo: false});
   }
 
   async enhancePrompt() {
@@ -3344,7 +3352,7 @@ class App extends React.Component {
     const {sfHost} = this.props;
     const {
       messages, currentProposal, isGenerating, streamingText, isEnhancing, enhancedPreview,
-      deploymentStatus, deploymentStep, deploymentProgress, deploymentResults, error, userInput, llmConfig, showChat,
+      deploymentStatus, deploymentStep, deploymentProgress, deploymentResults, error, userInput, llmConfig, lastFailedPrompt,
       selectedFields, visibilityMode, selectedProfiles, availableProfiles, profilesLoading, recordTypesDone,
       availableApps, appsLoading, selectedApp
     } = this.state;
@@ -3352,9 +3360,8 @@ class App extends React.Component {
     const setupLink = this.getSetupLink();
     const hasConfig = hasValidConfig();
     const uiMode = this.state.uiMode || "builder";
-    // Once a proposal exists the preview takes the full width; the chat
-    // (and its Enhance button) hides until the header Chat toggle reopens it.
-    const chatVisible = !currentProposal || showChat;
+    // Chat and preview are mutually exclusive: the chat panel renders only
+    // before the first proposal; Plan/Build pages are preview-only.
 
     if (uiMode === "inspector") {
       return h("div", {className: "app-container"},
@@ -3403,11 +3410,6 @@ class App extends React.Component {
             onClick: () => startSalesforceLogin(this.props.sfHost).catch(e => this.setState({error: "Login failed: " + e.message})),
             title: "Log in with Salesforce OAuth"
           }, "Connect"),
-          currentProposal && h("button", {
-            className: "header-btn",
-            onClick: () => this.setState({showChat: !this.state.showChat}),
-            title: "Show/hide the chat panel"
-          }, showChat ? "Hide Chat" : "\uD83D\uDCAC Chat"),
           h("button", {
             className: "header-btn",
             onClick: () => this.newChat(),
@@ -3452,8 +3454,8 @@ class App extends React.Component {
         })
       ),
 
-      h("div", {className: `app-body${chatVisible ? "" : " chat-hidden"}`},
-        chatVisible && h("div", {className: "chat-panel"},
+      h("div", {className: "app-body"},
+        !currentProposal && h("div", {className: "chat-panel"},
           h("div", {className: "chat-messages", ref: this.chatContainerRef},
             messages.map((msg, i) =>
               h("div", {key: i, className: `message message-${msg.role}`},
@@ -3490,6 +3492,12 @@ class App extends React.Component {
               style: {marginLeft: "8px"},
               onClick: () => this.retryWithNewName()
             }, "Retry with new name"),
+            lastFailedPrompt && h("button", {
+              className: "btn btn-primary btn-sm",
+              style: {marginLeft: "8px"},
+              disabled: isGenerating,
+              onClick: () => this.retrySend()
+            }, isGenerating ? "..." : "↻ Retry"),
             h("button", {className: "error-close", onClick: () => this.setState({error: null})}, "\u00d7")
           ),
 
@@ -3595,7 +3603,7 @@ class App extends React.Component {
           (this.state.builderMode || "plan") === "plan" && (() => {
             const errs = this.planEditErrors();
             return h("div", {className: "plan-hint"},
-              "Plan mode — open the header Chat panel to keep refining, or edit inline below. Switch to Build when the plan is final.",
+              "Plan mode — refine inline below. Switch to Build when the plan is final.",
               errs.length > 0 && h("div", {className: "plan-error-list"},
                 errs.slice(0, 4).map((e, i) => h("div", {key: i}, "• " + e)),
                 errs.length > 4 && h("div", null, `…+${errs.length - 4} more`))

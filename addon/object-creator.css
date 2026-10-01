@@ -446,19 +446,13 @@ body {
 
 /* Preview Panel */
 .preview-panel {
-  width: 480px;
-  border-left: 1px solid #dddbda;
+  flex: 1;
+  width: auto;
+  border-left: none;
   background: #fff;
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
   overflow: hidden;
-}
-
-.app-body.chat-hidden .preview-panel {
-  width: auto;
-  flex: 1;
-  border-left: none;
 }
 
 .preview-header {
@@ -1202,7 +1196,7 @@ td .plan-cell-input {
 }
 
 .insp-root {
-  max-width: 960px;
+  max-width: 1600px;
   margin: 0 auto;
 }
 
@@ -1333,6 +1327,23 @@ td .plan-cell-input {
 
 .insp-row-click:hover td {
   background: #eef4ff;
+}
+
+.insp-open-col {
+  width: 28px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.insp-open-link {
+  color: #706e6b;
+  text-decoration: none;
+  font-size: 13px;
+  padding: 0 2px;
+}
+
+.insp-open-link:hover {
+  color: #0070d2;
 }
 
 .insp-detail {
@@ -2077,4 +2088,420 @@ td .plan-cell-input {
   outline: 2px solid #0176d3;
   outline-offset: -1px;
   border-color: #0176d3;
+}
+
+/* ─── Inline record editing (Show all data) ─────────────────────────── */
+.insp-cell-editable {
+  cursor: text;
+}
+
+.insp-cell-editable:hover {
+  background: #eef4ff;
+}
+
+.insp-cell-dirty {
+  background: #fff7e6;
+}
+
+.insp-dirty-dot {
+  color: #d97706;
+  font-weight: 700;
+}
+
+.insp-edit-input {
+  width: 100%;
+  max-width: 100%;
+  font: inherit;
+  font-size: 13px;
+  color: #181818;
+  background: #fff;
+  border: 1px solid #0070d2;
+  border-radius: 6px;
+  padding: 5px 8px;
+  box-sizing: border-box;
+}
+
+.insp-edit-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0, 112, 210, 0.25);
+}
+
+textarea.insp-edit-input {
+  resize: vertical;
+  min-height: 44px;
+  line-height: 1.4;
+}
+
+input[type="checkbox"].insp-edit-input {
+  width: 16px;
+  height: 16px;
+  accent-color: #0070d2;
+}
+
+.insp-edit-bar {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #d8dde6;
+  border-top: 2px solid #0070d2;
+  border-radius: 0 0 8px 8px;
+  padding: 8px 12px;
+  margin-top: 8px;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+  z-index: 2;
+}
+
+.insp-edit-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.insp-save-ok {
+  color: #2e844a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ─── Theme refresh (light) ─────────────────────────────────────────── */
+.app-header {
+  background: linear-gradient(180deg, #04307a 0%, #032d60 100%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.insp-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.insp-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.insp-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f3f2f2;
+  z-index: 1;
+  white-space: nowrap;
+}
+
+.insp-table tbody tr:nth-child(even) td {
+  background: #fafaf9;
+}
+
+.insp-table tbody tr:nth-child(even):hover td,
+.insp-table tbody tr:hover td {
+  background: #eef4ff;
+}
+
+.insp-detail {
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.insp-toolbar {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btn:focus-visible,
+.header-btn:focus-visible,
+.send-btn:focus-visible,
+button:focus-visible {
+  outline: 2px solid #0070d2;
+  outline-offset: 1px;
+}
+
+.insp-meta {
+  color: #706e6b;
+}
+
+.history-panel,
+.enhance-preview {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.insp-table-wrap::-webkit-scrollbar,
+.insp-detail::-webkit-scrollbar,
+.logs-list::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.insp-table-wrap::-webkit-scrollbar-thumb,
+.insp-detail::-webkit-scrollbar-thumb,
+.logs-list::-webkit-scrollbar-thumb {
+  background: #c9c7c5;
+  border-radius: 4px;
+}
+
+.insp-table-wrap::-webkit-scrollbar-thumb:hover,
+.insp-detail::-webkit-scrollbar-thumb:hover,
+.logs-list::-webkit-scrollbar-thumb:hover {
+  background: #9c9c9c;
+}
+
+/* ─── Responsive ────────────────────────────────────────────────────── */
+.chat-panel,
+.preview-panel,
+.inspector-body {
+  min-width: 0;
+}
+
+.insp-root {
+  min-width: 0;
+}
+
+@media (max-width: 560px) {
+  .app-header {
+    padding: 8px 12px;
+  }
+
+  .app-title {
+    font-size: 16px;
+  }
+
+  .header-btn {
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .inspector-body {
+    padding: 8px 10px 16px;
+  }
+
+  .insp-toolbar {
+    gap: 6px;
+  }
+
+  .chat-input-area {
+    padding: 8px 10px;
+  }
+
+  .insp-edit-bar {
+    flex-wrap: wrap;
+  }
+
+  .insp-edit-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .insp-edit-actions .btn {
+    flex: 1;
+  }
+}
+
+/* ─── Show-all-data modal (centered top-level popup) ─────────────────── */
+.ff-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 7, 43, 0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.ff-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 96%);
+  max-height: 88vh;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.ff-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, #04307a 0%, #032d60 100%);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.ff-modal-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.ff-modal-sub {
+  font-weight: 400;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.ff-modal-x {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ff-modal-x:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.ff-modal .insp-toolbar {
+  margin: 0;
+  align-items: center;
+  padding: 10px 16px 0;
+}
+
+.ff-modal .insp-toolbar .insp-meta {
+  margin-bottom: 0;
+}
+
+.ff-modal > .insp-meta {
+  padding: 6px 16px 0;
+  margin-bottom: 0;
+}
+
+.ff-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 16px 14px;
+}
+
+.ff-modal .insp-table-wrap {
+  max-height: none;
+  border: none;
+  border-radius: 0;
+}
+
+.ff-modal .insp-edit-bar {
+  margin: 0;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  box-shadow: none;
+  flex-wrap: wrap;
+}
+
+/* ─── Logs Analyze / Ask AI status colors ────────────────────────────── */
+.insp-status-info {
+  background: #fff4e5;
+  border: 1px solid #ffd8a8;
+  color: #8c4b02;
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.insp-status-ok {
+  background: #e3fcef;
+  border: 1px solid #86d3a4;
+  color: #1b5b3a;
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.logs-bubble-status {
+  background: #fff4e5;
+  color: #8c4b02;
+  border: 1px solid #ffd8a8;
+  align-self: flex-start;
+}
+
+.btn-ok,
+.btn-ok:hover {
+  background: #e3fcef;
+  border-color: #2e844a;
+  color: #1b5b3a;
+}
+
+.btn-busy,
+.btn-busy:hover {
+  background: #fff4e5;
+  border-color: #fe9339;
+  color: #8c4b02;
+}
+
+/* ─── Material-inspired polish (visual only) ─────────────────────────── */
+.btn {
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.btn-primary {
+  box-shadow: 0 1px 2px rgba(1, 118, 211, 0.4);
+}
+
+/* Cancel = distinct red outline; Save = filled blue (Material pairing). */
+.insp-edit-bar .btn-danger {
+  background: #fff;
+  color: #ba0517;
+  border: 1.5px solid #ba0517;
+}
+
+.insp-edit-bar .btn-danger:hover {
+  background: #feefee;
+}
+
+.insp-panel {
+  border-radius: 10px;
+  border-color: #e5e5e5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.insp-tab {
+  padding: 10px 14px;
+}
+
+.insp-tab.active {
+  font-weight: 700;
+}
+
+.insp-edit-input {
+  background: #fbfbfb;
+}
+
+.insp-edit-input:focus {
+  background: #fff;
+}
+
+/* ─── Wide layouts: use the extra room ───────────────────────────────── */
+@media (min-width: 700px) {
+  .inspector-body {
+    padding: 16px 24px 32px;
+  }
+
+  .insp-table td {
+    max-width: 420px;
+  }
+
+  .logs-grid {
+    gap: 16px;
+  }
 }
