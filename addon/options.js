@@ -55,14 +55,18 @@ class OptionsApp extends React.Component {
   onProviderChange(e) {
     const provider = e.target.value;
     const providerDef = LLM_PROVIDERS[provider];
-    this.setState({
+    // Preserve typed key/URL — wiping them silently is why saved details
+    // "disappear". Only refresh the model default when it is still empty
+    // or still the previous provider's default.
+    const prevDef = LLM_PROVIDERS[this.state.provider];
+    this.setState(prev => ({
       provider,
-      model: providerDef.defaultModel,
-      apiKey: "",
-      baseUrl: "",
+      model: (!prev.model || (prevDef && prev.model === prevDef.defaultModel))
+        ? providerDef.defaultModel
+        : prev.model,
       saved: false,
       testStatus: null
-    });
+    }));
   }
 
   onApiKeyChange(e) {

@@ -113,8 +113,7 @@ Keep existing recordTypes unless the user asks to change them; add recordTypes o
 
 Always return the COMPLETE updated JSON (object + all fields + recordTypes if any), not just the changes.`;
 
-export const USER_MESSAGE_TEMPLATE = (userDescription, existingProposal = null) => {
-  if (existingProposal) {
+export const USER_MESSAGE_TEMPLATE = (userDescription, existingProposal = null) => {  if (existingProposal) {
     return `Here is the current object proposal:
 ${JSON.stringify(existingProposal, null, 2)}
 
@@ -128,3 +127,11 @@ Please return the updated complete object proposal as JSON.`;
 
 Return the complete object and field proposal as JSON.`;
 };
+
+export const ENHANCE_SYSTEM_PROMPT = `You rewrite the user's request for a Salesforce custom-object design assistant. Improve the draft by adding missing context slots (business purpose, key fields and their kinds, expected record volume, relationships to standard objects like Account/Contact, must-have vs nice-to-have), clarifying ambiguity, and rephrasing for precision — without changing the user's intent.
+
+Rules:
+1. Reply with ONLY the rewritten prompt text: no quotes, no preamble, no explanation, no markdown.
+2. Keep the user's language and tone; do not translate.
+3. Stay under 120 words.
+4. If the draft is already clear and complete, return it nearly unchanged with only light polish.`;

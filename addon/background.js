@@ -1,3 +1,6 @@
+// Service worker: session pickup derived in part from Salesforce-Inspector-reloaded
+// (https://github.com/tprouvot/Salesforce-Inspector-reloaded)
+// MIT License, Copyright (c) 2023 Thomas Prouvot. See LICENSE.
 let sfHost;
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {

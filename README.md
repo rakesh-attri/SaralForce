@@ -2,7 +2,7 @@
 
 A Chrome browser extension that uses LLM (Large Language Models) to help you design and create Salesforce custom objects and fields from natural language descriptions.
 
-Inspired by [Salesforce Inspector Reloaded](https://github.com/tprouvot/Salesforce-Inspector-reloaded).
+Session handling builds on ideas from [Salesforce Inspector Reloaded](https://github.com/tprouvot/Salesforce-Inspector-reloaded) (MIT licensed — see `LICENSE` and `THIRD-PARTY-NOTICES.md`). ForceForge is an independent project by Bhajan Mandali and is not affiliated with, sponsored, or endorsed by Salesforce, Inc.
 
 ## Features
 
@@ -13,7 +13,7 @@ Inspired by [Salesforce Inspector Reloaded](https://github.com/tprouvot/Salesfor
 - **One-Click Deploy**: Creates the custom object and all fields directly in your Salesforce org via the Tooling API
 - **Relationship Fields**: AI suggests Lookup and Master-Detail relationships when appropriate
 - **Field Permissions**: Configurable field-level security during deployment
-- **Planned Inspector Tools**: Export object data, SOQL import/export, and org info (coming soon)
+- **Inspector Tools**: SOQL runner, record browser, CSV export/import, user management, debug-log viewer with AI analysis, org info, app-tab assignment
 
 ## Installation
 
@@ -107,22 +107,12 @@ The AI will update the proposal accordingly.
 
 ## LLM Provider Configuration
 
-### OpenAI
-- **API Key**: Your OpenAI API key (`sk-...`)
-- **Models**: gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo
+OpenAI, Anthropic Claude, Google Gemini, and any OpenAI-compatible endpoint
+(OpenCodeZen, etc.) are supported.
 
-### Anthropic Claude
-- **API Key**: Your Anthropic API key (`sk-ant-...`)
-- **Models**: claude-sonnet-4-20250514, claude-3-5-haiku-20241022, claude-3-opus-20240229
-
-### Google Gemini
-- **API Key**: Your Google AI API key (`AIza...`)
-- **Models**: gemini-2.0-flash, gemini-1.5-pro, gemini-1.5-flash
-
-### OpenAI-Compatible (OpenCodeZen, etc.)
-- **API Key**: Your provider's API key
-- **Base URL**: The provider's API endpoint (e.g., `https://api.example.com/v1`)
-- **Model**: The model name to use
+- **API Key**: your provider's key (stored only in your browser's local storage)
+- **Base URL**: only needed for OpenAI-compatible endpoints
+- **Models**: the Options page always lists the currently supported models
 
 ## Architecture
 
@@ -133,7 +123,6 @@ sf-object-creator/
 │   ├── background.js          # Service worker (session management)
 │   ├── inspector.js           # Salesforce API layer (REST/SOAP)
 │   ├── utils.js               # Shared utilities
-│   ├── popup.html/js          # Extension popup
 │   ├── object-creator.html/js # Main feature page (chat + preview)
 │   ├── options.html/js        # LLM provider settings
 │   ├── llm/
@@ -151,9 +140,9 @@ sf-object-creator/
 
 ## Security
 
-- API keys are stored locally in your browser (`chrome.storage.local`) and never sent to third parties
+- API keys are stored locally in your browser (`localStorage`) and never sent anywhere except the LLM provider you configured
 - The extension communicates directly with Salesforce APIs using your existing session
-- No object or field data is sent to LLM providers - only your natural language descriptions
+- Only your natural language descriptions are sent to LLM providers - object/field data stays in your org unless you paste it into the chat
 - Same authentication model as Salesforce Inspector Reloaded (OAuth2 PKCE + session cookies)
 
 ## Permissions
@@ -180,4 +169,6 @@ npm run copy-react
 
 ## License
 
-MIT License - Same as Salesforce Inspector Reloaded
+MIT License — see `LICENSE`. Session/auth code derives in part from
+Salesforce-Inspector-reloaded (MIT © 2023 Thomas Prouvot); see
+`THIRD-PARTY-NOTICES.md` for full attribution.

@@ -1,4 +1,7 @@
-import {getRedirectUri, getClientId, isSettingEnabled, Constants} from "./utils.js";
+// Session/authentication layer derived in part from Salesforce-Inspector-reloaded
+// (https://github.com/tprouvot/Salesforce-Inspector-reloaded)
+// MIT License, Copyright (c) 2023 Thomas Prouvot. See LICENSE.
+import {getRedirectUri, getClientId, getPKCEParameters, isSettingEnabled, Constants} from "./utils.js";
 
 export let defaultApiVersion = "67.0";
 export let apiVersion = localStorage.getItem("apiVersion") == null ? defaultApiVersion : localStorage.getItem("apiVersion");
@@ -364,4 +367,32 @@ function getMyDomain(host) {
     return myDomain;
   }
   return host;
+}
+
+// Starts the OAuth Authorization Code + PKCE login (fallback for when no
+// Salesforce session cookie is available). Navigates this page to the org's
+// login; Salesforce redirects back to the extension with ?code=&state=,
+// which sfConn.getSession() exchanges for a token.
+// Requires an External Client App whose callback URL whitelists
+// chrome-extension://<extension-id>/object-creator.html, with "Require
+// Secret for Web Server Flow" OFF and PKCE required.
+export async function startSalesforceLogin(sfHost) {
+  const host = getMyDomain(sfHost);
+  if (!host) throw new Error("No Salesforce host to log in to.");
+  const clientId = getClientId(host);
+  const redirectUri = getRedirectUri("object-creator.html");
+  const pkce = await getPKCEParameters(host);
+  if (!pkce || !pkce.code_verifier || !pkce.code_challenge) {
+    throw new Error("Could not obtain PKCE parameters from the org.");
+  }
+  localStorage.setItem(host + Constants.CODE_VERIFIER, pkce.code_verifier);
+  const state = encodeURIComponent(JSON.stringify({sfHost: host}));
+  const authUrl = `https://${host}/services/oauth2/authorize?response_type=code`
+    + `&client_id=${encodeURIComponent(clientId)}`
+    + `&redirect_uri=${encodeURIComponent(redirectUri)}`
+    + `&scope=${encodeURIComponent("api")}`
+    + `&state=${state}`
+    + `&code_challenge=${encodeURIComponent(pkce.code_challenge)}`
+    + `&code_challenge_method=S256`;
+  window.location.assign(authUrl);
 }

@@ -1,5 +1,5 @@
 import {sfConn, apiVersion} from "./inspector.js";
-import {getSavedConfig, getLLMProvider, hasValidConfig} from "./llm/llm-service.js";
+import {getSavedConfig, getLLMProvider, getProviderConfig, hasValidConfig} from "./llm/llm-service.js";
 
 const h = React.createElement;
 
@@ -213,6 +213,81 @@ function ffSaveJson(key, val) {
   catch (e) { /* quota, ignore */ }
 }
 
+// ── Sidebar session snapshot ────────────────────────────────────────────────
+// Minimizing (main ForceForge button) destroys the sidebar iframe, so live
+// React state dies with it. App._saveState serializes this snapshot into
+// sessionStorage on `sfoc-save-state` and restores it in the constructor on
+// reopen — same round-trip the builder chat already uses. Nothing writes the
+// key on page refresh, so a refresh of the host page resets everything.
+// Ephemeral state (log bodies, loading flags, lookups) stays plain useState
+// and is refetched on demand.
+let ffRestored = null;
+const ffLive = {};
+
+export function ffApplyRestore(snapshot) {
+  ffRestored = snapshot && typeof snapshot === "object" ? snapshot : null;
+}
+
+function ffUseSession(scope, key, initial) {
+  const [val, setVal] = React.useState(() => {
+    // Live values from this document session win over the reopen snapshot
+    // (tabs unmount when switching Builder ⇄ Inspector mid-session).
+    const live = ffLive[scope];
+    if (live && Object.prototype.hasOwnProperty.call(live, key)) return live[key];
+    const src = ffRestored && ffRestored[scope];
+    if (src && Object.prototype.hasOwnProperty.call(src, key)) return src[key];
+    return typeof initial === "function" ? initial() : initial;
+  });
+  React.useEffect(() => {
+    if (!ffLive[scope]) ffLive[scope] = {};
+    ffLive[scope][key] = val;
+  }, [val]);
+  return [val, setVal];
+}
+
+// Dropped first when the snapshot approaches the sessionStorage quota; every
+// one of these is either re-fetchable or re-derivable from its sibling keys.
+const FF_TRIM_KEYS = {
+  soql: ["result"],
+  records: ["rows"],
+  import: ["csvText", "records"],
+  export: ["preview"],
+  logs: ["analyses", "chats", "openLog"],
+  apex: ["log"]
+};
+
+function ffClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+function ffTrim(snapshot) {
+  const out = ffClone(snapshot);
+  for (const [scope, keys] of Object.entries(FF_TRIM_KEYS)) {
+    if (!out[scope]) continue;
+    keys.forEach(k => delete out[scope][k]);
+  }
+  return out;
+}
+
+export function ffTakeSnapshot() {
+  // Live values win; scopes never mounted this session keep their restored data.
+  const merged = {};
+  for (const src of [ffRestored, ffLive]) {
+    if (!src) continue;
+    for (const [scope, vals] of Object.entries(src)) {
+      merged[scope] = {...(merged[scope] || {}), ...vals};
+    }
+  }
+  try {
+    const full = ffClone(merged);
+    // Stay well under the 5MB sessionStorage budget for this key.
+    if (JSON.stringify(full).length < 2000000) return full;
+    return ffTrim(merged);
+  } catch (e) {
+    try { return ffTrim(merged); } catch (e2) { return null; }
+  }
+}
+
 function ffSoqlEscape(s) {
   return String(s || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
@@ -238,11 +313,11 @@ async function ffDescribeObject(objApi) {
 
 // ─── SOQL tab ───────────────────────────────────────────────
 function SoqlTab() {
-  const [query, setQuery] = React.useState("SELECT Id, Name FROM Account LIMIT 50");
+  const [query, setQuery] = ffUseSession("soql", "query", "SELECT Id, Name FROM Account LIMIT 50");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [result, setResult] = React.useState(null);
-  const [limit, setLimit] = React.useState(500);
+  const [result, setResult] = ffUseSession("soql", "result", null);
+  const [limit, setLimit] = ffUseSession("soql", "limit", 500);
   const [useLlm, setUseLlm] = React.useState(() => ffLoadJson("ff_soql_use_llm", false));
   const [fixing, setFixing] = React.useState(false);
   const [suggestion, setSuggestion] = React.useState(null);
@@ -383,6 +458,21 @@ function SoqlTab() {
         }),
         h("span", null, "✨ Use LLM")
       ),
+      (() => {
+        // Read live every render so what the frontend captured is always
+        // visible — no more guessing whether Options saved correctly.
+        const cfg = getSavedConfig();
+        const ok = hasValidConfig();
+        const def = cfg && cfg.provider ? getProviderConfig(cfg.provider) : null;
+        return h("span", {
+          className: "insp-meta",
+          title: ok
+            ? `Provider: ${cfg.provider}\nModel: ${cfg.model || "(default)"}\nKey: ${cfg.apiKey ? "••••" + String(cfg.apiKey).slice(-4) : "missing"}`
+            : "Open Settings (⚙ in the sidebar header) → choose provider, paste API key, Save Settings"
+        }, ok
+          ? `LLM: ${def ? def.name : cfg.provider} · ${cfg.model || "default"} ✓`
+          : "LLM: not configured");
+      })(),
       h("label", {className: "insp-field"},
         h("span", null, "Saved queries"),
         h("select", {
@@ -554,14 +644,14 @@ function SoqlTab() {
 
 // ─── Data Export tab ────────────────────────────────────────
 function ExportTab() {
-  const [objectApi, setObjectApi] = React.useState("");
-  const [fields, setFields] = React.useState("Id, Name");
-  const [where, setWhere] = React.useState("");
-  const [limit, setLimit] = React.useState(10000);
+  const [objectApi, setObjectApi] = ffUseSession("export", "objectApi", "");
+  const [fields, setFields] = ffUseSession("export", "fields", "Id, Name");
+  const [where, setWhere] = ffUseSession("export", "where", "");
+  const [limit, setLimit] = ffUseSession("export", "limit", 10000);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [meta, setMeta] = React.useState(null);
-  const [preview, setPreview] = React.useState(null);
+  const [meta, setMeta] = ffUseSession("export", "meta", null);
+  const [preview, setPreview] = ffUseSession("export", "preview", null);
   const [objects, setObjects] = React.useState([]);
   const [history, setHistory] = React.useState(() => ffLoadJson("ff_export_history", []));
   const [saved, setSaved] = React.useState(() => ffLoadJson("ff_export_saved", []));
@@ -806,14 +896,14 @@ function ExportTab() {
 
 // ─── Data Import tab ────────────────────────────────────────
 function ImportTab() {
-  const [objectApi, setObjectApi] = React.useState("");
-  const [csvText, setCsvText] = React.useState("");
-  const [headers, setHeaders] = React.useState([]);
-  const [records, setRecords] = React.useState([]);
-  const [fieldMap, setFieldMap] = React.useState({});
+  const [objectApi, setObjectApi] = ffUseSession("import", "objectApi", "");
+  const [csvText, setCsvText] = ffUseSession("import", "csvText", "");
+  const [headers, setHeaders] = ffUseSession("import", "headers", []);
+  const [records, setRecords] = ffUseSession("import", "records", []);
+  const [fieldMap, setFieldMap] = ffUseSession("import", "fieldMap", {});
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [result, setResult] = React.useState(null);
+  const [result, setResult] = ffUseSession("import", "result", null);
 
   const onFile = async (file) => {
     setError(null);
@@ -951,7 +1041,7 @@ function ImportTab() {
 function OrgTab() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [info, setInfo] = React.useState(null);
+  const [info, setInfo] = ffUseSession("org", "info", null);
 
   const load = async () => {
     setLoading(true);
@@ -1086,18 +1176,18 @@ async function recordsListObjects() {
 function RecordsTab() {
   const [objects, setObjects] = React.useState([]);
   const [objLoading, setObjLoading] = React.useState(false);
-  const [objInput, setObjInput] = React.useState("");
-  const [fields, setFields] = React.useState([]);
-  const [checked, setChecked] = React.useState([]);
+  const [objInput, setObjInput] = ffUseSession("records", "objInput", "");
+  const [fields, setFields] = ffUseSession("records", "fields", []);
+  const [checked, setChecked] = ffUseSession("records", "checked", []);
   const [descLoading, setDescLoading] = React.useState(false);
-  const [rows, setRows] = React.useState([]);
-  const [columns, setColumns] = React.useState([]);
-  const [totalSize, setTotalSize] = React.useState(null);
-  const [nextUrl, setNextUrl] = React.useState(null);
+  const [rows, setRows] = ffUseSession("records", "rows", []);
+  const [columns, setColumns] = ffUseSession("records", "columns", []);
+  const [totalSize, setTotalSize] = ffUseSession("records", "totalSize", null);
+  const [nextUrl, setNextUrl] = ffUseSession("records", "nextUrl", null);
   const [loading, setLoading] = React.useState(false);
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [detail, setDetail] = React.useState(null);
+  const [detail, setDetail] = ffUseSession("records", "detail", null);
   const [detailLoading, setDetailLoading] = React.useState(false);
 
   const loadObjects = async () => {
@@ -1810,18 +1900,18 @@ async function appTabsResolveAppByRecordId(pasted) {
 }
 
 function AppTabsTab() {
-  const [apps, setApps] = React.useState([]);
+  const [apps, setApps] = ffUseSession("apptabs", "apps", []);
   const [appsLoading, setAppsLoading] = React.useState(false);
-  const [sel, setSel] = React.useState("");
-  const [customTabs, setCustomTabs] = React.useState([]);
+  const [sel, setSel] = ffUseSession("apptabs", "sel", "");
+  const [customTabs, setCustomTabs] = ffUseSession("apptabs", "customTabs", []);
   const [tabsLoading, setTabsLoading] = React.useState(false);
-  const [tabName, setTabName] = React.useState("");
-  const [currentTabs, setCurrentTabs] = React.useState(null);
+  const [tabName, setTabName] = ffUseSession("apptabs", "tabName", "");
+  const [currentTabs, setCurrentTabs] = ffUseSession("apptabs", "currentTabs", null);
   const [currentLoading, setCurrentLoading] = React.useState(false);
   const [working, setWorking] = React.useState(false);
   const [visWorking, setVisWorking] = React.useState(false);
   const [resolving, setResolving] = React.useState(false);
-  const [appRef, setAppRef] = React.useState("");
+  const [appRef, setAppRef] = ffUseSession("apptabs", "appRef", "");
   const [refMsg, setRefMsg] = React.useState(null);
   const [status, setStatus] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -2265,17 +2355,26 @@ async function usersEnsureDebugLevel() {
 }
 
 function UsersTab() {
-  const [q, setQ] = React.useState("");
-  const [users, setUsers] = React.useState([]);
-  const [userCols, setUserCols] = React.useState([]);
+  const [q, setQ] = ffUseSession("users", "q", "");
+  const [users, setUsers] = ffUseSession("users", "users", []);
+  const [userCols, setUserCols] = ffUseSession("users", "userCols", []);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [sel, setSel] = React.useState(null);
-  const [detail, setDetail] = React.useState(null);
+  const [sel, setSel] = ffUseSession("users", "sel", null);
+  const [detail, setDetail] = ffUseSession("users", "detail", null);
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [actionMsg, setActionMsg] = React.useState(null);
   const [actionErr, setActionErr] = React.useState(null);
   const [busy, setBusy] = React.useState(null);
+  const [srcRec, setSrcRec] = React.useState(null);
+  const [cloneOpen, setCloneOpen] = React.useState(false);
+  const [profiles, setProfiles] = React.useState([]);
+  const [roles, setRoles] = React.useState([]);
+  const [srcPerms, setSrcPerms] = React.useState(null);
+  const [srcLoading, setSrcLoading] = React.useState(false);
+  const [cf, setCf] = React.useState(null);
+  const [cloning, setCloning] = React.useState(false);
+  const [cloneResult, setCloneResult] = React.useState(null);
 
   const search = async () => {
     setError(null);
@@ -2316,6 +2415,9 @@ function UsersTab() {
     setDetail(null);
     setActionMsg(null);
     setActionErr(null);
+    setSrcRec(null);
+    setCloneOpen(false);
+    setCloneResult(null);
     setDetailLoading(true);
     try {
       const [rec, prof] = await Promise.all([
@@ -2325,6 +2427,7 @@ function UsersTab() {
           encodeURIComponent(`SELECT Name FROM Profile WHERE Id = '${row.ProfileId}'`),
           {useCache: false}).catch(() => null)
       ]);
+      setSrcRec(rec);
       setDetail({
         profile: prof && prof.records && prof.records[0] ? prof.records[0].Name : "unknown",
         lastLogin: rec && rec.LastLoginDate ? rec.LastLoginDate : null,
@@ -2393,6 +2496,210 @@ function UsersTab() {
     }
   };
 
+  // ── Clone user: same profile/role, copied permission sets, groups ──
+  const openClone = async () => {
+    if (!sel) return;
+    setCloneOpen(true);
+    setCloneResult(null);
+    setSrcLoading(true);
+    setActionMsg(null);
+    setActionErr(null);
+    try {
+      const [profRes, roleRes, assignRes, grpRes] = await Promise.all([
+        sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent("SELECT Id, Name FROM Profile ORDER BY Name"), {useCache: false}),
+        sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent("SELECT Id, Name FROM UserRole ORDER BY Name"), {useCache: false})
+          .catch(() => ({records: []})),
+        sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent(
+            `SELECT PermissionSetId, PermissionSet.Name, PermissionSet.Label, ` +
+            `PermissionSet.IsOwnedByProfile FROM PermissionSetAssignment ` +
+            `WHERE AssigneeId = '${sel.Id}'`), {useCache: false}),
+        sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent(
+            `SELECT GroupId FROM GroupMember WHERE UserOrGroupId = '${sel.Id}'`),
+          {useCache: false}).catch(() => ({records: []}))
+      ]);
+      setProfiles((profRes.records || []).map(p => ({id: p.Id, name: p.Name})));
+      setRoles((roleRes.records || []).map(r => ({id: r.Id, name: r.Name})));
+      const rows = assignRes.records || [];
+      const direct = rows.filter(a =>
+        a.PermissionSet && a.PermissionSet.IsOwnedByProfile !== true && a.PermissionSetId);
+      let psgIds = new Set();
+      try {
+        const ids = direct.map(a => `'${a.PermissionSetId}'`).join(",");
+        if (ids) {
+          const gRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+            encodeURIComponent(`SELECT Id FROM PermissionSetGroup WHERE Id IN (${ids})`),
+            {useCache: false});
+          psgIds = new Set((gRes.records || []).map(g => g.Id));
+        }
+      } catch (e) { /* treat all as permission sets */ }
+      const ps = [];
+      const psg = [];
+      for (const a of direct) {
+        const entry = {
+          id: a.PermissionSetId,
+          name: (a.PermissionSet && (a.PermissionSet.Label || a.PermissionSet.Name)) || a.PermissionSetId
+        };
+        (psgIds.has(a.PermissionSetId) ? psg : ps).push(entry);
+      }
+      let groups = [];
+      const grpIds = (grpRes.records || []).map(g => g.GroupId).filter(Boolean);
+      if (grpIds.length) {
+        try {
+          const gDetail = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+            encodeURIComponent(
+              `SELECT Id, Name, Type FROM Group WHERE Id IN (${grpIds.map(id => `'${id}'`).join(",")})`),
+            {useCache: false});
+          groups = (gDetail.records || [])
+            .filter(g => g.Type === "Regular" || g.Type === "Queue")
+            .map(g => ({id: g.Id, name: `${g.Name} (${g.Type})`}));
+        } catch (e) { /* skip groups */ }
+      }
+      setSrcPerms({ps, psg, groups});
+      const rec = srcRec || {};
+      setCf({
+        firstName: rec.FirstName || "",
+        lastName: rec.LastName || "",
+        email: "",
+        username: "",
+        alias: String(rec.Alias || "").slice(0, 8),
+        nick: "",
+        password: "",
+        profileId: rec.ProfileId || sel.ProfileId || "",
+        roleId: rec.UserRoleId || "",
+        copyPS: true,
+        copyGroups: true,
+        active: true,
+        locale: {
+          TimeZoneSidKey: rec.TimeZoneSidKey || "Asia/Kolkata",
+          LocaleSidKey: rec.LocaleSidKey || "en_US",
+          EmailEncodingKey: rec.EmailEncodingKey || "UTF-8",
+          LanguageLocaleKey: rec.LanguageLocaleKey || "en_US"
+        }
+      });
+    } catch (e) {
+      setActionErr(e.message);
+      setCloneOpen(false);
+    } finally {
+      setSrcLoading(false);
+    }
+  };
+
+  const doClone = async () => {
+    if (!sel || !cf) return;
+    setCloneResult(null);
+    setActionErr(null);
+    const firstName = cf.firstName.trim();
+    const lastName = cf.lastName.trim();
+    const email = cf.email.trim();
+    const username = cf.username.trim();
+    if (!lastName) { setActionErr("Last Name is required"); return; }
+    if (!email) { setActionErr("Email is required"); return; }
+    if (!username) { setActionErr("Username is required (must be globally unique, e.g. name@company.org)"); return; }
+    if (!cf.profileId) { setActionErr("Pick a profile"); return; }
+    setCloning(true);
+    const failures = [];
+    let newId = null;
+    try {
+      // 1. Create the user (identity fields come from the form, everything
+      //    else — profile, role, locale — is cloned from the source user).
+      const body = {
+        FirstName: firstName || undefined,
+        LastName: lastName,
+        Email: email,
+        Username: username,
+        Alias: (cf.alias.trim() || lastName.replace(/[^A-Za-z]/g, "") || "user").slice(0, 8),
+        CommunityNickname: cf.nick.trim() || username.split("@")[0].slice(0, 40),
+        TimeZoneSidKey: cf.locale.TimeZoneSidKey,
+        LocaleSidKey: cf.locale.LocaleSidKey,
+        EmailEncodingKey: cf.locale.EmailEncodingKey,
+        LanguageLocaleKey: cf.locale.LanguageLocaleKey,
+        ProfileId: cf.profileId,
+        IsActive: !!cf.active
+      };
+      if (cf.roleId) body.UserRoleId = cf.roleId;
+      const created = await sfConn.rest(`/services/data/v${apiVersion}/sobjects/User`, {
+        method: "POST",
+        useCache: false,
+        body
+      });
+      newId = created && created.id;
+      if (!newId) throw new Error("User create returned no Id");
+      // 2. Optional password (admin-set).
+      let pwOk = null;
+      if (cf.password) {
+        try {
+          await sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/${newId}/password`, {
+            method: "POST",
+            useCache: false,
+            body: {NewPassword: cf.password}
+          });
+          pwOk = true;
+        } catch (e) {
+          pwOk = false;
+          failures.push(`password: ${e.message}`);
+        }
+      }
+      // 3. Copy permission sets + permission set groups.
+      let psOk = 0;
+      if (cf.copyPS && srcPerms) {
+        for (const p of [...srcPerms.ps, ...srcPerms.psg]) {
+          try {
+            await sfConn.rest(`/services/data/v${apiVersion}/sobjects/PermissionSetAssignment`, {
+              method: "POST",
+              useCache: false,
+              body: {AssigneeId: newId, PermissionSetId: p.id}
+            });
+            psOk++;
+          } catch (e) {
+            failures.push(`${p.name}: ${e.message}`);
+          }
+        }
+      }
+      // 4. Copy public group / queue memberships.
+      let grpOk = 0;
+      if (cf.copyGroups && srcPerms) {
+        for (const g of srcPerms.groups) {
+          try {
+            await sfConn.rest(`/services/data/v${apiVersion}/sobjects/GroupMember`, {
+              method: "POST",
+              useCache: false,
+              body: {GroupId: g.id, UserOrGroupId: newId}
+            });
+            grpOk++;
+          } catch (e) {
+            failures.push(`${g.name}: ${e.message}`);
+          }
+        }
+      }
+      const totalPs = cf.copyPS && srcPerms ? srcPerms.ps.length + srcPerms.psg.length : 0;
+      const totalGrp = cf.copyGroups && srcPerms ? srcPerms.groups.length : 0;
+      setCloneResult({
+        ok: failures.length === 0,
+        newId,
+        summary: `User created (${newId}): ` +
+          `${psOk}/${totalPs} permission sets/groups, ` +
+          `${grpOk}/${totalGrp} group memberships` +
+          (cf.password ? (pwOk ? ", password set" : ", password FAILED") : ", no password set") +
+          ".",
+        failures: failures.slice(0, 6)
+      });
+      setCf(prev => prev ? {...prev, password: ""} : prev);
+    } catch (e) {
+      setCloneResult({
+        ok: false,
+        newId,
+        summary: e.message,
+        failures: failures.slice(0, 6)
+      });
+    } finally {
+      setCloning(false);
+    }
+  };
+
   return h("div", {className: "insp-panel"},
     h("p", {className: "app-section-hint"},
       "Search users, inspect details, log in as a user, or capture debug logs — all without leaving the extension."
@@ -2458,42 +2765,1556 @@ function UsersTab() {
         }, busy === "logs" ? "Enabling…" : "Enable Logs"),
         h("button", {
           className: "btn btn-secondary btn-sm",
+          title: "Create a new user with the same profile, role, permission sets and groups — you provide name, email, username, password",
+          onClick: () => (cloneOpen ? setCloneOpen(false) : openClone())
+        }, cloneOpen ? "Close Clone" : "Clone User"),
+        h("button", {
+          className: "btn btn-secondary btn-sm",
           onClick: copyId
         }, "Copy Id")
       )
+    ),
+    sel && cloneOpen && h("div", {className: "insp-kv"},
+      h("div", {className: "insp-kv-title"}, `Clone ${sel.Name} → new user`),
+      srcLoading && h("div", {className: "insp-meta"}, "Loading profile, role and assignments…"),
+      !srcLoading && cf && h("div", null,
+        h("div", {className: "insp-meta"},
+          `Source: profile ${detail ? detail.profile : "…"} · ` +
+          `${srcPerms ? `${srcPerms.ps.length} permission set(s), ${srcPerms.psg.length} group(s), ${srcPerms.groups.length} public group(s)` : "…"}`
+        ),
+        h("div", {className: "insp-form-grid"},
+          h("label", {className: "insp-field"},
+            h("span", null, "First Name"),
+            h("input", {
+              value: cf.firstName,
+              onChange: e => setCf({...cf, firstName: e.target.value})
+            })
+          ),
+          h("label", {className: "insp-field"},
+            h("span", null, "Last Name *"),
+            h("input", {
+              value: cf.lastName,
+              onChange: e => setCf({...cf, lastName: e.target.value})
+            })
+          ),
+          h("label", {className: "insp-field"},
+            h("span", null, "Email *"),
+            h("input", {
+              value: cf.email,
+              placeholder: "user@company.com",
+              onChange: e => setCf({...cf, email: e.target.value})
+            })
+          ),
+          h("label", {className: "insp-field"},
+            h("span", null, "Username *"),
+            h("input", {
+              value: cf.username,
+              placeholder: "name@company.org (globally unique)",
+              onChange: e => setCf({...cf, username: e.target.value})
+            })
+          ),
+          h("label", {className: "insp-field"},
+            h("span", null, "Alias (≤8)"),
+            h("input", {
+              value: cf.alias,
+              onChange: e => setCf({...cf, alias: e.target.value})
+            })
+          ),
+          h("label", {className: "insp-field"},
+            h("span", null, "Nickname"),
+            h("input", {
+              value: cf.nick,
+              placeholder: "defaults to username prefix",
+              onChange: e => setCf({...cf, nick: e.target.value})
+            })
+          ),
+          h("label", {className: "insp-field insp-field-grow"},
+            h("span", null, "Password (optional, admin-set)"),
+            h("input", {
+              type: "password",
+              value: cf.password,
+              placeholder: "leave blank to skip",
+              onChange: e => setCf({...cf, password: e.target.value})
+            })
+          ),
+          h("label", {className: "insp-field insp-field-grow"},
+            h("span", null, "Profile * (cloned from source)"),
+            h("select", {
+              value: cf.profileId,
+              onChange: e => setCf({...cf, profileId: e.target.value})
+            },
+              h("option", {value: ""}, "— pick —"),
+              profiles.map(p => h("option", {key: p.id, value: p.id}, p.name))
+            )
+          ),
+          h("label", {className: "insp-field insp-field-grow"},
+            h("span", null, "Role (cloned from source)"),
+            h("select", {
+              value: cf.roleId,
+              onChange: e => setCf({...cf, roleId: e.target.value})
+            },
+              h("option", {value: ""}, "— none —"),
+              roles.map(r => h("option", {key: r.id, value: r.id}, r.name))
+            )
+          )
+        ),
+        h("div", {className: "insp-toolbar insp-toolbar-wrap", style: {marginTop: "8px"}},
+          h("label", {className: "insp-check"},
+            h("input", {
+              type: "checkbox",
+              checked: cf.copyPS,
+              onChange: e => setCf({...cf, copyPS: e.target.checked})
+            }),
+            h("span", null,
+              `Copy permission sets${srcPerms ? ` (${srcPerms.ps.length + srcPerms.psg.length})` : ""}`)
+          ),
+          h("label", {className: "insp-check"},
+            h("input", {
+              type: "checkbox",
+              checked: cf.copyGroups,
+              onChange: e => setCf({...cf, copyGroups: e.target.checked})
+            }),
+            h("span", null,
+              `Copy public groups${srcPerms ? ` (${srcPerms.groups.length})` : ""}`)
+          ),
+          h("label", {className: "insp-check"},
+            h("input", {
+              type: "checkbox",
+              checked: cf.active,
+              onChange: e => setCf({...cf, active: e.target.checked})
+            }),
+            h("span", null, "Active")
+          ),
+          h("button", {
+            className: "btn btn-primary btn-sm",
+            disabled: cloning,
+            onClick: doClone
+          }, cloning ? "Creating…" : "Create cloned user")
+        )
+      )
+    ),
+    cloneResult && h("div", {className: cloneResult.ok ? "insp-ok" : "insp-warn"},
+      cloneResult.summary,
+      cloneResult.failures && cloneResult.failures.length > 0 &&
+        h("div", null, "First issues: " + cloneResult.failures.join("; "))
     ),
     actionMsg && h("div", {className: "insp-ok"}, actionMsg),
     actionErr && h("div", {className: "insp-error"}, actionErr)
   );
 }
 
+// ─── Apex tab (Execute Anonymous, Dev-Console style) ───────
+// Runs anonymous Apex through the Tooling API (the same endpoint the
+// Developer Console's "Open Execute Anonymous Window" uses) and pulls
+// the resulting debug log — no Dev Console needed.
+const APEX_TEMPLATES = [
+  {label: "Debug test", code: "System.debug('Hello from ForceForge');"},
+  {label: "Query loop", code:
+`List<Account> accs = [SELECT Id, Name FROM Account LIMIT 5];
+for (Account a : accs) {
+  System.debug(a.Name);
+}`},
+  {label: "Run batch", code:
+`// Replace MyBatchClass with your batch class name:
+// Database.executeBatch(new MyBatchClass(), 200);
+System.debug('Uncomment the line above to run your batch');`}
+];
+
+async function apexExecute(code) {
+  const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/executeAnonymous/?anonymousBody=` +
+    encodeURIComponent(code), {useCache: false});
+  return res || {};
+}
+
+async function apexLatestLog() {
+  const userId = await appTabsResolveCurrentUserId();
+  const since = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  const soql = `SELECT Id FROM ApexLog WHERE LogUserId = '${userId}' ` +
+    `AND StartTime >= ${since} ORDER BY StartTime DESC LIMIT 1`;
+  const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+    encodeURIComponent(soql), {useCache: false});
+  if (!res.records || !res.records.length) return null;
+  const body = await sfConn.rest(
+    `/services/data/v${apiVersion}/sobjects/ApexLog/${res.records[0].Id}/Body`,
+    {responseType: "text", useCache: false});
+  return String(body || "");
+}
+
+// Parse a raw Apex debug log into Execution-Log rows:
+// "15:34:27:001 USER_DEBUG [38]|DEBUG|message" → {ts, event, details}.
+// Continuation lines attach to the previous row.
+function parseApexLog(text) {
+  const rows = [];
+  const re = /^(\d{1,2}:\d{2}:\d{2}:\d{1,3})\s+([A-Z][A-Z0-9_]*)\s*(.*)$/;
+  for (const line of String(text || "").split("\n")) {
+    if (!line.trim()) continue;
+    const m = re.exec(line);
+    if (m) {
+      rows.push({ts: m[1], event: m[2], details: m[3] || ""});
+    } else if (rows.length) {
+      rows[rows.length - 1].details += "\n" + line;
+    } else {
+      rows.push({ts: "", event: "", details: line});
+    }
+  }
+  return rows;
+}
+
+function ApexTab() {
+  const [code, setCode] = ffUseSession("apex", "code", "System.debug('Hello from ForceForge');");
+  const [running, setRunning] = React.useState(false);
+  const [exec, setExec] = ffUseSession("apex", "exec", null);
+  const [error, setError] = React.useState(null);
+  const [log, setLog] = ffUseSession("apex", "log", null);
+  const [logLoading, setLogLoading] = React.useState(false);
+  const [openLog, setOpenLog] = ffUseSession("apex", "openLog", true);
+  const [debugOnly, setDebugOnly] = ffUseSession("apex", "debugOnly", false);
+  const [eventFilter, setEventFilter] = ffUseSession("apex", "eventFilter", "");
+  const [logFilter, setLogFilter] = ffUseSession("apex", "logFilter", "");
+  const [history, setHistory] = React.useState(() => ffLoadJson("ff_apex_history", []));
+  const taRef = React.useRef(null);
+
+  const pushHistory = (snippet, ok) => {
+    setHistory(prev => {
+      const next = [{code: snippet, ts: Date.now(), ok: !!ok},
+        ...prev.filter(h => h.code !== snippet)].slice(0, 15);
+      ffSaveJson("ff_apex_history", next);
+      return next;
+    });
+  };
+
+  const fetchLog = async () => {
+    setLogLoading(true);
+    try {
+      // Logs can lag a beat behind execution.
+      await new Promise(r => setTimeout(r, 1500));
+      const body = await apexLatestLog();
+      setLog(body == null
+        ? "No fresh debug log found yet — check Setup → Debug Logs."
+        : body.slice(0, 30000));
+    } catch (e) {
+      setLog("Could not fetch debug log: " + e.message);
+    } finally {
+      setLogLoading(false);
+    }
+  };
+
+  const run = async () => {
+    const snippet = String(code || "");
+    if (!snippet.trim()) { setError("Enter some Apex code first"); return; }
+    if (encodeURIComponent(snippet).length > 16000) {
+      setError("Script is too long for URL-based execution — split it into smaller chunks.");
+      return;
+    }
+    setRunning(true);
+    setError(null);
+    setExec(null);
+    setLog(null);
+    try {
+      const r = await apexExecute(snippet);
+      setExec(r);
+      pushHistory(snippet, r.compiled && r.success);
+      if (openLog) await fetchLog();
+    } catch (e) {
+      setError(e.message);
+      pushHistory(snippet, false);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const downloadLog = () => {
+    if (!log) return;
+    downloadText("apex-execute-anonymous.log", log, "text/plain;charset=utf-8");
+  };
+
+  const ok = exec && exec.compiled && exec.success;
+
+  return h("div", {className: "insp-panel"},
+    h("p", {className: "app-section-hint"},
+      "Execute Anonymous Apex — same engine as the Developer Console (Debug → Open Execute Anonymous Window). Batch, callouts and queries all work."
+    ),
+    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
+      h("label", {className: "insp-field"},
+        h("span", null, "History"),
+        h("select", {
+          value: "",
+          onChange: e => {
+            const idx = parseInt(e.target.value, 10);
+            if (!isNaN(idx) && history[idx]) setCode(history[idx].code);
+            e.target.value = "";
+          }
+        },
+          h("option", {value: ""}, history.length ? "— recent —" : "No history yet"),
+          history.map((hh, i) =>
+            h("option", {key: i, value: String(i)},
+              `${new Date(hh.ts).toLocaleString()} ${hh.ok ? "✓" : "✗"} — ${hh.code.slice(0, 60).replace(/\s+/g, " ")}`)
+          )
+        )
+      ),
+      h("label", {className: "insp-check", title: "Fetch the debug log automatically after each run"},
+        h("input", {
+          type: "checkbox",
+          checked: openLog,
+          onChange: e => setOpenLog(e.target.checked)
+        }),
+        h("span", null, "Open Log")
+      ),
+      h("button", {
+        className: "btn btn-primary btn-sm",
+        disabled: running || !code.trim(),
+        onClick: run
+      }, running ? "Executing…" : "Execute"),
+      log && h("button", {
+        className: "btn btn-secondary btn-sm",
+        onClick: downloadLog
+      }, "Download Log")
+    ),
+    h("div", {className: "insp-chips-row"},
+      h("span", {className: "insp-chips-label"}, "Templates:"),
+      APEX_TEMPLATES.map(t =>
+        h("button", {
+          key: t.label,
+          className: "insp-chip",
+          title: "Insert template",
+          onClick: () => setCode(t.code)
+        }, t.label)
+      )
+    ),
+    h("textarea", {
+      ref: taRef,
+      className: "insp-soql",
+      style: {minHeight: "180px"},
+      value: code,
+      spellCheck: false,
+      onChange: e => setCode(e.target.value),
+      onKeyDown: e => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const ta = taRef.current;
+          if (ta) {
+            const s = ta.selectionStart ?? code.length;
+            setCode(code.slice(0, s) + "  " + code.slice(ta.selectionEnd ?? s));
+            requestAnimationFrame(() => {
+              try { ta.focus(); ta.setSelectionRange(s + 2, s + 2); } catch (e2) { /* ignore */ }
+            });
+          }
+        }
+      },
+      placeholder: "Enter Apex Code… (Ctrl+Enter to execute)"
+    }),
+    error && h("div", {className: "insp-error"}, error),
+    exec && (ok
+      ? h("div", {className: "insp-ok"}, "Apex executed successfully (compiled ✓).")
+      : h("div", {className: "insp-error"},
+          exec.compileProblem
+            ? `Compile error${exec.line ? ` (line ${exec.line}${exec.column ? ", column " + exec.column : ""})` : ""}: ${exec.compileProblem}`
+            : (exec.exceptionMessage || "Execution failed."),
+          exec.exceptionStackTrace && h("pre", {className: "insp-log insp-log-small"},
+            String(exec.exceptionStackTrace).slice(0, 4000))
+        )
+    ),
+    (logLoading || log) && h("div", {className: "insp-meta"},
+      logLoading ? "Fetching debug log…" : `Execution Log (${log.length} chars)`,
+      !logLoading && h("button", {
+        className: "field-action-btn",
+        style: {marginLeft: "8px"},
+        onClick: fetchLog
+      }, "Refresh log")
+    ),
+    log && (() => {
+      const allRows = parseApexLog(log);
+      const events = [...new Set(allRows.map(r => r.event).filter(Boolean))].sort();
+      const f = logFilter.trim().toLowerCase();
+      const shown = allRows.filter(r =>
+        (!debugOnly || r.event === "USER_DEBUG") &&
+        (!eventFilter || r.event === eventFilter) &&
+        (!f || `${r.ts} ${r.event} ${r.details}`.toLowerCase().includes(f)));
+      return h("div", null,
+        h("div", {className: "insp-toolbar insp-toolbar-wrap"},
+          h("label", {className: "insp-check", title: "Show only USER_DEBUG lines (your System.debug output)"},
+            h("input", {
+              type: "checkbox",
+              checked: debugOnly,
+              onChange: e => setDebugOnly(e.target.checked)
+            }),
+            h("span", null, "Debug Only")
+          ),
+          h("label", {className: "insp-field"},
+            h("span", null, "Event"),
+            h("select", {
+              value: eventFilter,
+              onChange: e => setEventFilter(e.target.value)
+            },
+              h("option", {value: ""}, `All events (${events.length})`),
+              events.map(ev =>
+                h("option", {key: ev, value: ev},
+                  `${ev} (${allRows.filter(r => r.event === ev).length})`)
+              )
+            )
+          ),
+          h("label", {className: "insp-field insp-field-grow"},
+            h("span", null, "Filter"),
+            h("input", {
+              value: logFilter,
+              placeholder: "Click here to filter the log",
+              onChange: e => setLogFilter(e.target.value)
+            })
+          ),
+          h("span", {className: "insp-meta"},
+            `${shown.length}/${allRows.length} lines`)
+        ),
+        h("div", {className: "insp-table-wrap insp-log-table"},
+          h("table", {className: "insp-table"},
+            h("thead", null,
+              h("tr", null,
+                h("th", null, "Timestamp"),
+                h("th", null, "Event"),
+                h("th", null, "Details")
+              )
+            ),
+            h("tbody", null,
+              shown.slice(0, 2000).map((r, i) =>
+                h("tr", {
+                  key: i,
+                  className: r.event === "USER_DEBUG" ? "insp-row-hl" : ""
+                },
+                  h("td", {className: "insp-nowrap"}, r.ts),
+                  h("td", {className: "insp-nowrap"}, r.event),
+                  h("td", {className: "insp-wrap", title: r.details}, r.details)
+                )
+              )
+            )
+          ),
+          shown.length > 2000 &&
+            h("div", {className: "insp-more"}, `Showing 2000 of ${shown.length} lines — narrow the filter`)
+        ),
+        h("details", {className: "insp-details"},
+          h("summary", null, "Raw log"),
+          h("pre", {className: "insp-log"}, log)
+        )
+      );
+    })()
+  );
+}
+
+// ─── Logs tab: trace flags + debug log search + AI analysis ──
+function ffDatetimeLocal(d) {
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
+    `T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function ffFmtTs(x) {
+  if (!x) return "—";
+  const d = new Date(x);
+  return isNaN(d.getTime()) ? String(x) : d.toLocaleString();
+}
+
+async function logsToolingQuery(soql) {
+  const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
+    encodeURIComponent(soql), {useCache: false});
+  return (res && res.records) || [];
+}
+
+async function logsListDebugLevels() {
+  return logsToolingQuery(
+    "SELECT Id, DeveloperName, MasterLabel FROM DebugLevel ORDER BY MasterLabel LIMIT 200");
+}
+
+async function logsLookupEntities(type, term) {
+  const t = ffSoqlEscape(term.trim());
+  if (!t) return [];
+  if (type === "User") {
+    const res = await runSoql(
+      `SELECT Id, Name, Username FROM User ` +
+      `WHERE Name LIKE '%${t}%' OR Username LIKE '%${t}%' ORDER BY Name LIMIT 20`, 20);
+    return res.records.map(r => ({id: r.Id, name: r.Name, sub: r.Username}));
+  }
+  const rows = await logsToolingQuery(
+    `SELECT Id, Name, NamespacePrefix FROM ApexClass WHERE Name LIKE '%${t}%' ` +
+    `ORDER BY Name LIMIT 20`);
+  return rows.map(r => ({
+    id: r.Id,
+    name: r.NamespacePrefix ? `${r.NamespacePrefix}.${r.Name}` : r.Name,
+    sub: "Apex class"
+  }));
+}
+
+async function logsListTraceFlags(entityId) {
+  return logsToolingQuery(
+    `SELECT Id, LogType, DebugLevelId, StartDate, ExpirationDate FROM TraceFlag ` +
+    `WHERE TracedEntityId = '${entityId}' ORDER BY StartDate DESC LIMIT 50`);
+}
+
+async function logsCreateTraceFlag({entityId, levelId, startMs, endMs, logType}) {
+  const created = await sfConn.rest(`/services/data/v${apiVersion}/tooling/sobjects/TraceFlag`, {
+    method: "POST",
+    useCache: false,
+    body: {
+      TracedEntityId: entityId,
+      LogType: logType,
+      DebugLevelId: levelId,
+      StartDate: new Date(startMs).toISOString(),
+      ExpirationDate: new Date(endMs).toISOString()
+    }
+  });
+  const id = created && (created.id || created.Id);
+  if (!id) throw new Error("Salesforce did not return a TraceFlag Id");
+  // Read it back — never report a success we did not confirm.
+  const rec = await sfConn.rest(
+    `/services/data/v${apiVersion}/tooling/sobjects/TraceFlag/${encodeURIComponent(id)}`,
+    {useCache: false});
+  if (!rec || rec.Id !== id) throw new Error(`TraceFlag ${id} was created but could not be read back`);
+  return rec;
+}
+
+async function logsDeleteTraceFlag(id) {
+  await sfConn.rest(`/services/data/v${apiVersion}/tooling/sobjects/TraceFlag/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    useCache: false
+  });
+}
+
+// ApexLog has NO Name column — Id is the only label (the old INVALID_FIELD
+// bug). LogUser.Name is Setup's "User" column; Request/Application/Operation/
+// Status match Setup → Debug Logs. Pages with keyset on StartTime, not OFFSET.
+const LOGS_PAGE = 30;
+const LOGS_MAX = 300;
+const LOGS_SEARCH_CAP = 60;
+
+async function logsQueryApexLogs({startMs, endMs, userId, limitN, beforeMs}) {
+  const n = limitN || LOGS_PAGE;
+  const where = `StartTime >= ${new Date(startMs).toISOString()} ` +
+    `AND StartTime <= ${new Date(endMs).toISOString()}` +
+    (beforeMs != null ? ` AND StartTime < ${new Date(beforeMs).toISOString()}` : "") +
+    (userId ? ` AND LogUserId = '${userId}'` : "");
+  const full = `SELECT Id, LogUserId, LogUser.Name, Request, Application, Operation, ` +
+    `Status, DurationMilliseconds, LogLength, StartTime FROM ApexLog ` +
+    `WHERE ${where} ORDER BY StartTime DESC LIMIT ${n}`;
+  try {
+    const res = await runSoql(full, n);
+    return {records: res.records, warned: null};
+  } catch (e) {
+    if (!/INVALID_FIELD|No such column/i.test(String(e.message || e))) throw e;
+    // Defensive: never leave the tab dead over one unavailable field.
+    const minimal = `SELECT Id, LogUserId, StartTime, Status, Operation FROM ApexLog ` +
+      `WHERE ${where} ORDER BY StartTime DESC LIMIT ${n}`;
+    const res = await runSoql(minimal, n);
+    return {records: res.records,
+      warned: "Some log columns are unavailable in this org — showing the basic ones."};
+  }
+}
+
+async function logsDeleteApexLog(id) {
+  const enc = encodeURIComponent(id);
+  const bases = [
+    `/services/data/v${apiVersion}/tooling/sobjects/ApexLog/`,
+    `/services/data/v${apiVersion}/sobjects/ApexLog/`
+  ];
+  let lastErr = null;
+  for (const base of bases) {
+    try {
+      await sfConn.rest(base + enc, {method: "DELETE", useCache: false});
+      return;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("Could not delete the log");
+}
+
+async function logsFetchBody(id) {
+  const body = await sfConn.rest(
+    `/services/data/v${apiVersion}/sobjects/ApexLog/${encodeURIComponent(id)}/Body`,
+    {responseType: "text", useCache: false});
+  return String(body || "");
+}
+
+// One shared call to the Options-configured LLM (Quick Analysis + chat).
+async function logsAskLlm(systemPrompt, userText) {
+  const config = getSavedConfig();
+  if (!config || !hasValidConfig()) throw new Error("NO_LLM_CONFIG");
+  const provider = getLLMProvider(config.provider);
+  const messages = [
+    {role: "system", content: systemPrompt},
+    {role: "user", content: userText}
+  ];
+  const raw = config.baseUrl
+    ? await provider.sendMessage(messages, config.apiKey, config.model, null, config.baseUrl)
+    : await provider.sendMessage(messages, config.apiKey, config.model, null);
+  const text = String(raw || "").trim();
+  if (!text) throw new Error("The AI returned an empty reply");
+  return text;
+}
+
+const LOGS_ANALYZE_SYSTEM =
+  "You are a senior Salesforce developer reviewing ONE Salesforce debug log for a beginner. " +
+  "Reply as plain text with exactly these short sections: WHAT HAPPENED, ERRORS, " +
+  "DEBUG HIGHLIGHTS, NEXT STEP. Keep it under 200 words. Quote exact error messages and " +
+  "class, trigger or method names from the log. Never invent details that are not in the log.";
+
+const LOGS_CHAT_SYSTEM =
+  "You are a senior Salesforce developer answering a question about ONE Salesforce debug " +
+  "log supplied with the question. Plain language, brief. Quote exact lines, errors or " +
+  "class names from the log when useful. If the answer is not in the log, say so honestly.";
+
+function logsUserName(lg) {
+  const lu = lg && lg.LogUser;
+  if (lu && typeof lu === "object") return lu.Name || "";
+  return (lg && lg.LogUserId) || "";
+}
+
+// Header the AI needs so it knows what it is looking at.
+function logsExcerpt(lg, body, maxChars) {
+  const head = [
+    `Log Id: ${lg.Id}`,
+    `User: ${logsUserName(lg) || "unknown"}`,
+    `Request: ${lg.Request || "-"} | Application: ${lg.Application || "-"} | Operation: ${lg.Operation || "-"}`,
+    `Status: ${lg.Status || "-"} | Duration: ${lg.DurationMilliseconds != null ? lg.DurationMilliseconds + " ms" : "-"} | Size: ${lg.LogLength != null ? lg.LogLength + " bytes" : "-"}`,
+    `Started: ${ffFmtTs(lg.StartTime)}`
+  ].join("\n");
+  return `${head}\n\n${String(body || "").slice(0, maxChars || 12000)}`;
+}
+
+// First executed unit from the body: "CODE_UNIT_STARTED|1|PaymentGateway:run".
+function logsHeadUnit(body) {
+  const s = String(body || "");
+  const m = /CODE_UNIT_STARTED\|[^\n]*?\|([^|\n]+)/.exec(s);
+  if (m && m[1].trim()) return m[1].trim();
+  if (/\[EXECUTE\]|Execute Anonymous/i.test(s)) return "Execute Anonymous";
+  return null;
+}
+
+// Setup-style status → chip colour.
+function logsStatusKind(status) {
+  const s = String(status || "").toLowerCase();
+  if (s.startsWith("suc")) return "ok";
+  if (s.startsWith("fail")) return "fail";
+  if (s.startsWith("ab")) return "warn";
+  return "other";
+}
+
+function LogsTab() {
+  const [entityType, setEntityType] = ffUseSession("logs", "entityType", "User");
+  const [lookupText, setLookupText] = React.useState("");
+  const [lookupRes, setLookupRes] = React.useState([]);
+  const [lookupBusy, setLookupBusy] = React.useState(false);
+  const [lookupErr, setLookupErr] = React.useState(null);
+  const [entity, setEntity] = ffUseSession("logs", "entity", null);
+  const [start, setStart] = ffUseSession("logs", "start", () => ffDatetimeLocal(new Date(Date.now() - 30 * 60000)));
+  const [end, setEnd] = ffUseSession("logs", "end", () => ffDatetimeLocal(new Date(Date.now() + 60 * 60000)));
+  const [levels, setLevels] = React.useState([]);
+  const [levelId, setLevelId] = ffUseSession("logs", "levelId", "");
+  const [flags, setFlags] = React.useState([]);
+  const [formErr, setFormErr] = React.useState(null);
+  const [formMsg, setFormMsg] = React.useState(null);
+  const [creating, setCreating] = React.useState(false);
+  const [flagBusy, setFlagBusy] = React.useState(null);
+
+  const [logs, setLogs] = ffUseSession("logs", "logs", []);
+  const [logsErr, setLogsErr] = React.useState(null);
+  const [logsNote, setLogsNote] = ffUseSession("logs", "logsNote", null);
+  const [logsBusy, setLogsBusy] = React.useState(false);
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  const [hasMore, setHasMore] = ffUseSession("logs", "hasMore", false);
+  const [search, setSearch] = ffUseSession("logs", "search", "");
+  const [searchBusy, setSearchBusy] = React.useState(false);
+  const [matched, setMatched] = ffUseSession("logs", "matched", null);
+  const [bodies, setBodies] = React.useState({});
+  const [openLog, setOpenLog] = ffUseSession("logs", "openLog", null);
+  const [logFilter, setLogFilter] = ffUseSession("logs", "logFilter", "");
+  const [debugOnly, setDebugOnly] = ffUseSession("logs", "debugOnly", false);
+  const [selId, setSelId] = ffUseSession("logs", "selId", null);
+  const [analyses, setAnalyses] = ffUseSession("logs", "analyses", {});
+  const [analyzingId, setAnalyzingId] = React.useState(null);
+  const [chats, setChats] = ffUseSession("logs", "chats", {});
+  const [chatInput, setChatInput] = ffUseSession("logs", "chatInput", "");
+  const [chatBusy, setChatBusy] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const [delBusy, setDelBusy] = React.useState(null);
+  const [delAllOpen, setDelAllOpen] = React.useState(false);
+  const [delAllText, setDelAllText] = React.useState("");
+  const [delAllBusy, setDelAllBusy] = React.useState(false);
+  const [delProgress, setDelProgress] = React.useState(null);
+  const [delResult, setDelResult] = React.useState(null);
+  const [win, setWin] = ffUseSession("logs", "win", null);
+  const chatRef = React.useRef(null);
+  const aiRef = React.useRef(null);
+
+  React.useEffect(() => {
+    (async () => {
+      try {
+        let rows = await logsListDebugLevels();
+        if (!rows.length) {
+          await usersEnsureDebugLevel();
+          rows = await logsListDebugLevels();
+        }
+        setLevels(rows);
+        const prefer = rows.find(r => r.DeveloperName === "FF_UserDebug") || rows[0];
+        // Keep a restored selection (e.g. a user-created debug level).
+        if (prefer) setLevelId(prev => prev || prefer.Id);
+      } catch (e) {
+        setFormErr(`Could not load Debug Levels: ${e.message}`);
+      }
+    })();
+  }, []);
+
+  React.useEffect(() => {
+    const term = lookupText.trim();
+    if (!term || entity) { setLookupRes([]); setLookupErr(null); return; }
+    let cancelled = false;
+    setLookupBusy(true);
+    const timer = setTimeout(() => {
+      logsLookupEntities(entityType, term)
+        .then(rows => {
+          if (cancelled) return;
+          setLookupRes(rows);
+          setLookupErr(rows.length ? null : `No ${entityType === "User" ? "user" : "Apex class"} matches "${term}"`);
+        })
+        .catch(e => { if (!cancelled) setLookupErr(e.message); })
+        .finally(() => { if (!cancelled) setLookupBusy(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [lookupText, entityType, entity]);
+
+  const loadFlags = async (id) => {
+    if (!id) { setFlags([]); return; }
+    try { setFlags(await logsListTraceFlags(id)); }
+    catch (e) { setFlags([]); }
+  };
+
+  const entityInitRef = React.useRef(true);
+  React.useEffect(() => {
+    // First mount after a reopen keeps the restored win/logs; flags are live
+    // server data either way, so always reload them.
+    if (entityInitRef.current) {
+      entityInitRef.current = false;
+      if (entity) loadFlags(entity.id);
+      return;
+    }
+    setFlags([]);
+    setWin(null);
+    if (entity) loadFlags(entity.id);
+  }, [entity]);
+
+  const levelLabel = (id) => {
+    const l = levels.find(x => x.Id === id);
+    return l ? (l.MasterLabel || l.DeveloperName) : (id || "—");
+  };
+
+  const pickEntity = (row) => {
+    setEntity(row);
+    setLookupText("");
+    setLookupRes([]);
+    setLookupErr(null);
+    setFormMsg(null);
+    setFormErr(null);
+  };
+
+  const useMe = async () => {
+    setFormErr(null);
+    setFormMsg(null);
+    try {
+      const id = await appTabsResolveCurrentUserId();
+      const res = await runSoql(`SELECT Id, Name, Username FROM User WHERE Id = '${id}' LIMIT 1`, 1);
+      const r = res.records[0];
+      setEntityType("User");
+      setEntity({id, name: r ? r.Name : id, sub: r ? r.Username : ""});
+      setLookupText("");
+      setLookupErr(null);
+    } catch (e) {
+      setFormErr(e.message);
+    }
+  };
+
+  const createFlag = async () => {
+    setFormErr(null);
+    setFormMsg(null);
+    if (!entity) { setFormErr("Pick an entity first — type in the name lookup or use \"Use me\"."); return; }
+    if (!levelId) { setFormErr("Pick a Debug Level."); return; }
+    const s = Date.parse(start);
+    const e = Date.parse(end);
+    if (isNaN(s) || isNaN(e)) { setFormErr("Start and End must be valid date/times."); return; }
+    if (e <= s) { setFormErr("End must be after Start."); return; }
+    const now = Date.now();
+    const sClamped = Math.min(s, now);
+    if (e <= sClamped) { setFormErr("End must be in the future."); return; }
+    const logType = entityType === "User" ? "USER_DEBUG" : "CLASS_TRACING";
+    setCreating(true);
+    try {
+      // Salesforce rejects overlapping trace flags with a raw
+      // FIELD_INTEGRITY_EXCEPTION — check first and explain it kindly.
+      const existing = await logsListTraceFlags(entity.id);
+      const overlap = existing.find(f => {
+        if (f.LogType !== logType) return false;
+        const fs = Date.parse(f.StartDate);
+        const fe = Date.parse(f.ExpirationDate);
+        return !isNaN(fs) && !isNaN(fe) && fe > sClamped && fs < e;
+      });
+      if (overlap) {
+        setFormErr(`An overlapping ${logType} trace flag already exists for ${entity.name} ` +
+          `(it expires ${ffFmtTs(overlap.ExpirationDate)}). Salesforce allows only one per ` +
+          `time window — delete that flag in the list below first, or just use it: logs are ` +
+          `already being captured.`);
+        return;
+      }
+      const rec = await logsCreateTraceFlag({
+        entityId: entity.id,
+        levelId,
+        startMs: sClamped,
+        endMs: e,
+        logType
+      });
+      setFormMsg(`Trace flag ${rec.Id} created for ${entity.name} — logging until ${ffFmtTs(new Date(e).toISOString())}.`);
+      await loadFlags(entity.id);
+    } catch (err) {
+      const msg = String(err.message || err);
+      setFormErr(/FIELD_INTEGRITY|overlap|already being traced/i.test(msg)
+        ? "That time window overlaps an existing trace flag for this entity. " +
+          "Delete the old flag in the list below first, or use the existing one."
+        : msg);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const deleteFlag = async (id) => {
+    setFlagBusy(id);
+    setFormErr(null);
+    setFormMsg(null);
+    try {
+      await logsDeleteTraceFlag(id);
+      setFormMsg(`Trace flag ${id} deleted.`);
+      if (entity) await loadFlags(entity.id);
+    } catch (e) {
+      setFormErr(e.message);
+    } finally {
+      setFlagBusy(null);
+    }
+  };
+
+  const windowRange = () => {
+    const s = Date.parse(start);
+    const e = Date.parse(end);
+    if (isNaN(s) || isNaN(e)) throw new Error("Start and End must be valid date/times.");
+    if (e <= s) throw new Error("End must be after Start.");
+    return {startMs: s, endMs: e};
+  };
+
+  const userIdFilter = () => (entityType === "User" && entity ? entity.id : null);
+
+  const startOfTodayMs = () => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+
+  // Effective window for the log list. With no entity selected it always
+  // covers today ("Load logs without a username → all of today's logs");
+  // the End is never allowed to be in the past so old defaults still work.
+  const logWindow = () => {
+    const {startMs, endMs} = windowRange();
+    const today = startOfTodayMs();
+    const s = entity ? startMs : Math.min(startMs, today);
+    return {startMs: s, endMs: Math.max(endMs, Date.now())};
+  };
+
+  const loadLogs = async () => {
+    setLogsErr(null);
+    setLogsNote(null);
+    setMatched(null);
+    setSearch("");
+    setAnalyses({});
+    setChats({});
+    setSelId(null);
+    setOpenLog(null);
+    setDelResult(null);
+    setDelProgress(null);
+    setLogsBusy(true);
+    setHasMore(false);
+    try {
+      const first = logWindow();
+      const userId = userIdFilter();
+      const today = startOfTodayMs();
+      const now = Date.now();
+      // Fallback ladder: requested window → today (+same user) → today (all users).
+      const attempts = [{startMs: first.startMs, endMs: first.endMs, userId, note: null}];
+      if (first.startMs > today || first.endMs < now) {
+        attempts.push({
+          startMs: today, endMs: Math.max(first.endMs, now), userId,
+          note: "No logs in your selected window — showing today's logs instead."
+        });
+      }
+      if (userId) {
+        attempts.push({
+          startMs: today, endMs: Math.max(first.endMs, now), userId: null,
+          note: "No logs for that user today — showing today's logs for all users instead."
+        });
+      }
+
+      let page = null;
+      let used = null;
+      for (const a of attempts) {
+        page = await logsQueryApexLogs({
+          startMs: a.startMs, endMs: a.endMs, userId: a.userId, limitN: LOGS_PAGE
+        });
+        if (page.records.length) { used = a; break; }
+      }
+      if (!used) used = attempts[attempts.length - 1];
+
+      setWin({startMs: used.startMs, endMs: used.endMs, userId: used.userId});
+      setLogs(page.records);
+      setHasMore(page.records.length >= LOGS_PAGE);
+      const notes = [used.note, page.warned].filter(Boolean);
+      if (notes.length) setLogsNote(notes.join(" "));
+      if (!page.records.length) {
+        setLogsNote("No debug logs found (the window was widened to today before giving up). " +
+          "Check that a trace flag is active above, reproduce the problem, wait a few seconds, " +
+          "then Load logs again.");
+      }
+    } catch (err) {
+      setLogs([]);
+      setLogsErr(err.message);
+    } finally {
+      setLogsBusy(false);
+    }
+  };
+
+  // Keyset paging: StartTime < oldest loaded row, dedupe by Id.
+  // Pages inside the SAME window the list was loaded with (`win`).
+  const loadMore = async () => {
+    if (!logs.length) return;
+    setLoadingMore(true);
+    setLogsErr(null);
+    try {
+      const w = win || logWindow();
+      const oldest = logs.reduce((min, lg) => {
+        const t = Date.parse(lg.StartTime);
+        return isNaN(t) ? min : Math.min(min, t);
+      }, Infinity);
+      if (!isFinite(oldest)) throw new Error("Could not read the last log's timestamp");
+      const page = await logsQueryApexLogs({
+        startMs: w.startMs, endMs: w.endMs, userId: w.userId, limitN: LOGS_PAGE, beforeMs: oldest
+      });
+      const seen = new Set(logs.map(l => l.Id));
+      const fresh = page.records.filter(r => !seen.has(r.Id));
+      const total = logs.length + fresh.length;
+      setLogs(prev => [...prev, ...fresh]);
+      if (!fresh.length && page.records.length) {
+        // Same StartTime values repeated — keyset cannot advance further.
+        setHasMore(false);
+        setLogsNote("No newer page could be read — narrow the time window to see more.");
+        return;
+      }
+      setHasMore(page.records.length >= LOGS_PAGE && total < LOGS_MAX);
+      if (total >= LOGS_MAX) {
+        setLogsNote(`Stopped at ${LOGS_MAX} logs (page cap) — narrow the time window to see more.`);
+      } else if (!page.records.length) {
+        setLogsNote("No more logs in this window.");
+      }
+    } catch (err) {
+      setLogsErr(err.message);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const ensureBody = async (lg) => {
+    if (bodies[lg.Id] != null) return bodies[lg.Id];
+    const text = await logsFetchBody(lg.Id);
+    setBodies(prev => ({...prev, [lg.Id]: text}));
+    return text;
+  };
+
+  const searchLogs = async () => {
+    const term = search.trim();
+    if (!term) { setMatched(null); return; }
+    setSearchBusy(true);
+    setLogsErr(null);
+    try {
+      const list = logs.slice(0, LOGS_SEARCH_CAP);
+      const next = {...bodies};
+      for (let i = 0; i < list.length; i += 4) {
+        const chunk = list.slice(i, i + 4);
+        await Promise.all(chunk.map(async lg => {
+          if (next[lg.Id] != null) return;
+          try { next[lg.Id] = await logsFetchBody(lg.Id); }
+          catch (e) { next[lg.Id] = ""; }
+        }));
+        setBodies({...next});
+      }
+      setBodies(next);
+      const low = term.toLowerCase();
+      setMatched(list.filter(lg => String(next[lg.Id] || "").toLowerCase().includes(low)).map(lg => lg.Id));
+    } catch (err) {
+      setLogsErr(err.message);
+    } finally {
+      setSearchBusy(false);
+    }
+  };
+
+  const viewLog = async (lg) => {
+    try {
+      const text = await ensureBody(lg);
+      setOpenLog({id: lg.Id, name: lg.Id, text: String(text || "")});
+      setLogFilter("");
+      setDebugOnly(false);
+    } catch (e) {
+      setLogsErr(`Could not fetch the log body: ${e.message}`);
+    }
+  };
+
+  const downloadLog = async (lg) => {
+    try {
+      const text = await ensureBody(lg);
+      downloadText(`log-${lg.Id}.log`, text, "text/plain");
+    } catch (e) {
+      setLogsErr(`Could not fetch the log body: ${e.message}`);
+    }
+  };
+
+  // ⚡ Quick Analysis — one plain-English verdict, cached per log id.
+  // Clicking Analyze on an already-analyzed log NEVER calls the AI again:
+  // it just selects the log and shows the saved result.
+  const analyzeLog = async (lg, force) => {
+    setSelId(lg.Id);
+    const prev = analyses[lg.Id];
+    if (prev && prev.text && !force) {
+      if (aiRef.current && aiRef.current.scrollIntoView) {
+        aiRef.current.scrollIntoView({block: "nearest", behavior: "smooth"});
+      }
+      return;
+    }
+    setAnalyzingId(lg.Id);
+    setAnalyses(p => ({...p, [lg.Id]: {pending: true}}));
+    try {
+      const body = await ensureBody(lg);
+      const text = await logsAskLlm(LOGS_ANALYZE_SYSTEM, logsExcerpt(lg, body, 12000));
+      setAnalyses(p => ({...p, [lg.Id]: {text}}));
+    } catch (e) {
+      setAnalyses(p => ({...p, [lg.Id]: {
+        error: e.message === "NO_LLM_CONFIG" ? "NO_LLM_CONFIG" : e.message}}));
+    } finally {
+      setAnalyzingId(null);
+    }
+  };
+
+  // 💬 Ask AI About This Log — per-log chat history.
+  const askAboutLog = async (lg, question) => {
+    const q = String(question || "").trim();
+    if (!q || chatBusy) return;
+    const hist = chats[lg.Id] || [];
+    setChats(p => ({...p, [lg.Id]: [...(p[lg.Id] || []), {role: "user", text: q}]}));
+    setChatInput("");
+    setChatBusy(true);
+    try {
+      const body = await ensureBody(lg);
+      const transcript = hist.slice(-6)
+        .map(m => `${m.role === "user" ? "Question" : "Assistant"}: ${m.text}`).join("\n");
+      const prompt = `DEBUG LOG:\n${logsExcerpt(lg, body, 12000)}\n\n` +
+        (transcript ? `EARLIER IN THIS CONVERSATION:\n${transcript}\n\n` : "") +
+        `QUESTION: ${q}`;
+      const answer = await logsAskLlm(LOGS_CHAT_SYSTEM, prompt);
+      setChats(p => ({...p, [lg.Id]: [...(p[lg.Id] || []), {role: "ai", text: answer}]}));
+    } catch (e) {
+      setChats(p => ({...p, [lg.Id]: [...(p[lg.Id] || []),
+        {role: "err", text: e.message === "NO_LLM_CONFIG"
+          ? "No AI provider configured — open Options to set one up."
+          : e.message}]}));
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const deleteLog = async (lg) => {
+    setDelBusy(lg.Id);
+    setLogsErr(null);
+    setDelResult(null);
+    try {
+      await logsDeleteApexLog(lg.Id);
+      setLogs(prev => prev.filter(l => l.Id !== lg.Id));
+      if (selId === lg.Id) setSelId(null);
+      if (openLog && openLog.id === lg.Id) setOpenLog(null);
+      setDelResult({ok: true, text: `Log ${lg.Id} deleted.`});
+    } catch (e) {
+      setDelResult({ok: false, text: `Could not delete ${lg.Id}: ${e.message}`});
+    } finally {
+      setDelBusy(null);
+    }
+  };
+
+  const deleteAllLogs = async () => {
+    if (delAllText.trim().toUpperCase() !== "DELETE" || !logs.length) return;
+    const targets = [...logs];
+    setDelAllBusy(true);
+    setDelResult(null);
+    setDelProgress(`0/${targets.length}`);
+    let ok = 0;
+    const failed = [];
+    let done = 0;
+    for (let i = 0; i < targets.length; i += 4) {
+      const chunk = targets.slice(i, i + 4);
+      await Promise.all(chunk.map(async lg => {
+        try { await logsDeleteApexLog(lg.Id); ok++; }
+        catch (e) { failed.push(lg.Id); }
+        finally {
+          done++;
+          setDelProgress(`${done}/${targets.length}`);
+        }
+      }));
+    }
+    // Only rows that really failed are kept — no false green.
+    setLogs(prev => prev.filter(l => failed.includes(l.Id)));
+    setSelId(null);
+    setOpenLog(null);
+    setMatched(null);
+    setAnalyses({});
+    setChats({});
+    setDelAllBusy(false);
+    setDelAllOpen(false);
+    setDelAllText("");
+    setDelProgress(null);
+    setDelResult(failed.length
+      ? {ok: false, text: `Deleted ${ok} of ${targets.length} log(s). Failed: ` +
+          `${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}.`}
+      : {ok: true, text: `Deleted ${ok} log(s).`});
+  };
+
+  const copyAnalysis = async () => {
+    try {
+      const text = selAnalysis && selAnalysis.text ? selAnalysis.text : "";
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (e) { /* clipboard unavailable */ }
+  };
+
+  const openSettings = () => {
+    try {
+      chrome.runtime.sendMessage({message: "openOptions", host: ""});
+    } catch (e) { /* extension context only */ }
+  };
+
+  const isUser = entityType === "User";
+  const selected = logs.find(l => l.Id === selId) || null;
+  const matchedSet = matched ? new Set(matched) : null;
+  const matchedCount = matched ? matched.filter(id => logs.some(l => l.Id === id)).length : 0;
+  const selAnalysis = selected ? analyses[selected.Id] : null;
+  const selChat = selected ? (chats[selected.Id] || []) : [];
+
+  return h("div", null,
+    h("div", {className: "insp-kv"},
+      h("div", {className: "insp-kv-title"}, "Create / manage trace flags"),
+      h("div", {className: "insp-toolbar insp-toolbar-wrap"},
+        h("label", {className: "insp-field"},
+          h("span", null, "Entity type"),
+          h("select", {
+            value: entityType,
+            onChange: e => {
+              setEntityType(e.target.value);
+              setEntity(null);
+              setLookupText("");
+              setLookupRes([]);
+              setLookupErr(null);
+            }
+          },
+            h("option", {value: "User"}, "User"),
+            h("option", {value: "ApexClass"}, "Apex class")
+          )
+        ),
+        h("label", {className: "insp-field insp-field-grow"},
+          h("span", null, isUser ? "User name" : "Apex class name"),
+          h("input", {
+            value: entity ? `${entity.name}${entity.sub ? " — " + entity.sub : ""}` : lookupText,
+            placeholder: isUser ? "Type a name or username…" : "Type a class name…",
+            onChange: e => {
+              setEntity(null);
+              setLookupText(e.target.value);
+              setLookupRes([]);
+              setLookupErr(null);
+            }
+          })
+        ),
+        isUser && h("button", {
+          className: "btn btn-secondary btn-sm",
+          title: "Trace the currently logged-in user",
+          onClick: useMe
+        }, "Use me"),
+        h("label", {className: "insp-field"},
+          h("span", null, "Start"),
+          h("input", {type: "datetime-local", value: start, onChange: e => setStart(e.target.value)})
+        ),
+        h("label", {className: "insp-field"},
+          h("span", null, "End"),
+          h("input", {type: "datetime-local", value: end, onChange: e => setEnd(e.target.value)})
+        ),
+        h("label", {className: "insp-field"},
+          h("span", null, "Debug level"),
+          h("select", {value: levelId, onChange: e => setLevelId(e.target.value)},
+            levels.length
+              ? levels.map(l =>
+                  h("option", {key: l.Id, value: l.Id}, l.MasterLabel || l.DeveloperName))
+              : h("option", {value: ""}, "Loading…")
+          )
+        ),
+        h("button", {
+          className: "btn btn-primary btn-sm",
+          disabled: creating || !entity,
+          title: entityType === "User"
+            ? "Create a USER_DEBUG trace flag for this user"
+            : "Create a CLASS_TRACING trace flag for this class",
+          onClick: createFlag
+        }, creating ? "Creating…" : "Create trace flag")
+      ),
+      lookupRes.length > 0 && h("div", {className: "insp-lookup-list"},
+        lookupRes.map(r =>
+          h("button", {key: r.id, className: "insp-lookup-item", onClick: () => pickEntity(r)},
+            h("span", {className: "insp-lookup-name"}, r.name),
+            r.sub && h("span", {className: "insp-lookup-sub"}, r.sub)
+          )
+        )
+      ),
+      lookupBusy && h("div", {className: "insp-meta"}, "Searching…"),
+      lookupErr && h("div", {className: "insp-warn"}, lookupErr),
+      formErr && h("div", {className: "insp-error"}, formErr),
+      formMsg && h("div", {className: "insp-ok"}, formMsg),
+      entity && h("div", null,
+        h("div", {className: "insp-meta"},
+          flags.length
+            ? `${flags.length} trace flag(s) for ${entity.name}`
+            : `No trace flags for ${entity.name}`),
+        flags.length > 0 && h("div", {className: "insp-table-wrap"},
+          h("table", {className: "insp-table"},
+            h("thead", null,
+              h("tr", null,
+                ["Log type", "Level", "Start", "Expires", ""].map((c, i) =>
+                  h("th", {key: i}, c))
+              )
+            ),
+            h("tbody", null,
+              flags.map(f =>
+                h("tr", {key: f.Id},
+                  h("td", null, f.LogType),
+                  h("td", null, levelLabel(f.DebugLevelId)),
+                  h("td", {className: "insp-nowrap"}, ffFmtTs(f.StartDate)),
+                  h("td", {className: "insp-nowrap"}, ffFmtTs(f.ExpirationDate)),
+                  h("td", null, h("button", {
+                    className: "btn btn-secondary btn-sm",
+                    disabled: flagBusy === f.Id,
+                    onClick: () => deleteFlag(f.Id)
+                  }, flagBusy === f.Id ? "Deleting…" : "Delete"))
+                )
+              )
+            )
+          )
+        )
+      )
+    ),
+    h("div", {className: "logs-panel"},
+      h("div", {className: "logs-head"},
+        h("div", {className: "logs-title"},
+          h("strong", null, "Debug Logs"),
+          h("span", {className: "insp-meta"},
+            logs.length
+              ? ` (${logs.length} loaded${hasMore ? "+" : ""}` +
+                `${matched ? ` · ${matchedCount} matched` : ""})`
+              : "")
+        ),
+        h("input", {
+          className: "logs-search",
+          value: search,
+          placeholder: "Search string across all loaded debug logs…",
+          onChange: e => {
+            setSearch(e.target.value);
+            if (matched) setMatched(null);
+          },
+          onKeyDown: e => { if (e.key === "Enter") searchLogs(); }
+        }),
+        h("button", {
+          className: "btn btn-secondary btn-sm",
+          disabled: searchBusy || !logs.length || !search.trim(),
+          onClick: searchLogs
+        }, searchBusy ? "Searching…" : "Search"),
+        h("button", {
+          className: "btn btn-primary btn-sm",
+          disabled: logsBusy || loadingMore,
+          onClick: loadLogs
+        }, logsBusy ? "Loading…" : "Load logs"),
+        h("button", {
+          className: "btn btn-danger btn-sm",
+          disabled: !logs.length || delAllBusy,
+          onClick: () => setDelAllOpen(!delAllOpen)
+        }, delAllOpen ? "Cancel" : "Delete All Logs")
+      ),
+      delAllOpen && h("div", {className: "logs-confirm"},
+        h("span", null, `Type DELETE to remove all ${logs.length} loaded log(s) from this org:`),
+        h("input", {
+          value: delAllText,
+          placeholder: "DELETE",
+          onChange: e => setDelAllText(e.target.value),
+          onKeyDown: e => { if (e.key === "Enter") deleteAllLogs(); }
+        }),
+        h("button", {
+          className: "btn btn-primary btn-sm",
+          disabled: delAllText.trim().toUpperCase() !== "DELETE" || delAllBusy,
+          onClick: deleteAllLogs
+        }, delAllBusy ? "Deleting…" : "Delete")
+      ),
+      delAllBusy && delProgress && h("div", {className: "insp-meta"}, `Deleting… ${delProgress}`),
+      logsNote && h("div", {className: "insp-warn"}, logsNote),
+      logsErr && h("div", {className: "insp-error"}, logsErr),
+      delResult && h("div", {className: delResult.ok ? "insp-ok" : "insp-error"}, delResult.text),
+      searchBusy && h("div", {className: "insp-meta"},
+        `Fetching log bodies… (up to ${LOGS_SEARCH_CAP} logs)`),
+      logsBusy && h("div", {className: "insp-meta"}, "Querying ApexLog…"),
+      !logsBusy && !logs.length && !logsErr && !logsNote &&
+        h("div", {className: "insp-empty"},
+          "No logs loaded yet — set a time window above and click Load logs."),
+      logs.length > 0 && h("div", {className: "logs-grid"},
+        h("div", {className: "logs-list"},
+          logs.map(lg => {
+            const hit = matchedSet ? matchedSet.has(lg.Id) : null;
+            const dim = matchedSet && !hit;
+            const kind = logsStatusKind(lg.Status);
+            const unit = bodies[lg.Id] != null ? logsHeadUnit(bodies[lg.Id]) : null;
+            const a = analyses[lg.Id];
+            return h("div", {
+              key: lg.Id,
+              className: `logs-card${selId === lg.Id ? " active" : ""}${dim ? " dim" : ""}`,
+              onClick: () => setSelId(lg.Id)
+            },
+              h("div", {className: "logs-card-hd"},
+                h("span", {className: "logs-card-id"}, `Log · ${String(lg.Id).slice(-8)}`),
+                h("span", {className: "logs-card-time"}, ffFmtTs(lg.StartTime)),
+                a && a.text && h("span", {className: "logs-card-ai"}, "AI ✓"),
+                hit && h("span", {className: "insp-badge-match"}, "MATCH")
+              ),
+              h("div", {className: "logs-card-sub"},
+                unit || `${lg.Request || "—"} · ${lg.Application || "—"}`
+              ),
+              h("div", {className: "logs-card-meta"},
+                h("span", {className: `logs-status logs-status-${kind}`}, lg.Status || "Unknown"),
+                h("span", null, `User: ${logsUserName(lg) || "—"}`),
+                lg.Operation && h("span", null, `Op: ${lg.Operation}`),
+                lg.DurationMilliseconds != null &&
+                  h("span", null, `${lg.DurationMilliseconds} ms`),
+                lg.LogLength != null &&
+                  h("span", null, `${Math.max(1, Math.round(lg.LogLength / 1024))} KB`)
+              ),
+              h("div", {className: "logs-card-actions", onClick: e => e.stopPropagation()},
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  disabled: analyzingId === lg.Id,
+                  title: a && a.text
+                    ? "Already analyzed — click to show the saved result (no new AI call)"
+                    : "Plain-English analysis of this log",
+                  onClick: () => analyzeLog(lg)
+                }, analyzingId === lg.Id
+                  ? "Analyzing…"
+                  : (a && a.text) ? "✓ Analyzed" : "⚡ Analyze"),
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  onClick: () => {
+                    setSelId(lg.Id);
+                    if (chatRef.current) chatRef.current.focus();
+                  }
+                }, "💬 Ask AI"),
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  onClick: () => viewLog(lg)
+                }, "View"),
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  onClick: () => downloadLog(lg)
+                }, "Download"),
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  disabled: delBusy === lg.Id,
+                  onClick: () => deleteLog(lg)
+                }, delBusy === lg.Id ? "Deleting…" : "Delete")
+              )
+            );
+          }),
+          hasMore && h("div", {className: "logs-more"},
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: loadingMore,
+              onClick: loadMore
+            }, loadingMore ? "Loading…" : `Load more (${LOGS_PAGE})`),
+            h("span", {className: "insp-meta"}, `Showing ${logs.length}`)
+          )
+        ),
+        h("div", {className: "logs-ai", ref: aiRef},
+          !selected && h("div", {className: "insp-empty"},
+            "Select a log on the left → ⚡ Analyze, or ask a question about it."),
+          selected && h("div", null,
+            h("div", {className: "logs-ai-title"},
+              "🤖 AI · ",
+              h("span", {className: "logs-ai-id"}, `Log ${selected.Id}`)
+            ),
+            h("div", {className: "logs-ai-section"},
+              h("div", {className: "logs-ai-h"},
+                h("span", null, "⚡ AI Quick Analysis (Plain English)"),
+                h("button", {
+                  className: "field-action-btn",
+                  disabled: analyzingId === selected.Id,
+                  title: selAnalysis && selAnalysis.text
+                    ? "The saved result is already shown — this sends the log to the AI again (uses tokens)"
+                    : "Ask the AI to analyze this log",
+                  onClick: () => analyzeLog(selected, true)
+                }, selAnalysis && selAnalysis.text ? "↻ Re-run (new AI call)" : "Analyze")
+              ),
+              selAnalysis && selAnalysis.text &&
+                h("div", {className: "insp-meta"},
+                  "Saved result shown — no AI call made."),
+              selAnalysis && selAnalysis.pending &&
+                h("div", {className: "insp-meta"}, "Reading the log and asking the AI…"),
+              selAnalysis && selAnalysis.error === "NO_LLM_CONFIG" &&
+                h("div", {className: "insp-warn"},
+                  "No AI provider configured — set one up in Options to use the AI panel.",
+                  h("button", {
+                    className: "field-action-btn",
+                    style: {marginLeft: "8px"},
+                    onClick: openSettings
+                  }, "Open Settings")
+                ),
+              selAnalysis && selAnalysis.error && selAnalysis.error !== "NO_LLM_CONFIG" &&
+                h("div", {className: "insp-error"}, selAnalysis.error),
+              selAnalysis && selAnalysis.text && h("div", {className: "logs-ai-text"},
+                selAnalysis.text,
+                h("button", {
+                  className: "field-action-btn",
+                  style: {marginTop: "6px"},
+                  onClick: copyAnalysis
+                }, copied ? "Copied ✓" : "Copy")
+              )
+            ),
+            h("div", {className: "logs-ai-section"},
+              h("div", {className: "logs-ai-h"}, "💬 Ask AI About This Log"),
+              h("div", {className: "logs-chat"},
+                selChat.length === 0 && !chatBusy &&
+                  h("div", {className: "insp-meta"},
+                    "Ask what an error means, where it came from, or how to fix it…"),
+                selChat.map((m, i) =>
+                  h("div", {key: i, className: `logs-bubble logs-bubble-${m.role}`}, m.text)),
+                chatBusy && h("div", {className: "logs-bubble logs-bubble-ai"}, "…")
+              ),
+              h("div", {className: "logs-chat-row"},
+                h("input", {
+                  ref: chatRef,
+                  value: chatInput,
+                  placeholder: "Type your question here…",
+                  disabled: chatBusy,
+                  onChange: e => setChatInput(e.target.value),
+                  onKeyDown: e => { if (e.key === "Enter") askAboutLog(selected, chatInput); }
+                }),
+                h("button", {
+                  className: "btn btn-primary btn-sm",
+                  disabled: chatBusy || !chatInput.trim(),
+                  onClick: () => askAboutLog(selected, chatInput)
+                }, chatBusy ? "…" : "Ask")
+              )
+            )
+          )
+        )
+      ),
+      openLog && (() => {
+        const allRows = parseApexLog(openLog.text);
+        const events = [...new Set(allRows.map(r => r.event).filter(Boolean))].sort();
+        const f = logFilter.trim().toLowerCase();
+        const shown = allRows.filter(r =>
+          (!debugOnly || r.event === "USER_DEBUG") &&
+          (!f || `${r.ts} ${r.event} ${r.details}`.toLowerCase().includes(f)));
+        return h("div", {style: {marginTop: "12px"}},
+          h("div", {className: "insp-toolbar insp-toolbar-wrap"},
+            h("span", {className: "insp-meta"},
+              `Log ${openLog.name} · ${allRows.length} lines`),
+            h("label", {className: "insp-check"},
+              h("input", {
+                type: "checkbox",
+                checked: debugOnly,
+                onChange: e => setDebugOnly(e.target.checked)
+              }),
+              h("span", null, "Debug Only")
+            ),
+            h("label", {className: "insp-field"},
+              h("span", null, "Event"),
+              h("select", {value: logFilter && !events.includes(logFilter) ? "" : logFilter,
+                onChange: e => setLogFilter(e.target.value)},
+                h("option", {value: ""}, `All events (${events.length})`),
+                events.map(ev =>
+                  h("option", {key: ev, value: ev},
+                    `${ev} (${allRows.filter(r => r.event === ev).length})`))
+              )
+            ),
+            h("label", {className: "insp-field insp-field-grow"},
+              h("span", null, "Filter"),
+              h("input", {
+                value: logFilter,
+                placeholder: "Click here to filter the log",
+                onChange: e => setLogFilter(e.target.value)
+              })
+            ),
+            h("span", {className: "insp-meta"}, `${shown.length}/${allRows.length} lines`),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              onClick: () => downloadText(`${openLog.name}.log`, openLog.text, "text/plain")
+            }, "Download"),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              onClick: () => setOpenLog(null)
+            }, "Close")
+          ),
+          h(ResultTable, {
+            columns: ["Timestamp", "Event", "Details"],
+            rows: shown.map(r => ({Timestamp: r.ts, Event: r.event, Details: r.details})),
+            maxRows: 2000
+          }),
+          h("details", {className: "insp-details"},
+            h("summary", null, "Raw log"),
+            h("pre", {className: "insp-log"}, openLog.text)
+          )
+        );
+      })()
+    )
+  );
+}
+
 export function InspectorPanel() {
-  const [tab, setTab] = React.useState("soql");
+  const [tab, setTab] = ffUseSession("inspector", "tab", "soql");
   const tabs = [
     {id: "soql", label: "SOQL"},
+    {id: "apex", label: "Apex"},
     {id: "records", label: "Records"},
     {id: "export", label: "Export"},
     {id: "import", label: "Import"},
     {id: "users", label: "Users"},
+    {id: "logs", label: "Logs"},
     {id: "org", label: "Org Info"},
     {id: "apptabs", label: "App Tabs"}
   ];
+  // A restored snapshot may name a tab id that no longer exists.
+  const active = tabs.some(t => t.id === tab) ? tab : "soql";
   return h("div", {className: "insp-root"},
     h("div", {className: "insp-tabs"},
       tabs.map(t =>
         h("button", {
           key: t.id,
-          className: `insp-tab ${tab === t.id ? "active" : ""}`,
+          className: `insp-tab ${active === t.id ? "active" : ""}`,
           onClick: () => setTab(t.id)
         }, t.label)
       )
     ),
-    tab === "soql" && h(SoqlTab),
-    tab === "records" && h(RecordsTab),
-    tab === "export" && h(ExportTab),
-    tab === "import" && h(ImportTab),
-    tab === "users" && h(UsersTab),
-    tab === "org" && h(OrgTab),
-    tab === "apptabs" && h(AppTabsTab)
+    active === "soql" && h(SoqlTab),
+    active === "apex" && h(ApexTab),
+    active === "records" && h(RecordsTab),
+    active === "export" && h(ExportTab),
+    active === "import" && h(ImportTab),
+    active === "users" && h(UsersTab),
+    active === "logs" && h(LogsTab),
+    active === "org" && h(OrgTab),
+    active === "apptabs" && h(AppTabsTab)
   );
 }

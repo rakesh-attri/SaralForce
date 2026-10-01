@@ -1,3 +1,6 @@
+// Helpers derived in part from Salesforce-Inspector-reloaded
+// (https://github.com/tprouvot/Salesforce-Inspector-reloaded)
+// MIT License, Copyright (c) 2023 Thomas Prouvot. See LICENSE.
 import {sfConn, apiVersion} from "./inspector.js";
 
 if (typeof browser === "undefined") {
@@ -8,7 +11,9 @@ export class Constants {
   static ACCESS_TOKEN = "_access_token";
   static CODE_VERIFIER = "_code_verifier";
   static CLIENT_ID = "_clientId";
-  static DEFAULT_CLIENT_ID = "3MVG9HB6vm3GZZR9qrol39RJW_sZZjYV5CZXSWbkdi6dd74gTIUaEcanh7arx9BHhl35WhHW4AlNUY8HtG2hs";
+  // ForceForge External Client App consumer key (Setup → External Client App
+  // Manager → Consumer Key and Secret). Public-client PKCE flow: no secret.
+  static DEFAULT_CLIENT_ID = "3MVG9GBhY6wQjl2vmOksB1OaNFVitli1nhCByqjDeRWX3GJoBjiJUwAOz1imu4KU6FpTorToreT2U9NJTuNyi";
   static GLOBAL_LINKS_KEY = "globalLinks";
 }
 

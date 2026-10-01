@@ -1,8 +1,8 @@
 {
   "name": "ForceForge",
   "description": "AI-powered Salesforce toolkit: design custom objects, SOQL runner, CSV data import/export, and org info. Supports OpenAI, Claude, Gemini, and OpenAI-compatible APIs.",
-  "version": "1.2.0",
-  "version_name": "1.2.0",
+  "version": "1.4.0",
+  "version_name": "1.4.0",
   "icons": {
     "16": "icon16.png",
     "32": "icon32.png",
@@ -82,12 +82,10 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "popup.html",
         "object-creator.html",
         "object-creator.js",
         "object-creator.css",
         "options.html",
-        "inject.js",
         "react.js",
         "react-dom.js",
         "inspector.js",
@@ -130,6 +128,7 @@
   ],
   "incognito": "split",
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkNCEIgsrxqkgfSFr4a/t6QBtwoLKNC2Z4yNMyYm0g2d3oowWRl4FaLGBDV6Yt75NqJ3XXW6/3IFInwrFWRzsfZTBVwQm7fhAhTFhLsUKlxuxy92gt1aW11MKWVlU0QA6X0PJWtJOc+66KIwvaaAL4zDZYKaaXzi1ZFg+Cq7XJ5ZhA7+1kYA6pplHoYe7YudZMHvYGe0zQNS3bEfO2kOd5fXtprpi2UiVeSC/dsBMV5CnbdQZZUNccJQfCnkIoN41tuzgu+SKP8zf28prON8R1Z02CmjI0+F+K3vR8gkd+j16Yinus/+SaxNJi3XMZS7L9GtBAf6QEE/9uZ25kPvugQIDAQAB",
   "commands": {
     "open-object-creator": {
       "description": "Open ForceForge"

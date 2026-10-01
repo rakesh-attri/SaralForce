@@ -1,8 +1,8 @@
-import {sfConn, apiVersion, XML} from "./inspector.js";
+import {sfConn, apiVersion, XML, startSalesforceLogin} from "./inspector.js";
 import {hasValidConfig, getSavedConfig, getLLMProvider, getProviderConfig} from "./llm/llm-service.js";
-import {SYSTEM_PROMPT, REFINEMENT_PROMPT, USER_MESSAGE_TEMPLATE} from "./prompts/system-prompt.js";
+import {SYSTEM_PROMPT, REFINEMENT_PROMPT, USER_MESSAGE_TEMPLATE, ENHANCE_SYSTEM_PROMPT} from "./prompts/system-prompt.js";
 import {createSpinForMethod, UserInfoModel, Constants} from "./utils.js";
-import {InspectorPanel} from "./inspector-tools.js";
+import {InspectorPanel, ffApplyRestore, ffTakeSnapshot} from "./inspector-tools.js";
 
 let h = React.createElement;
 
@@ -444,22 +444,59 @@ function persistState(sfHost, state) {
       selectedApp: state.selectedApp && !isSfId(state.selectedApp) ? state.selectedApp : null,
       availableApps: (state.availableApps || []).filter(a =>
         a && a.developerName && !isSfId(a.developerName)),
-      recordTypesDone: state.recordTypesDone
+      recordTypesDone: state.recordTypesDone,
+      builderMode: state.builderMode || "plan"
     };
     sessionStorage.setItem(sfHost + "_sidebar_state", JSON.stringify(toSave));
   } catch (e) { /* ignore */ }
+}
+
+// Inspector page + loaded data, saved only when the sidebar minimizes so a
+// refresh of the host page resets it (key is consumed on read). Parsed once
+// per document — initApp can construct App twice (session fallback race), and
+// the second construction must see the same snapshot.
+let _inspectorStateCache;
+function loadInspectorState(sfHost) {
+  if (_inspectorStateCache !== undefined) return _inspectorStateCache;
+  _inspectorStateCache = null;
+  try {
+    const raw = sessionStorage.getItem(sfHost + "_inspector_state");
+    if (raw) {
+      sessionStorage.removeItem(sfHost + "_inspector_state");
+      _inspectorStateCache = JSON.parse(raw);
+    }
+  } catch (e) { /* ignore */ }
+  return _inspectorStateCache;
+}
+
+function saveInspectorState(sfHost, state) {
+  const payload = {uiMode: state.uiMode || "builder", ff: null};
+  try { payload.ff = ffTakeSnapshot(); } catch (e) { /* ignore */ }
+  // Quota: retry without the snapshot rather than lose the current page too.
+  const attempts = [payload, {...payload, ff: null}];
+  for (const attempt of attempts) {
+    try {
+      sessionStorage.setItem(sfHost + "_inspector_state", JSON.stringify(attempt));
+      return;
+    } catch (e) { /* try next */ }
+  }
 }
 
 class App extends React.Component {
   constructor(props) {
     super(props);
     const saved = loadPersistedState(props.sfHost);
+    const inspectorSaved = loadInspectorState(props.sfHost);
+    ffApplyRestore(inspectorSaved && inspectorSaved.ff);
     this.state = {
       llmConfig: getSavedConfig(),
+      uiMode: inspectorSaved?.uiMode || "builder",
       messages: saved?.messages || [],
       currentProposal: saved?.currentProposal || null,
       isGenerating: false,
       streamingText: "",
+      isEnhancing: false,
+      enhancedPreview: null,
       deploymentStatus: saved?.deploymentStatus === "deploying" ? "complete" : (saved?.deploymentStatus || null),
       deploymentStep: saved?.deploymentStatus === "deploying" ? "Deployment complete!" : (saved?.deploymentStep || null),
       deploymentProgress: saved?.deploymentProgress || 0,
@@ -470,6 +507,7 @@ class App extends React.Component {
       activeChatId: null,
       selectedFields: saved?.selectedFields || null,
       showHistory: false,
+      showChat: false,
       visibilityMode: saved?.visibilityMode || "all",
       selectedProfiles: saved?.selectedProfiles || [],
       availableProfiles: saved?.availableProfiles || [],
@@ -481,7 +519,8 @@ class App extends React.Component {
       selectedApp: saved?.selectedApp && !isSfId(saved.selectedApp) ? saved.selectedApp : null,
       appAssigned: false,
       appLoadError: null,
-      _appsTried: false
+      _appsTried: false,
+      builderMode: saved?.builderMode || "plan"
     };
     this._appsLoading = false;
     this.spinnerCount = 0;
@@ -503,14 +542,16 @@ class App extends React.Component {
       const providerDef = getProviderConfig(config.provider);
       this.addSystemMessage(`Connected to ${providerDef.name} (${config.model}). Describe the Salesforce object you want to create, and I'll design it for you.`);
     }
-    window.addEventListener("beforeunload", this._saveState);
+    // No beforeunload save on purpose: the snapshot must die with a refresh
+    // of the host page; `sfoc-save-state` (sidebar minimize) is the only
+    // write path besides this.
     if (this.state.currentProposal) {
       this.loadProfiles().catch(e => console.warn("[ForceForge] mount loadProfiles:", e.message));
     }
   }
 
   componentWillUnmount() {
-    window.removeEventListener("beforeunload", this._saveState);
+    saveInspectorState(this.props.sfHost, this.state);
     this._saveState();
   }
 
@@ -541,7 +582,7 @@ class App extends React.Component {
 
   _autoSaveChat() {
     const {messages, currentProposal, deploymentResults, deploymentStatus, activeChatId, selectedFields,
-      visibilityMode, selectedProfiles, selectedApp} = this.state;
+      visibilityMode, selectedProfiles, selectedApp, builderMode} = this.state;
     if (messages.length <= 1) return;
     const chatHistory = [...this.state.chatHistory];
     const chatEntry = {
@@ -554,6 +595,7 @@ class App extends React.Component {
       selectedFields,
       visibilityMode,
       selectedProfiles,
+      builderMode: builderMode || "plan",
       selectedApp: selectedApp && !isSfId(selectedApp) ? selectedApp : null
     };
     const existingIdx = chatHistory.findIndex(c => c.id === chatEntry.id);
@@ -587,7 +629,11 @@ class App extends React.Component {
       selectedApp: null,
       appAssigned: false,
       appLoadError: null,
-      _appsTried: false
+      _appsTried: false,
+      builderMode: "plan",
+      isEnhancing: false,
+      enhancedPreview: null,
+      showChat: false
     }, () => {
       this._appsLoading = false;
       if (!hasValidConfig()) {
@@ -645,8 +691,10 @@ class App extends React.Component {
       appAssigned: false,
       appLoadError: null,
       _appsTried: false,
+      builderMode: chat.builderMode || "plan",
       error: null,
-      activeChatId: chat.id
+      activeChatId: chat.id,
+      showChat: true
     }, () => {
       this._appsLoading = false;
       if (chat.currentProposal) {
@@ -690,7 +738,7 @@ class App extends React.Component {
     }
 
     this.addUserMessage(userInput);
-    this.setState({userInput: "", isGenerating: true, error: null, streamingText: ""});
+    this.setState({userInput: "", isGenerating: true, error: null, streamingText: "", enhancedPreview: null});
 
     try {
       const provider = getLLMProvider(config.provider);
@@ -728,6 +776,7 @@ class App extends React.Component {
             deploymentStatus: null,
             deploymentResults: [],
             recordTypesDone: false,
+            builderMode: "plan",
             visibilityMode: this.state.visibilityMode || "all"
           }, () => {
             // Ask targets up front: load profiles for Deployment Targets.
@@ -747,6 +796,49 @@ class App extends React.Component {
     }
 
     this.setState({isGenerating: false});
+  }
+
+  async enhancePrompt() {
+    const draft = (this.state.userInput || "").trim();
+    if (!draft) {
+      this.setState({error: "The 'Enhance Prompt' button helps improve your prompt by providing additional context, clarification, or rephrasing. Try typing a prompt in here and clicking the button again to see how it works."});
+      return;
+    }
+    if (this.state.isEnhancing) return;
+
+    const config = getSavedConfig();
+    if (!config || !hasValidConfig()) {
+      this.setState({error: "Please configure your LLM provider in Options first."});
+      return;
+    }
+
+    this.setState({isEnhancing: true, enhancedPreview: null, error: null});
+    try {
+      const provider = getLLMProvider(config.provider);
+      const proposalCtx = this.state.currentProposal
+        ? `\nCurrent object draft for context (do not redesign it, only improve the request below): label="${this.state.currentProposal.object?.label || ""}", fields=[${(this.state.currentProposal.fields || []).map(f => f.label || f.name).join(", ")}]`
+        : "";
+      const apiMessages = [
+        {role: "system", content: ENHANCE_SYSTEM_PROMPT},
+        {role: "user", content: `Draft request to improve:${proposalCtx}\n\n"${draft}"`}
+      ];
+
+      let response;
+      if (config.provider === "openai_compatible") {
+        response = await provider.sendMessage(apiMessages, config.apiKey, config.model, null, config.baseUrl);
+      } else {
+        response = await provider.sendMessage(apiMessages, config.apiKey, config.model, null);
+      }
+
+      const enhanced = String(response || "").trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+      if (!enhanced) throw new Error("LLM returned an empty enhancement.");
+      this.setState({enhancedPreview: enhanced, isEnhancing: false});
+    } catch (error) {
+      this.setState({
+        error: `LLM Error: ${error.message}`,
+        isEnhancing: false
+      });
+    }
   }
 
   buildConversationHistory() {
@@ -2285,6 +2377,111 @@ class App extends React.Component {
     this.setState({selectedFields: []});
   }
 
+  // ── Plan-mode editing (proposal stays a draft until Build) ──
+  planEditErrors() {
+    const {currentProposal} = this.state;
+    if (!currentProposal) return [];
+    return validateProposal(currentProposal);
+  }
+
+  // Apply a mutator to a draft copy of the proposal, then re-validate
+  // and auto-save the chat. selectedFields remapping is handled by the
+  // individual edit helpers (positional remap would break on splice).
+  updatePlan(mutator, after) {
+    const {currentProposal} = this.state;
+    if (!currentProposal || this.state.builderMode !== "plan") return;
+    const draft = JSON.parse(JSON.stringify(currentProposal));
+    mutator(draft);
+    this.setState({currentProposal: draft, error: null}, () => {
+      if (after) after(draft);
+      this._autoSaveChat();
+    });
+  }
+
+  updatePlanObject(patch) {
+    this.updatePlan(draft => {
+      draft.object = {...draft.object, ...patch};
+    });
+  }
+
+  updatePlanField(index, patch) {
+    const {currentProposal, selectedFields} = this.state;
+    if (!currentProposal || !currentProposal.fields[index]) return;
+    const oldName = currentProposal.fields[index].name;
+    this.updatePlan(draft => {
+      draft.fields[index] = {...draft.fields[index], ...patch};
+    }, (draft) => {
+      const newName = draft.fields[index] ? draft.fields[index].name : oldName;
+      if (selectedFields && newName !== oldName) {
+        this.setState({
+          selectedFields: selectedFields.map(n => n === oldName ? newName : n)
+        });
+      }
+    });
+  }
+
+  deletePlanField(index) {
+    const {currentProposal, selectedFields} = this.state;
+    if (!currentProposal || !currentProposal.fields[index]) return;
+    const removedName = currentProposal.fields[index].name;
+    this.updatePlan(draft => {
+      draft.fields.splice(index, 1);
+    }, () => {
+      if (selectedFields) {
+        this.setState({selectedFields: selectedFields.filter(n => n !== removedName)});
+      }
+    });
+  }
+
+  deletePlanRecordType(index) {
+    this.updatePlan(draft => {
+      if (Array.isArray(draft.recordTypes)) draft.recordTypes.splice(index, 1);
+    });
+  }
+
+  suggestApiName(label) {
+    const base = String(label || "")
+      .replace(/[^A-Za-z0-9 ]/g, "")
+      .trim()
+      .split(/\s+/)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join("_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    const clean = base || "Custom_Field";
+    return (/^[A-Za-z]/.test(clean) ? clean : "Custom_" + clean) + "__c";
+  }
+
+  addPlanField() {
+    const {newFieldLabel, newFieldType} = this.state;
+    const label = String(newFieldLabel || "").trim();
+    if (!label) {
+      this.setState({error: "Enter a field label to add it to the plan."});
+      return;
+    }
+    const type = newFieldType || "Text";
+    const field = {
+      label,
+      name: this.suggestApiName(label),
+      type,
+      required: false,
+      description: ""
+    };
+    if (type === "Picklist" || type === "MultiselectPicklist") {
+      field.values = ["Option 1", "Option 2"];
+    }
+    if (type === "Lookup" || type === "MasterDetail") {
+      field.relatedTo = "Account";
+    }
+    this.updatePlan(draft => {
+      draft.fields.push(field);
+    });
+    this.setState(prev => ({
+      newFieldLabel: "",
+      selectedFields: prev.selectedFields ? [...prev.selectedFields, field.name] : null
+    }));
+  }
+
   async loadProfiles() {
     if (this.state.profilesLoading || this._profilesLoading ||
         (this.state.availableProfiles && this.state.availableProfiles.length)) {
@@ -3146,8 +3343,8 @@ class App extends React.Component {
   render() {
     const {sfHost} = this.props;
     const {
-      messages, currentProposal, isGenerating, streamingText,
-      deploymentStatus, deploymentStep, deploymentProgress, deploymentResults, error, userInput, llmConfig,
+      messages, currentProposal, isGenerating, streamingText, isEnhancing, enhancedPreview,
+      deploymentStatus, deploymentStep, deploymentProgress, deploymentResults, error, userInput, llmConfig, showChat,
       selectedFields, visibilityMode, selectedProfiles, availableProfiles, profilesLoading, recordTypesDone,
       availableApps, appsLoading, selectedApp
     } = this.state;
@@ -3155,13 +3352,16 @@ class App extends React.Component {
     const setupLink = this.getSetupLink();
     const hasConfig = hasValidConfig();
     const uiMode = this.state.uiMode || "builder";
+    // Once a proposal exists the preview takes the full width; the chat
+    // (and its Enhance button) hides until the header Chat toggle reopens it.
+    const chatVisible = !currentProposal || showChat;
 
     if (uiMode === "inspector") {
       return h("div", {className: "app-container"},
         h("div", {className: "app-header"},
           h("div", {className: "header-left"},
             h("h1", {className: "app-title"}, "ForceForge"),
-            h("span", {className: "app-subtitle"}, "Inspector · SOQL / Data / Org")
+            h("span", {className: "app-subtitle"}, "Inspector · SOQL / Apex / Data / Logs / Org")
           ),
           h("div", {className: "header-right"},
             h("button", {
@@ -3169,6 +3369,11 @@ class App extends React.Component {
               onClick: () => this.setState({uiMode: "builder"}),
               title: "Back to Object Builder"
             }, "← Builder"),
+            !sfConn.sessionId && h("button", {
+              className: "header-btn",
+              onClick: () => startSalesforceLogin(this.props.sfHost).catch(e => this.setState({error: "Login failed: " + e.message})),
+              title: "Log in with Salesforce OAuth"
+            }, "Connect"),
             this.userInfoModel.userFullName && h("span", {className: "user-info"},
               this.userInfoModel.userInitials
             )
@@ -3176,7 +3381,8 @@ class App extends React.Component {
         ),
         h("div", {className: "inspector-body"},
           h(InspectorPanel)
-        )
+        ),
+        h("div", {className: "app-footer"}, "Developed by ©Bhajan Mandali")
       );
     }
 
@@ -3192,6 +3398,16 @@ class App extends React.Component {
             onClick: () => this.setState({uiMode: "inspector"}),
             title: "SOQL, Data Import/Export, Org Info"
           }, "Inspector"),
+          !sfConn.sessionId && h("button", {
+            className: "header-btn",
+            onClick: () => startSalesforceLogin(this.props.sfHost).catch(e => this.setState({error: "Login failed: " + e.message})),
+            title: "Log in with Salesforce OAuth"
+          }, "Connect"),
+          currentProposal && h("button", {
+            className: "header-btn",
+            onClick: () => this.setState({showChat: !this.state.showChat}),
+            title: "Show/hide the chat panel"
+          }, showChat ? "Hide Chat" : "\uD83D\uDCAC Chat"),
           h("button", {
             className: "header-btn",
             onClick: () => this.newChat(),
@@ -3236,8 +3452,8 @@ class App extends React.Component {
         })
       ),
 
-      h("div", {className: "app-body"},
-        h("div", {className: "chat-panel"},
+      h("div", {className: `app-body${chatVisible ? "" : " chat-hidden"}`},
+        chatVisible && h("div", {className: "chat-panel"},
           h("div", {className: "chat-messages", ref: this.chatContainerRef},
             messages.map((msg, i) =>
               h("div", {key: i, className: `message message-${msg.role}`},
@@ -3278,8 +3494,23 @@ class App extends React.Component {
           ),
 
           h("div", {className: "chat-input-area"},
+            enhancedPreview && h("div", {className: "enhance-preview"},
+              h("div", {className: "enhance-preview-label"}, "Enhanced prompt"),
+              h("div", {className: "enhance-preview-text"}, enhancedPreview),
+              h("div", {className: "enhance-preview-actions"},
+                h("button", {
+                  className: "btn btn-primary btn-sm",
+                  onClick: () => this.setState({userInput: enhancedPreview, enhancedPreview: null})
+                }, "Accept"),
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  onClick: () => this.setState({enhancedPreview: null})
+                }, "Discard")
+              )
+            ),
             h("div", {className: "chat-input-row"},
-              h("textarea", {
+              h("div", {className: "chat-input-wrap"},
+                h("textarea", {
                 className: "chat-input",
                 value: userInput,
                 onChange: (e) => this.setState({userInput: e.target.value}),
@@ -3295,6 +3526,13 @@ class App extends React.Component {
                 disabled: !hasConfig || isGenerating,
                 rows: 2
               }),
+                h("button", {
+                  className: "enhance-btn-inside",
+                  onClick: () => this.enhancePrompt(),
+                  disabled: isEnhancing,
+                  title: "Enhance prompt"
+                }, isEnhancing ? "..." : "🪄")
+              ),
               !hasConfig && h("button", {
                 className: "btn btn-primary",
                 style: {marginLeft: "8px", alignSelf: "flex-end"},
@@ -3312,12 +3550,31 @@ class App extends React.Component {
         currentProposal && h("div", {className: "preview-panel"},
           h("div", {className: "preview-header"},
             h("h2", null, "Object Preview"),
+            h("div", {className: "mode-toggle", title: "Plan: draft and edit. Build: locked, deploy only."},
+              h("button", {
+                className: `mode-btn ${(this.state.builderMode || "plan") === "plan" ? "active" : ""}`,
+                onClick: () => this.setState({builderMode: "plan"}, () => this._autoSaveChat())
+              }, "Plan"),
+              h("button", {
+                className: `mode-btn ${(this.state.builderMode || "plan") === "build" ? "active" : ""}`,
+                onClick: () => this.setState({builderMode: "build"}, () => this._autoSaveChat())
+              }, "Build")
+            ),
             h("div", {className: "preview-actions"},
-              deploymentStatus !== "deploying" && h("button", {
-                className: "btn btn-primary btn-sm",
-                onClick: () => this.deployObject(),
-                disabled: !currentProposal.fields?.length
-              }, deploymentStatus === "complete" ? "Redeploy" : `Deploy (${(selectedFields || currentProposal.fields.map(f => f.name)).length} fields)`),
+              deploymentStatus !== "deploying" && (this.state.builderMode || "plan") === "build" && (() => {
+                const errs = this.planEditErrors();
+                return h("button", {
+                  className: "btn btn-primary btn-sm",
+                  onClick: () => this.deployObject(),
+                  disabled: !currentProposal.fields?.length || errs.length > 0,
+                  title: errs.length > 0
+                    ? "Fix plan issues first: " + errs.slice(0, 2).join("; ")
+                    : `Deploy ${currentProposal.object.label} to Salesforce`
+                }, deploymentStatus === "complete" ? "Redeploy" : `Deploy (${(selectedFields || currentProposal.fields.map(f => f.name)).length} fields)`);
+              })(),
+              deploymentStatus !== "deploying" && (this.state.builderMode || "plan") === "build" &&
+                this.planEditErrors().length > 0 && h("span", {className: "plan-error-hint"},
+                  `${this.planEditErrors().length} plan issue(s) — switch to Plan to fix`),
               deploymentStatus === "deploying" && h("button", {
                 className: "btn btn-danger btn-sm",
                 onClick: () => this.cancelDeployment()
@@ -3335,19 +3592,87 @@ class App extends React.Component {
               }, "Copy JSON")
             )
           ),
+          (this.state.builderMode || "plan") === "plan" && (() => {
+            const errs = this.planEditErrors();
+            return h("div", {className: "plan-hint"},
+              "Plan mode — open the header Chat panel to keep refining, or edit inline below. Switch to Build when the plan is final.",
+              errs.length > 0 && h("div", {className: "plan-error-list"},
+                errs.slice(0, 4).map((e, i) => h("div", {key: i}, "• " + e)),
+                errs.length > 4 && h("div", null, `…+${errs.length - 4} more`))
+            );
+          })(),
 
           h("div", {className: "preview-content"},
-            h("div", {className: "object-card"},
-              h("div", {className: "object-card-header"},
-                h("h3", {className: "object-label"}, currentProposal.object.label),
-                h("span", {className: "object-api-name"}, currentProposal.object.name)
-              ),
-              currentProposal.object.description && h("p", {className: "object-description"}, currentProposal.object.description),
-              h("div", {className: "object-meta"},
-                h("span", {className: "meta-item"}, `Name Field: ${currentProposal.object.nameField?.label || "Name"} (${currentProposal.object.nameField?.type || "Text"})`),
-                currentProposal.object.sharingModel && h("span", {className: "meta-item"}, `Sharing: ${currentProposal.object.sharingModel}`)
-              )
-            ),
+            (this.state.builderMode || "plan") === "plan"
+              ? h("div", {className: "object-card plan-edit"},
+                  h("div", {className: "plan-edit-grid"},
+                    h("label", {className: "insp-field"},
+                      h("span", null, "Object Label *"),
+                      h("input", {
+                        value: currentProposal.object.label || "",
+                        onChange: e => this.updatePlanObject({label: e.target.value})
+                      })
+                    ),
+                    h("label", {className: "insp-field"},
+                      h("span", null, "API Name * (…__c)"),
+                      h("input", {
+                        value: currentProposal.object.name || "",
+                        spellCheck: false,
+                        onChange: e => this.updatePlanObject({name: e.target.value})
+                      })
+                    )
+                  ),
+                  h("label", {className: "insp-field"},
+                    h("span", null, "Description"),
+                    h("input", {
+                      value: currentProposal.object.description || "",
+                      onChange: e => this.updatePlanObject({description: e.target.value})
+                    })
+                  ),
+                  h("div", {className: "plan-edit-grid"},
+                    h("label", {className: "insp-field"},
+                      h("span", null, "Sharing Model"),
+                      h("select", {
+                        value: currentProposal.object.sharingModel || "ReadWrite",
+                        onChange: e => this.updatePlanObject({sharingModel: e.target.value})
+                      },
+                        ["ReadWrite", "Read", "Private", "ReadWriteTransfer", "FullAccess"].map(s =>
+                          h("option", {key: s, value: s}, s))
+                      )
+                    ),
+                    h("label", {className: "insp-field"},
+                      h("span", null, "Name Field Label"),
+                      h("input", {
+                        value: currentProposal.object.nameField?.label || "",
+                        onChange: e => this.updatePlanObject({
+                          nameField: {...currentProposal.object.nameField, label: e.target.value}
+                        })
+                      })
+                    ),
+                    h("label", {className: "insp-field"},
+                      h("span", null, "Name Field Type"),
+                      h("select", {
+                        value: currentProposal.object.nameField?.type || "Text",
+                        onChange: e => this.updatePlanObject({
+                          nameField: {...currentProposal.object.nameField, type: e.target.value}
+                        })
+                      },
+                        ["Text", "AutoNumber"].map(t => h("option", {key: t, value: t}, t))
+                      )
+                    )
+                  )
+                )
+              : h("div", {className: "object-card"},
+                  h("div", {className: "object-card-header"},
+                    h("h3", {className: "object-label"}, currentProposal.object.label),
+                    h("span", {className: "object-api-name"}, currentProposal.object.name)
+                  ),
+                  currentProposal.object.description && h("p", {className: "object-description"}, currentProposal.object.description),
+                  h("div", {className: "object-meta"},
+                    h("span", {className: "meta-item"}, `Name Field: ${currentProposal.object.nameField?.label || "Name"} (${currentProposal.object.nameField?.type || "Text"})`),
+                    currentProposal.object.sharingModel && h("span", {className: "meta-item"}, `Sharing: ${currentProposal.object.sharingModel}`)
+                  )
+                ),
 
             currentProposal && h("div", {className: "visibility-section targets-section"},
               h("div", {className: "fields-header"},
@@ -3413,75 +3738,6 @@ class App extends React.Component {
               )
             ),
 
-            this.tabWasCreated() && h("div", {className: "visibility-section"},
-              h("div", {className: "fields-header"},
-                h("h4", null, "Tab Visibility")
-              ),
-              h("div", {className: "visibility-options"},
-                h("label", {className: "visibility-option"},
-                  h("input", {
-                    type: "radio",
-                    name: "visibilityMode",
-                    checked: visibilityMode === "all",
-                    onChange: () => this.setVisibilityMode("all")
-                  }),
-                  " Apply Default On to all profiles"
-                ),
-                h("label", {className: "visibility-option"},
-                  h("input", {
-                    type: "radio",
-                    name: "visibilityMode",
-                    checked: visibilityMode === "selected",
-                    onChange: () => this.setVisibilityMode("selected")
-                  }),
-                  " Choose profiles"
-                )
-              ),
-              visibilityMode === "selected" && h("div", {className: "profile-picker"},
-                profilesLoading && h("div", {className: "profile-loading"}, "Loading profiles..."),
-                !profilesLoading && availableProfiles.length === 0 && h("button", {
-                  className: "btn btn-secondary btn-sm",
-                  onClick: () => this.loadProfiles()
-                }, "Load profiles"),
-                availableProfiles.length > 0 && h("div", {className: "profile-list"},
-                  h("div", {className: "profile-list-actions"},
-                    h("button", {
-                      className: "field-action-btn",
-                      onClick: () => this.setState({selectedProfiles: [...availableProfiles]})
-                    }, "All"),
-                    h("button", {
-                      className: "field-action-btn",
-                      onClick: () => this.setState({selectedProfiles: []})
-                    }, "None"),
-                    h("span", {className: "profile-count"}, `${selectedProfiles.length} selected`)
-                  ),
-                  availableProfiles.map(name =>
-                    h("label", {key: name, className: "profile-option"},
-                      h("input", {
-                        type: "checkbox",
-                        checked: (selectedProfiles || []).includes(name),
-                        onChange: () => this.toggleProfile(name)
-                      }),
-                      h("span", null, name)
-                    )
-                  )
-                )
-              ),
-              h("div", {className: "visibility-actions"},
-                h("button", {
-                  className: "btn btn-primary btn-sm",
-                  disabled: deploymentStatus === "deploying" ||
-                    (visibilityMode === "selected" && !(selectedProfiles || []).length),
-                  title: deploymentStatus === "deploying"
-                    ? "Deployment in progress"
-                    : visibilityMode === "selected" && !(selectedProfiles || []).length
-                      ? "Select at least one profile"
-                      : "Apply Default On to the chosen profile(s)",
-                  onClick: () => this.applyTabVisibility()
-                }, deploymentStatus === "deploying" ? "Applying..." : "Apply tab visibility")
-              )
-            ),
-
             h("div", {className: "fields-section"},
               h("div", {className: "fields-header"},
                 h("h4", null, `Fields (${currentProposal.fields.length})`),
@@ -3504,12 +3760,14 @@ class App extends React.Component {
                     h("th", null, "API Name"),
                     h("th", null, "Type"),
                     h("th", null, "Req'd"),
-                    h("th", null, "Description")
+                    h("th", null, "Description"),
+                    (this.state.builderMode || "plan") === "plan" && h("th", {className: "field-checkbox-col"}, "")
                   )
                 ),
                 h("tbody", null,
                   currentProposal.fields.map((field, i) => {
                     const isChecked = !selectedFields || selectedFields.includes(field.name);
+                    const isPlan = (this.state.builderMode || "plan") === "plan";
                     return h("tr", {key: i, className: isChecked ? "" : "field-deselected"},
                       h("td", {className: "field-checkbox-col"},
                         h("input", {
@@ -3519,14 +3777,82 @@ class App extends React.Component {
                           className: "field-checkbox"
                         })
                       ),
-                      h("td", null, field.label),
-                      h("td", {className: "api-name-cell"}, field.name),
-                      h("td", null, this.getFieldTypeLabel(field.type)),
-                      h("td", {className: "req-cell"}, field.required ? "\u2713" : ""),
-                      h("td", {className: "desc-cell"}, field.description || "")
+                      isPlan
+                        ? h("td", null,
+                            h("input", {
+                              className: "plan-cell-input",
+                              value: field.label || "",
+                              onChange: e => this.updatePlanField(i, {label: e.target.value})
+                            }))
+                        : h("td", null, field.label),
+                      isPlan
+                        ? h("td", {className: "api-name-cell"},
+                            h("input", {
+                              className: "plan-cell-input plan-cell-mono",
+                              value: field.name || "",
+                              spellCheck: false,
+                              onChange: e => this.updatePlanField(i, {name: e.target.value})
+                            }))
+                        : h("td", {className: "api-name-cell"}, field.name),
+                      isPlan
+                        ? h("td", null,
+                            h("select", {
+                              className: "plan-cell-input",
+                              value: field.type,
+                              onChange: e => this.updatePlanField(i, {type: e.target.value})
+                            },
+                              FIELD_TYPES.map(ft =>
+                                h("option", {key: ft.value, value: ft.value}, ft.label))
+                            ))
+                        : h("td", null, this.getFieldTypeLabel(field.type)),
+                      isPlan
+                        ? h("td", {className: "req-cell"},
+                            h("input", {
+                              type: "checkbox",
+                              checked: !!field.required,
+                              onChange: e => this.updatePlanField(i, {required: e.target.checked}),
+                              className: "field-checkbox"
+                            }))
+                        : h("td", {className: "req-cell"}, field.required ? "\u2713" : ""),
+                      isPlan
+                        ? h("td", {className: "desc-cell"},
+                            h("input", {
+                              className: "plan-cell-input",
+                              value: field.description || "",
+                              onChange: e => this.updatePlanField(i, {description: e.target.value})
+                            }))
+                        : h("td", {className: "desc-cell"}, field.description || ""),
+                      isPlan && h("td", {className: "field-checkbox-col"},
+                        h("button", {
+                          className: "plan-del-btn",
+                          title: `Delete field "${field.label}" from the plan`,
+                          onClick: () => this.deletePlanField(i)
+                        }, "\u2715")
+                      )
                     );
                   })
                 )
+              ),
+              (this.state.builderMode || "plan") === "plan" && h("div", {className: "plan-add-row"},
+                h("input", {
+                  className: "plan-cell-input",
+                  placeholder: "New field label…",
+                  value: this.state.newFieldLabel || "",
+                  onChange: e => this.setState({newFieldLabel: e.target.value}),
+                  onKeyDown: e => { if (e.key === "Enter") this.addPlanField(); }
+                }),
+                h("select", {
+                  className: "plan-cell-input",
+                  value: this.state.newFieldType || "Text",
+                  onChange: e => this.setState({newFieldType: e.target.value})
+                },
+                  FIELD_TYPES.map(ft =>
+                    h("option", {key: ft.value, value: ft.value}, ft.label))
+                ),
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  onClick: () => this.addPlanField()
+                }, "+ Add field")
               ),
               h("div", {className: "fields-footer"},
                 `${selectedFields?.length || currentProposal.fields.length} of ${currentProposal.fields.length} fields selected`
@@ -3553,7 +3879,8 @@ class App extends React.Component {
                     h("th", null, "Label"),
                     h("th", null, "Developer Name"),
                     h("th", null, "Active"),
-                    h("th", null, "Description")
+                    h("th", null, "Description"),
+                    (this.state.builderMode || "plan") === "plan" && h("th", {className: "field-checkbox-col"}, "")
                   )
                 ),
                 h("tbody", null,
@@ -3562,7 +3889,14 @@ class App extends React.Component {
                       h("td", null, rt.label),
                       h("td", {className: "api-name-cell"}, rt.name),
                       h("td", {className: "req-cell"}, rt.active === false ? "" : "\u2713"),
-                      h("td", {className: "desc-cell"}, rt.description || "")
+                      h("td", {className: "desc-cell"}, rt.description || ""),
+                      (this.state.builderMode || "plan") === "plan" && h("td", {className: "field-checkbox-col"},
+                        h("button", {
+                          className: "plan-del-btn",
+                          title: `Remove record type "${rt.label}" from the plan`,
+                          onClick: () => this.deletePlanRecordType(i)
+                        }, "\u2715")
+                      )
                     )
                   )
                 )
@@ -3642,7 +3976,9 @@ class App extends React.Component {
             )
           )
         )
-      )
+      ),
+
+      h("div", {className: "app-footer"}, "Developed by ©Bhajan Mandali")
     );
   }
 
@@ -3653,7 +3989,15 @@ class App extends React.Component {
 }
 
 const urlParams = new URLSearchParams(window.location.search);
-const sfHost = urlParams.get("host");
+let sfHost = urlParams.get("host");
+// OAuth return carries ?code=&state= but no ?host=: recover it from state
+// so getSession() can exchange the code (it rewrites a clean URL after).
+if (!sfHost) {
+  try {
+    const oauthState = JSON.parse(decodeURIComponent(urlParams.get("state") || "null"));
+    if (oauthState && oauthState.sfHost) sfHost = oauthState.sfHost;
+  } catch (e) { /* ignore */ }
+}
 
 if (!sfHost) {
   document.getElementById("root").innerHTML = "<p style='padding:20px;color:red;'>Error: No Salesforce host specified. Please open this page from the extension popup.</p>";
@@ -3664,6 +4008,7 @@ if (!sfHost) {
       if (e.data?.type === "sfoc-save-state") {
         if (window.__sfocApp) {
           window.__sfocApp._saveState();
+          saveInspectorState(sfHost, window.__sfocApp.state);
         }
       }
     });
