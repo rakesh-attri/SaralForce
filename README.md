@@ -58,7 +58,6 @@ a plain-English explanation of what went wrong plus the corrected query, with
 
 <img src="docs/screenshots/ai-soql.png" alt="SOQL two-column editor with AI suggested fix" width="720">
 
-
 ## Installation
 
 ### Prerequisites
