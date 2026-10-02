@@ -71,19 +71,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return false;
 });
 
-chrome.action.onClicked.addListener(() => {
-  chrome.runtime.sendMessage({
-    msg: "shortcut_pressed", sfHost, command: "open-object-creator"
+// Content scripts only receive messages via chrome.tabs.sendMessage — the
+// runtime broadcast below never reached button.js.
+function sendShortcut(command) {
+  chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+    const tab = tabs && tabs[0];
+    if (tab && tab.id != null) {
+      chrome.tabs.sendMessage(tab.id, {msg: "shortcut_pressed", command}, () => {
+        void chrome.runtime.lastError; // tab has no content script — ignore
+      });
+    }
   });
-});
+}
 
-chrome.commands?.onCommand.addListener((command) => {
-  if (command === "open-object-creator") {
-    chrome.runtime.sendMessage({
-      msg: "shortcut_pressed", command, sfHost
-    });
-  }
-});
+chrome.action.onClicked.addListener(() => sendShortcut("open-object-creator"));
+
+chrome.commands?.onCommand.addListener(sendShortcut);
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === "install") {
@@ -96,4 +99,4 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 // Farewell page on uninstall. Chrome only allows http(s) uninstall URLs,
 // so addon/goodbye.html is hosted via GitHub Pages (repo Settings → Pages).
 // Preview locally by opening addon/goodbye.html in the browser.
-chrome.runtime.setUninstallURL("https://rakesh-attri.github.io/forceforge/addon/goodbye.html");
+chrome.runtime.setUninstallURL("https://rakesh-attri.github.io/sfMetaMind/addon/goodbye.html");

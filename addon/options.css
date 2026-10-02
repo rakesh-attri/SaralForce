@@ -21,6 +21,14 @@ body {
   margin-bottom: 24px;
 }
 
+.options-logo {
+  display: block;
+  width: 100%;
+  max-width: 430px;
+  height: auto;
+  margin: 0 auto 14px;
+}
+
 .options-header h1 {
   font-size: 22px;
   font-weight: 700;

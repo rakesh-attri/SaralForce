@@ -37,7 +37,7 @@
     btn.id = "sf-object-creator-btn";
     btn.style.cssText = `
       position: fixed;
-      top: 4px;
+      top: 40px;
       right: 4px;
       z-index: 2147483647;
       width: 32px;
@@ -56,8 +56,8 @@
       font-family: 'Salesforce Sans', Arial, sans-serif;
       opacity: 0.6;
     `;
-    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`;
-    btn.title = "ForceForge";
+    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="112" fill="#0a1c33"/><g fill="#ffffff"><circle cx="176" cy="272" r="74"/><circle cx="272" cy="222" r="98"/><circle cx="366" cy="276" r="68"/><rect x="176" y="272" width="190" height="66"/></g></svg>`;
+    btn.title = "sfMetaMind";
 
     btn.addEventListener("mouseenter", () => {
       btn.style.opacity = "1";
@@ -128,8 +128,8 @@
       `;
       header.innerHTML = `
         <span style="display:flex;align-items:center;gap:8px;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-          ForceForge
+          <svg width="14" height="14" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="112" fill="#0a1c33"/><g fill="#ffffff"><circle cx="176" cy="272" r="74"/><circle cx="272" cy="222" r="98"/><circle cx="366" cy="276" r="68"/><rect x="176" y="272" width="190" height="66"/></g></svg>
+          sfMetaMind
           <span style="font-weight:400;opacity:0.7;font-size:11px;">AI Toolkit</span>
         </span>
       `;
@@ -204,8 +204,8 @@
         padding: 0;
         border: none;
         border-radius: 8px 0 0 8px;
-        background: #032d60;
-        color: #fff;
+        background: #ffb35c;
+        color: #032d60;
         cursor: pointer;
         font-size: 12px;
         line-height: 1;

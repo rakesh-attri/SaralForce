@@ -131,18 +131,49 @@ function openRecordInSf(id, e) {
   window.open(ffRecordUrl(id), "_blank");
 }
 
-function ResultTable({columns, rows, maxRows, onRowClick, rowHint}) {
+// ─── Presentational helpers (visual only) ────────────────
+function fmtDateTime(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return String(value);
+  return d.toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit"
+  });
+}
+
+function fmtNum(n) {
+  return typeof n === "number" ? n.toLocaleString() : String(n);
+}
+
+function FFBadge({kind, children}) {
+  return h("span", {className: "ff-badge ff-badge-" + (kind || "info")}, children);
+}
+
+function ffTruthy(v) {
+  return v === true || v === "true";
+}
+
+function ResultTable({columns, rows, maxRows, onRowClick, rowHint, cellFmt}) {
   const shown = rows.slice(0, maxRows || 200);
   if (!columns.length) return h("div", {className: "insp-empty"}, "No rows");
-  // Trailing ↗ column only when at least one visible row carries a record Id
-  // (Id-less grids like the parsed-log table render exactly as before).
+  // ↗ gets its own column, right after Name (or at the row end when the
+  // query has no Name). Id-less grids render exactly as before.
   const idField = columns.includes("Id") ? "Id" : null;
   const showOpen = !!idField && shown.some(r => r && ffIsSfId(r[idField]));
+  const openIdx = columns.includes("Name")
+    ? columns.indexOf("Name") + 1
+    : columns.length;
+  const cells = showOpen
+    ? columns.slice(0, openIdx).concat("__open", columns.slice(openIdx))
+    : columns.slice();
   return h("div", {className: "insp-table-wrap"},
     h("table", {className: "insp-table"},
       h("thead", null,
-        h("tr", null, columns.map(c => h("th", {key: c}, c)),
-          showOpen && h("th", {key: "__open", className: "insp-open-col"}, ""))
+        h("tr", null, cells.map(c =>
+          c === "__open"
+            ? h("th", {key: c, className: "insp-open-col"})
+            : h("th", {key: c}, c)))
       ),
       h("tbody", null,
         shown.map((row, i) =>
@@ -152,19 +183,29 @@ function ResultTable({columns, rows, maxRows, onRowClick, rowHint}) {
             title: onRowClick ? (rowHint || "Click to show all data") : undefined,
             onClick: onRowClick ? () => onRowClick(row, i) : undefined
           },
-            columns.map(c =>
-              h("td", {key: c, title: row[c] == null ? "" : String(row[c])},
-                row[c] == null ? "" : String(row[c]))
-            ),
-            showOpen && h("td", {key: "__open", className: "insp-open-col"},
-              ffIsSfId(row[idField]) && h("a", {
-                href: ffRecordUrl(row[idField]),
-                target: "_blank",
-                rel: "noreferrer",
-                className: "insp-open-link",
-                title: "Open in Salesforce",
-                onClick: (e) => e.stopPropagation()
-              }, "↗"))
+            cells.map(c => {
+              if (c === "__open") {
+                return h("td", {key: c, className: "insp-open-col"},
+                  ffIsSfId(row[idField]) && h("a", {
+                    href: ffRecordUrl(row[idField]),
+                    target: "_blank",
+                    rel: "noreferrer",
+                    className: "insp-open-link",
+                    title: "Open in Salesforce",
+                    onClick: (e) => e.stopPropagation()
+                  }, "↗"));
+              }
+              const raw = row[c] == null ? "" : String(row[c]);
+              const isId = String(c).toLowerCase() === "id";
+              const title = row[c] == null ? ""
+                : (isId && onRowClick
+                  ? `${raw} — ${rowHint || "click: open all record data in a popup"}`
+                  : raw);
+              return h("td", {key: c, title},
+                row[c] == null ? ""
+                  : (cellFmt && cellFmt[c] ? cellFmt[c](row[c], row) : String(row[c]))
+              );
+            })
           )
         )
       )
@@ -245,7 +286,7 @@ function ffSaveJson(key, val) {
 }
 
 // ── Sidebar session snapshot ────────────────────────────────────────────────
-// Minimizing (main ForceForge button) destroys the sidebar iframe, so live
+// Minimizing (main sfMetaMind button) destroys the sidebar iframe, so live
 // React state dies with it. App._saveState serializes this snapshot into
 // sessionStorage on `sfoc-save-state` and restores it in the constructor on
 // reopen — same round-trip the builder chat already uses. Nothing writes the
@@ -524,213 +565,244 @@ function SoqlTab() {
     })
     .slice(0, 24);
 
+  // Deterministic pastel tone per field/object name (colourful pills, image-style)
+  const pillTone = (name) => {
+    let hv = 0;
+    const s = String(name || "");
+    for (let i = 0; i < s.length; i++) hv = (hv * 31 + s.charCodeAt(i)) >>> 0;
+    return hv % 8;
+  };
+
   return h("div", {className: "insp-panel"},
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("label", {className: "insp-check", title: "When a query fails, ask the configured LLM to explain the issue and suggest a fixed query"},
-        h("input", {
-          type: "checkbox",
-          checked: !!useLlm,
-          onChange: e => {
-            setUseLlm(e.target.checked);
-            ffSaveJson("ff_soql_use_llm", e.target.checked);
-          }
-        }),
-        h("span", null, "✨ Use LLM")
-      ),
-      (() => {
-        // Read live every render so what the frontend captured is always
-        // visible — no more guessing whether Options saved correctly.
-        const cfg = getSavedConfig();
-        const ok = hasValidConfig();
-        const def = cfg && cfg.provider ? getProviderConfig(cfg.provider) : null;
-        return h("span", {
-          className: "insp-meta",
-          title: ok
-            ? `Provider: ${cfg.provider}\nModel: ${cfg.model || "(default)"}\nKey: ${cfg.apiKey ? "••••" + String(cfg.apiKey).slice(-4) : "missing"}`
-            : "Open Settings (⚙ in the sidebar header) → choose provider, paste API key, Save Settings"
-        }, ok
-          ? `LLM: ${def ? def.name : cfg.provider} · ${cfg.model || "default"} ✓`
-          : "LLM: not configured");
-      })(),
-      h("label", {className: "insp-field"},
-        h("span", null, "Saved queries"),
-        h("select", {
-          value: "",
-          onChange: e => {
-            const hit = saved.find(s => s.label === e.target.value);
-            if (hit) setQuery(hit.q);
-            e.target.value = "";
-          }
-        },
-          h("option", {value: ""}, saved.length ? "— load —" : "No saved queries"),
-          saved.map(s => h("option", {key: s.label, value: s.label}, s.label))
-        )
-      ),
-      h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "Save current as"),
-        h("input", {
-          value: saveLabel,
-          placeholder: "Query label",
-          onChange: e => setSaveLabel(e.target.value),
-          onKeyDown: e => { if (e.key === "Enter") saveCurrent(); }
-        })
-      ),
-      h("button", {
-        className: "btn btn-secondary btn-sm",
-        disabled: !query.trim(),
-        onClick: saveCurrent
-      }, "Save Query"),
-      h("label", {className: "insp-field"},
-        h("span", null, "History"),
-        h("select", {
-          value: "",
-          onChange: e => {
-            if (e.target.value) { setQuery(e.target.value); run(e.target.value); }
-            e.target.value = "";
-          }
-        },
-          h("option", {value: ""}, history.length ? "— recent —" : "No history yet"),
-          history.map((hh, i) =>
-            h("option", {key: i, value: hh.q},
-              `${new Date(hh.ts).toLocaleString()} — ${hh.q.slice(0, 60)}`)
-          )
-        )
-      )
-    ),
-    h("div", {className: "insp-toolbar"},
-      h("label", {className: "insp-field"},
-        h("span", null, "Row limit"),
-        h("input", {
-          type: "number",
-          min: 1,
-          max: 20000,
-          value: limit,
-          onChange: e => setLimit(e.target.value)
-        })
-      ),
-      h("button", {
-        className: "btn btn-primary btn-sm",
-        disabled: loading,
-        onClick: () => run()
-      }, loading ? "Running…" : "Run SOQL"),
-      result && h("button", {
-        className: "btn btn-secondary btn-sm",
-        onClick: exportCsv
-      }, "Export CSV"),
-      (history.length > 0 || saved.length > 0) && h("button", {
-        className: "btn btn-secondary btn-sm",
-        onClick: clearHistory,
-        title: "Clear recent query history"
-      }, "Clear history")
-    ),
-    h("textarea", {
-      ref: taRef,
-      className: "insp-soql",
-      value: query,
-      spellCheck: false,
-      onChange: e => setQuery(e.target.value),
-      onKeyDown: e => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
-      },
-      placeholder: "SELECT Id, Name FROM Account LIMIT 50"
-    }),
-    saved.length > 0 && h("div", {className: "insp-chips-row"},
-      h("span", {className: "insp-chips-label"}, "Saved:"),
-      saved.slice(0, 12).map(s =>
-        h("span", {key: s.label, className: "insp-chip-group"},
-          h("button", {
-            className: "insp-chip",
-            title: s.q,
-            onClick: () => setQuery(s.q)
-          }, s.label),
-          h("button", {
-            className: "insp-chip-x",
-            title: `Delete "${s.label}"`,
-            onClick: () => deleteSaved(s.label)
-          }, "×")
-        )
-      )
-    ),
-    h("div", {className: "insp-chips-row"},
-      h("span", {className: "insp-chips-label"},
-        fromFields ? `Fields of ${fromObj}:` : "Objects:"),
-      h("input", {
-        className: "insp-chips-filter",
-        value: objFilter,
-        placeholder: fromFields ? "filter fields…" : "filter objects…",
-        onChange: e => setObjFilter(e.target.value)
-      })
-    ),
-    h("div", {className: "insp-chips"},
-      (fromFields
-        ? fromFields
-            .filter(f => !objFilter ||
-              f.name.toLowerCase().includes(objFilter.toLowerCase()) ||
-              (f.label || "").toLowerCase().includes(objFilter.toLowerCase()))
-            .slice(0, 30)
-            .map(f => h("button", {
-              key: f.name,
-              className: "insp-chip",
-              title: `${f.label} · ${f.type} — click to insert`,
-              onClick: () => insertAtCursor(f.name)
-            }, f.name))
-        : objChips.map(o => h("button", {
-            key: o.name,
-            className: "insp-chip",
-            title: `${o.label} — click to insert`,
-            onClick: () => insertAtCursor(trailingFrom ? o.name.slice(trailingFrom[1].length) + " " : ` ${o.name}`)
-          }, o.name))
-      ),
-      fromFields && h("button", {
-        className: "insp-chip insp-chip-alt",
-        onClick: () => setFromFields(null),
-        title: "Back to object suggestions"
-      }, "← objects")
-    ),
-    error && h("div", {className: "insp-error"}, error),
-    fixing && h("div", {className: "insp-meta"}, "✨ Asking LLM to fix the query…"),
-    fixError === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},
-      "LLM fix needs a provider + API key. ",
-      h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")
-    ),
-    fixError && fixError !== "NO_LLM_CONFIG" && h("div", {className: "insp-error"},
-      "LLM fix failed: " + fixError),
-    suggestion && h("div", {className: "insp-fix"},
-      h("div", {className: "insp-fix-title"}, "✨ Suggested fix"),
-      h("div", {className: "insp-fix-why"}, suggestion.explanation),
-      h("div", {className: "insp-fix-query"}, suggestion.fixedQuery),
-      h("div", {className: "insp-toolbar", style: {marginBottom: "0", marginTop: "8px"}},
+    h("div", {className: "soql-layout"},
+
+      // ── Left column (1/4): settings · row limit · history · saved ──
+      h("div", {className: "soql-side"},
+        h("div", {className: "soql-side-h"}, "LLM"),
+        (() => {
+          // Read live every render so what the frontend captured is always
+          // visible — no more guessing whether Options saved correctly.
+          const cfg = getSavedConfig();
+          const ok = hasValidConfig();
+          const def = cfg && cfg.provider ? getProviderConfig(cfg.provider) : null;
+          return h("label", {
+            className: "llm-chip" + (ok ? " ok" : " off"),
+            title: ok
+              ? `Provider: ${cfg.provider}\nModel: ${cfg.model || "(default)"}\nKey: ${cfg.apiKey ? "••••" + String(cfg.apiKey).slice(-4) : "missing"}\n(uncheck to stop asking the LLM when a query fails)`
+              : "Open Settings (⚙ in the sidebar header) → choose provider, paste API key, Save Settings"
+          },
+            h("input", {
+              type: "checkbox",
+              checked: !!useLlm,
+              onChange: e => {
+                setUseLlm(e.target.checked);
+                ffSaveJson("ff_soql_use_llm", e.target.checked);
+              }
+            }),
+            h("span", null, ok
+              ? `✨ ${def ? def.name : cfg.provider} · ${cfg.model || "default"}`
+              : "✨ LLM not configured")
+          );
+        })(),
+        h("label", {className: "insp-field"},
+          h("span", null, "Row limit"),
+          h("input", {
+            type: "number",
+            min: 1,
+            max: 20000,
+            value: limit,
+            onChange: e => setLimit(e.target.value)
+          })
+        ),
         h("button", {
-          className: "btn btn-primary btn-sm",
+          className: "btn btn-primary",
           disabled: loading,
-          onClick: () => { setQuery(suggestion.fixedQuery); run(suggestion.fixedQuery); }
-        }, loading ? "Running…" : "Apply & Run"),
-        h("button", {
+          onClick: () => run()
+        }, loading ? "Running…" : "▶ Run SOQL"),
+        h("div", {className: "soql-side-h"}, "History"),
+        h("label", {className: "insp-field"},
+          h("select", {
+            value: "",
+            onChange: e => {
+              if (e.target.value) { setQuery(e.target.value); run(e.target.value); }
+              e.target.value = "";
+            }
+          },
+            h("option", {value: ""}, history.length ? "— recent queries —" : "No history yet"),
+            history.map((hh, i) =>
+              h("option", {key: i, value: hh.q},
+                `${new Date(hh.ts).toLocaleString()} — ${hh.q.slice(0, 60)}`)
+            )
+          )
+        ),
+        h("div", {className: "soql-side-h"}, "Saved queries"),
+        saved.length > 0
+          ? h("div", {className: "insp-chips soql-saved-chips"},
+              saved.slice(0, 12).map(s =>
+                h("span", {key: s.label, className: "insp-chip-group"},
+                  h("button", {
+                    className: "insp-chip",
+                    title: s.q,
+                    onClick: () => setQuery(s.q)
+                  }, s.label),
+                  h("button", {
+                    className: "insp-chip-x",
+                    title: `Delete "${s.label}"`,
+                    onClick: () => deleteSaved(s.label)
+                  }, "×")
+                )
+              )
+            )
+          : h("div", {className: "insp-meta"}, "Save a query to reuse it later."),
+        h("div", {className: "soql-save-row"},
+          h("input", {
+            className: "soql-save-input",
+            value: saveLabel,
+            placeholder: "Query label",
+            onChange: e => setSaveLabel(e.target.value),
+            onKeyDown: e => { if (e.key === "Enter") saveCurrent(); }
+          }),
+          h("button", {
+            className: "btn btn-primary btn-sm",
+            disabled: !query.trim(),
+            onClick: saveCurrent
+          }, "Save Query")
+        ),
+        history.length > 0 && h("button", {
           className: "btn btn-secondary btn-sm",
-          onClick: async () => {
-            try { await navigator.clipboard.writeText(suggestion.fixedQuery); }
-            catch (e) { /* ignore */ }
-          }
-        }, "Copy")
+          onClick: clearHistory,
+          title: "Clear recent query history"
+        }, "Clear history")
+      ),
+
+      // ── Right column (3/4): editor · field explorer · results ──
+      h("div", {className: "soql-main"},
+        h("div", {className: "insp-card-header"},
+          h("div", {className: "insp-card-title"}, "SOQL Query Editor"),
+          h("div", {className: "insp-card-actions"},
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: !query.trim(),
+              onClick: saveCurrent
+            }, "Save Query"),
+            result && h("button", {
+              className: "btn btn-secondary btn-sm",
+              onClick: exportCsv
+            }, "Export CSV")
+          )
+        ),
+        h("div", {className: "soql-editor-box"},
+          h("textarea", {
+            ref: taRef,
+            className: "insp-soql soql-editor",
+            value: query,
+            spellCheck: false,
+            onChange: e => setQuery(e.target.value),
+            onKeyDown: e => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
+            },
+            placeholder: "SELECT Id, Name FROM Account LIMIT 50"
+          }),
+          h("div", {className: "soql-hint-row"},
+            h("span", null,
+              h("kbd", null, "Ctrl"), " / ", h("kbd", null, "⌘"),
+              " + ", h("kbd", null, "Enter"), " to run")
+          )
+        ),
+        error && h("div", {className: "insp-error"}, error),
+        fixing && h("div", {className: "insp-meta"}, "✨ Asking LLM to fix the query…"),
+        fixError === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},
+          "LLM fix needs a provider + API key. ",
+          h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")
+        ),
+        fixError && fixError !== "NO_LLM_CONFIG" && h("div", {className: "insp-error"},
+          "LLM fix failed: " + fixError),
+        suggestion && h("div", {className: "insp-fix"},
+          h("div", {className: "insp-fix-title"}, "✨ Suggested fix"),
+          h("div", {className: "insp-fix-why"}, suggestion.explanation),
+          h("div", {className: "insp-fix-query"}, suggestion.fixedQuery),
+          h("div", {className: "insp-toolbar", style: {marginBottom: "0", marginTop: "8px"}},
+            h("button", {
+              className: "btn btn-primary btn-sm",
+              disabled: loading,
+              onClick: () => { setQuery(suggestion.fixedQuery); run(suggestion.fixedQuery); }
+            }, loading ? "Running…" : "Apply & Run"),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              onClick: async () => {
+                try { await navigator.clipboard.writeText(suggestion.fixedQuery); }
+                catch (e) { /* ignore */ }
+              }
+            }, "Copy")
+          )
+        ),
+
+        // Field Explorer — colourful pill tags + in-field search icon
+        h("div", {className: "soql-explorer-h"},
+          h("div", {className: "insp-card-title"},
+            fromFields ? `Available Fields · ${fromObj}` : "Available Objects"),
+          h("div", {className: "soql-search"},
+            h("svg", {
+              className: "soql-search-ico",
+              width: 14, height: 14, viewBox: "0 0 24 24",
+              fill: "currentColor", "aria-hidden": "true"
+            }, h("path", {
+              d: "M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"
+            })),
+            h("input", {
+              className: "soql-search-input",
+              value: objFilter,
+              placeholder: fromFields ? "filter fields…" : "filter objects…",
+              onChange: e => setObjFilter(e.target.value)
+            })
+          )
+        ),
+        h("div", {className: "insp-chips soql-fields"},
+          (fromFields
+            ? fromFields
+                .filter(f => !objFilter ||
+                  f.name.toLowerCase().includes(objFilter.toLowerCase()) ||
+                  (f.label || "").toLowerCase().includes(objFilter.toLowerCase()))
+                .slice(0, 60)
+                .map(f => h("button", {
+                  key: f.name,
+                  className: "insp-chip t" + pillTone(f.name),
+                  title: `${f.label} · ${f.type} — click to insert`,
+                  onClick: () => insertAtCursor(f.name)
+                }, f.name))
+            : objChips.map(o => h("button", {
+                key: o.name,
+                className: "insp-chip t" + pillTone(o.name),
+                title: `${o.label} — click to insert`,
+                onClick: () => insertAtCursor(trailingFrom ? o.name.slice(trailingFrom[1].length) + " " : ` ${o.name}`)
+              }, o.name))
+          ),
+          fromFields && h("button", {
+            className: "insp-chip insp-chip-alt",
+            onClick: () => setFromFields(null),
+            title: "Back to object suggestions"
+          }, "← objects")
+        ),
+
+        result && h("div", {className: "insp-meta"},
+          `${result.totalSize} row(s) · pages OK · query ends LIMIT ${/\blimit\s+(\d+)/i.exec(result.query)?.[1] || "—"}`
+        ),
+        result && h(ResultTable, {
+          columns: result.columns,
+          rows: result.rows,
+          maxRows: 300,
+          onRowClick: openSoqlDetail,
+          rowHint: "Click to show all data"
+        }),
+        detailHint && h("div", {className: "insp-meta"}, detailHint),
+        (soqlDetailLoading || soqlDetail) && h(RecordDetailPanel, {
+          detail: soqlDetail,
+          loading: soqlDetailLoading,
+          onBack: () => setSoqlDetail(null),
+          onSave: saveSoqlDetailChanges
+        })
       )
-    ),
-    result && h("div", {className: "insp-meta"},
-      `${result.totalSize} row(s) · pages OK · query ends LIMIT ${/\blimit\s+(\d+)/i.exec(result.query)?.[1] || "—"}`
-    ),
-    result && h(ResultTable, {
-      columns: result.columns,
-      rows: result.rows,
-      maxRows: 300,
-      onRowClick: openSoqlDetail,
-      rowHint: "Click to show all data"
-    }),
-    detailHint && h("div", {className: "insp-meta"}, detailHint),
-    (soqlDetailLoading || soqlDetail) && h(RecordDetailPanel, {
-      detail: soqlDetail,
-      loading: soqlDetailLoading,
-      onBack: () => setSoqlDetail(null),
-      onSave: saveSoqlDetailChanges
-    }),
+    )
   );
 }
 
@@ -1178,26 +1250,21 @@ function OrgTab() {
 
   React.useEffect(() => { load(); }, []);
 
-  const rows = [];
+  const details = [];
   if (info?.org) {
     const o = info.org;
-    rows.push(["Org Name", o.Name]);
-    rows.push(["Instance", o.InstanceName]);
-    rows.push(["Type", o.OrganizationType]);
-    rows.push(["Sandbox", o.IsSandbox ? "Yes" : "No"]);
-    rows.push(["Locale", o.DefaultLocaleSidKey]);
-    rows.push(["Fiscal year starts", o.FiscalYearStartMonth]);
-    if (o.TrialExpirationDate) rows.push(["Trial expires", o.TrialExpirationDate]);
+    if (o.FiscalYearStartMonth) details.push(["Fiscal year starts", o.FiscalYearStartMonth]);
   }
   if (info?.user) {
     const u = info.user;
-    rows.push(["User", u.preferred_username || u.username || u.Email || u.name || ""]);
-    if (u.organization_id) rows.push(["Org Id", u.organization_id]);
-    if (u.user_id || u.Id) rows.push(["User Id", u.user_id || u.Id]);
+    details.push(["User", u.preferred_username || u.username || u.Email || u.name || ""]);
+    if (u.organization_id) details.push(["Org Id", u.organization_id]);
+    if (u.user_id || u.Id) details.push(["User Id", u.user_id || u.Id]);
   }
-  if (info?.customObjects != null) rows.push(["Customizable objects", String(info.customObjects)]);
+  if (info?.customObjects != null) details.push(["Customizable objects", fmtNum(info.customObjects)]);
 
-  const limitRows = [];
+  const limitTiles = [];
+  const limitPlain = [];
   if (info?.limits) {
     const L = info.limits;
     const aliases = [
@@ -1214,40 +1281,89 @@ function OrgTab() {
       let bucket = null;
       for (const k of keys) bucket = L[k] || bucket;
       if (bucket && typeof bucket === "object") {
-        limitRows.push([
-          label,
-          bucket.Max != null
-            ? `max ${bucket.Max}` + (bucket.Remaining != null ? ` · remaining ${bucket.Remaining}` : "")
-            : JSON.stringify(bucket)
-        ]);
+        if (bucket.Max != null) {
+          limitTiles.push({label, max: bucket.Max, remaining: bucket.Remaining});
+        } else {
+          limitPlain.push([label, JSON.stringify(bucket)]);
+        }
       }
     }
   }
 
+  const org = info && info.org;
+  const orgRows = [];
+  if (org) {
+    orgRows.push(["Org Name", org.Name || "Organization"]);
+    if (org.InstanceName) orgRows.push(["Instance", org.InstanceName]);
+    if (org.OrganizationType) orgRows.push(["Organization Type", org.OrganizationType]);
+    if (org.IsSandbox != null) orgRows.push(["Environment", org.IsSandbox ? "Sandbox" : "Production"]);
+    if (org.DefaultLocaleSidKey) orgRows.push(["Locale", org.DefaultLocaleSidKey]);
+    if (org.TrialExpirationDate) orgRows.push(["Trial ends", fmtDateTime(org.TrialExpirationDate)]);
+  }
+  for (const [k, v] of details) orgRows.push([k, v]);
+
   return h("div", {className: "insp-panel"},
-    h("div", {className: "insp-toolbar"},
-      h("button", {
-        className: "btn btn-primary btn-sm",
-        disabled: loading,
-        onClick: load
-      }, loading ? "Loading…" : "Refresh org info")
-    ),
-    error && h("div", {className: "insp-error"}, error),
-    info && h("div", {className: "insp-kv"},
-      h("div", {className: "insp-kv-title"}, "Organization"),
-      rows.map(([k, v]) =>
-        h("div", {key: k, className: "insp-kv-row"},
-          h("span", {className: "insp-kv-k"}, k),
-          h("span", {className: "insp-kv-v"}, v == null || v === "" ? "—" : String(v))
-        )
+    h("div", {className: "insp-card-header"},
+      h("div", {className: "insp-card-title"}, "Org Details & Limits"),
+      h("div", {className: "insp-card-actions"},
+        h("button", {
+          className: "btn btn-primary btn-sm",
+          disabled: loading,
+          onClick: load
+        }, loading ? "Loading…" : "Refresh org info")
       )
     ),
-    limitRows.length > 0 && h("div", {className: "insp-kv"},
-      h("div", {className: "insp-kv-title"}, "Limits"),
-      limitRows.map(([k, v]) =>
-        h("div", {key: k, className: "insp-kv-row"},
-          h("span", {className: "insp-kv-k"}, k),
-          h("span", {className: "insp-kv-v"}, v)
+    error && h("div", {className: "insp-error"}, error),
+    info && h("div", {className: "org-grid"},
+
+      // General details — description list, Users-view style
+      h("div", {className: "org-card"},
+        h("div", {className: "org-card-h"},
+          h("span", {className: "org-card-ico"}, "🏢"),
+          h("span", {className: "org-card-t"}, "Organization")
+        ),
+        orgRows.length > 0
+          ? h("dl", {className: "org-dl"},
+              orgRows.map(([k, v]) =>
+                h("div", {key: k, className: "org-dl-row"},
+                  h("dt", null, k),
+                  h("dd", null, v == null || v === "" ? "—" : String(v))
+                )
+              )
+            )
+          : h("div", {className: "insp-empty"}, "No data yet")
+      ),
+
+      // Limits — visual progress bars only, no "X remaining" sentences
+      h("div", {className: "org-card"},
+        h("div", {className: "org-card-h"},
+          h("span", {className: "org-card-ico"}, "📈"),
+          h("span", {className: "org-card-t"}, "API Limits")
+        ),
+        limitTiles.length > 0
+          ? limitTiles.map(r => {
+              const remaining = r.remaining != null ? r.remaining : r.max;
+              const pct = r.max > 0
+                ? Math.max(0, Math.min(100, Math.round(remaining / r.max * 100)))
+                : 100;
+              const kind = pct > 60 ? "" : (pct > 30 ? " warn" : " crit");
+              return h("div", {key: r.label, className: "limit-item"},
+                h("div", {className: "limit-label"}, r.label),
+                h("div", {className: "limit-bar"},
+                  h("div", {className: "limit-fill" + kind, style: {width: pct + "%"}})),
+                h("div", {className: "limit-foot"},
+                  h("span", null, `${fmtNum(remaining)} / ${fmtNum(r.max)}`),
+                  h("span", {className: "limit-pct"}, `${pct}%`))
+              );
+            })
+          : h("div", {className: "insp-empty"}, "No limit data"),
+        limitPlain.length > 0 && h("dl", {className: "org-dl"},
+          limitPlain.map(([k, v]) =>
+            h("div", {key: k, className: "org-dl-row"},
+              h("dt", null, k),
+              h("dd", null, v)
+            )
+          )
         )
       )
     )
@@ -2038,7 +2154,7 @@ async function appTabsResolveCurrentUserId() {
       const uid = data?.user_id || data?.userId || (data?.sub ? String(data.sub).split("/").pop() : null);
       if (uid) return uid;
     } catch (e) {
-      console.warn("[ForceForge] AppTabs identity lookup failed for", u, e.message);
+      console.warn("[sfMetaMind] AppTabs identity lookup failed for", u, e.message);
     }
   }
   throw new Error("Could not get user identity (tried userinfo and /id, last status " + lastStatus + ")");
@@ -2072,7 +2188,7 @@ async function appTabsEnsureTabVisibleForMe(tabApiName) {
         return nn && targets.some(t => nn.startsWith(t) || t.startsWith(nn));
       }) || label;
   } catch (e) {
-    console.warn("[ForceForge] AppTabs profile listMetadata failed:", e.message);
+    console.warn("[sfMetaMind] AppTabs profile listMetadata failed:", e.message);
   }
   const xml = `<met:metadata xsi:type="met:Profile">` +
     `<met:fullName>${appTabsEscXml(fullName)}</met:fullName>` +
@@ -2090,7 +2206,7 @@ async function appTabsTabExists(tabApiName) {
     const names = await appTabsListMetadataFullNames("CustomTab");
     if (names.some(n => String(n).trim().toLowerCase() === want)) return true;
   } catch (e) {
-    console.warn("[ForceForge] AppTabs tab-exists listMetadata failed:", e.message);
+    console.warn("[sfMetaMind] AppTabs tab-exists listMetadata failed:", e.message);
   }
   try {
     const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
@@ -2099,7 +2215,7 @@ async function appTabsTabExists(tabApiName) {
       {useCache: false});
     if (res.records && res.records.length) return true;
   } catch (e) {
-    console.warn("[ForceForge] AppTabs tab-exists Tooling failed:", e.message);
+    console.warn("[sfMetaMind] AppTabs tab-exists Tooling failed:", e.message);
   }
   return false;
 }
@@ -2142,7 +2258,7 @@ async function appTabsLoadApps() {
       }
       if (apps.length) break;
     } catch (e) {
-      console.warn("[ForceForge] AppTabs Tooling query failed:", e.message);
+      console.warn("[sfMetaMind] AppTabs Tooling query failed:", e.message);
     }
   }
   // Reconcile with listMetadata truth: standard apps (ServiceConsole, Sales…)
@@ -2156,7 +2272,7 @@ async function appTabsLoadApps() {
       if (!nameSet.has(a.fullName.toLowerCase())) {
         const prefixed = "standard__" + a.fullName;
         if (nameSet.has(prefixed.toLowerCase())) {
-          console.log(`[ForceForge] AppTabs standard prefix: ${a.fullName} → ${prefixed}`);
+          console.log(`[sfMetaMind] AppTabs standard prefix: ${a.fullName} → ${prefixed}`);
           seen.delete(a.fullName.toLowerCase());
           a.fullName = prefixed;
           seen.add(prefixed.toLowerCase());
@@ -2167,7 +2283,7 @@ async function appTabsLoadApps() {
       push(n, n);
     }
   } catch (e) {
-    console.warn("[ForceForge] AppTabs listMetadata reconcile failed:", e.message);
+    console.warn("[sfMetaMind] AppTabs listMetadata reconcile failed:", e.message);
   }
   apps.sort((a, b) => a.label.localeCompare(b.label));
   if (!apps.length) throw new Error("No apps found (Tooling + listMetadata both empty)");
@@ -2199,14 +2315,14 @@ async function appTabsLoadCustomTabs() {  const tabs = [];
       }
       if (tabs.length) break;
     } catch (e) {
-      console.warn("[ForceForge] AppTabs CustomTab query failed:", e.message);
+      console.warn("[sfMetaMind] AppTabs CustomTab query failed:", e.message);
     }
   }
   try {
     const names = await appTabsListMetadataFullNames("CustomTab");
     for (const n of names) push(n, n);
   } catch (e) {
-    console.warn("[ForceForge] AppTabs listMetadata CustomTab failed:", e.message);
+    console.warn("[sfMetaMind] AppTabs listMetadata CustomTab failed:", e.message);
   }
   tabs.sort((a, b) => a.label.localeCompare(b.label));
   return tabs;
@@ -2373,7 +2489,7 @@ function AppTabsTab() {
         ? fnEl.textContent.trim()
         : fullName;
       let existing = appTabsOfRecords(records);
-      console.log(`[ForceForge] AppTabs read "${realName}": tabs=[${existing.join(", ")}]`);
+      console.log(`[sfMetaMind] AppTabs read "${realName}": tabs=[${existing.join(", ")}]`);
       if (existing.includes(tab)) {
         setStatus(`"${tab}" is already on "${realName}" — nothing to do. If you still don't see it, switch apps once to refresh the nav bar.`);
         setCurrentTabs(existing);
@@ -2450,7 +2566,7 @@ function AppTabsTab() {
             ws.appendChild(mapping);
             mapped.add(t);
           }
-          console.log(`[ForceForge] AppTabs workspace mappings ensured for console app (${mapped.size} mapped)`);
+          console.log(`[sfMetaMind] AppTabs workspace mappings ensured for console app (${mapped.size} mapped)`);
         }
       }
       // Standard apps must be written as standard__Name — retry with the
@@ -2462,7 +2578,7 @@ function AppTabsTab() {
         if (/no CustomApplication named/i.test(ue.message || "") &&
             !/^standard__/i.test(writeName)) {
           writeName = "standard__" + writeName;
-          console.log(`[ForceForge] AppTabs retrying update as "${writeName}"`);
+          console.log(`[sfMetaMind] AppTabs retrying update as "${writeName}"`);
           await appTabsUpdateRecords(writeName, records);
         } else {
           throw ue;
@@ -2476,7 +2592,7 @@ function AppTabsTab() {
         await new Promise(r => setTimeout(r, 1500));
         const verify = await appTabsReadRecords(writeName);
         postTabs = appTabsOfRecords(verify);
-        console.log(`[ForceForge] AppTabs verify "${writeName}" attempt ${i + 1}: tabs=[${postTabs.join(", ")}]`);
+        console.log(`[sfMetaMind] AppTabs verify "${writeName}" attempt ${i + 1}: tabs=[${postTabs.join(", ")}]`);
         if (postTabs.includes(tab)) { ok = true; break; }
       }
       setCurrentTabs(postTabs);
@@ -2559,8 +2675,18 @@ function AppTabsTab() {
   const dupes = selApp ? apps.filter(a => a.label === selApp.label) : [];
 
   return h("div", {className: "insp-panel"},
-    h("p", {className: "app-section-hint"},
+    h("p", {className: "insp-hint-strip"},
       "Standalone tool — no deploy needed. Pick the app by its metadata Developer Name (from Tooling, not the display label), pick or type the tab API name, then add. Every write is verified by re-reading the app metadata."
+    ),
+    h("div", {className: "insp-card-header"},
+      h("div", {className: "insp-card-title"}, "1 · Choose app"),
+      h("div", {className: "insp-card-actions"},
+        h("button", {
+          className: "btn btn-secondary btn-sm",
+          disabled: appsLoading || tabsLoading || working,
+          onClick: loadAll
+        }, (appsLoading || tabsLoading) ? "Loading…" : "Reload apps + tabs")
+      )
     ),
     h("div", {className: "insp-toolbar insp-toolbar-wrap"},
       h("label", {className: "insp-field insp-field-grow"},
@@ -2575,20 +2701,18 @@ function AppTabsTab() {
               `${a.label} (${a.fullName})`)
           )
         )
-      ),
-      h("button", {
-        className: "btn btn-secondary btn-sm",
-        disabled: appsLoading || tabsLoading || working,
-        onClick: loadAll
-      }, (appsLoading || tabsLoading) ? "Loading…" : "Reload apps + tabs")
+      )
     ),
     dupes.length > 1 && h("div", {className: "insp-warn"},
       `Warning: ${dupes.length} apps share the label "${selApp.label}" (${dupes.map(a => a.fullName).join(", ")}). ` +
       `Only the exact DeveloperName you update will change. Use the resolver below to pin the one you actually open.`
     ),
+    h("div", {className: "insp-card-header"},
+      h("div", {className: "insp-card-title"}, "2 · Pin exact app (optional)")
+    ),
     h("div", {className: "insp-toolbar insp-toolbar-wrap"},
       h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "Exact app? paste its App Manager URL or record Id"),
+        h("span", null, "App URL or record Id"),
         h("input", {
           value: appRef,
           placeholder: "https://…/lightning/setup/…/02u…  (or just the 02u… Id)",
@@ -2605,6 +2729,9 @@ function AppTabsTab() {
       }, resolving ? "Resolving…" : "Find app")
     ),
     refMsg && h("div", {className: refMsg.ok ? "insp-ok" : "insp-error"}, refMsg.text),
+    h("div", {className: "insp-card-header"},
+      h("div", {className: "insp-card-title"}, "3 · Add tab")
+    ),
     h("div", {className: "insp-toolbar insp-toolbar-wrap"},
       h("label", {className: "insp-field insp-field-grow"},
         h("span", null, "Tab API name"),
@@ -2648,10 +2775,25 @@ function AppTabsTab() {
         disabled: currentLoading || !sel || working,
         onClick: () => refreshCurrent()
       }, currentLoading ? "Reading…" : "Show current tabs"),
-      sel && h("span", {className: "insp-meta"}, `Target: ${selLabel} → ${sel}`)
+      sel && h("span", {className: "ff-badge ff-badge-info"},
+        `${selLabel} → ${sel}`)
     ),
-    currentTabs && h("div", {className: "insp-meta"},
-      `Current tabs on ${sel} (${currentTabs.length}): ${currentTabs.join(", ") || "none"}`
+    currentTabs && h("div", {className: "insp-current"},
+      h("div", {className: "insp-chips-label"},
+        `Current tabs on ${sel} (${currentTabs.length}):`),
+      currentTabs.length
+        ? h("div", {className: "insp-chips"},
+            currentTabs.map(t =>
+              h("button", {
+                key: t,
+                className: "insp-chip",
+                title: "Click to fill the Tab API name field",
+                disabled: working,
+                onClick: () => setTabName(t)
+              }, t)
+            )
+          )
+        : h("div", {className: "insp-empty"}, "none")
     ),
     status && h("div", {className: "insp-ok"}, status),
     error && h("div", {className: "insp-error"}, error),
@@ -3051,22 +3193,19 @@ function UsersTab() {
   };
 
   return h("div", {className: "insp-panel"},
-    h("p", {className: "app-section-hint"},
+    h("p", {className: "insp-hint-strip"},
       "Search users, inspect details, log in as a user, or capture debug logs — all without leaving the extension."
     ),
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "Name, username, email or alias"),
-        h("input", {
-          value: q,
-          placeholder: "e.g. shiva or user@org.com",
-          disabled: loading,
-          onChange: e => setQ(e.target.value),
-          onKeyDown: e => { if (e.key === "Enter") search(); }
-        })
-      ),
+    h("div", {className: "insp-cmdbar"},
+      h("input", {
+        value: q,
+        placeholder: "Search by name, username, email or alias…",
+        disabled: loading,
+        onChange: e => setQ(e.target.value),
+        onKeyDown: e => { if (e.key === "Enter") search(); }
+      }),
       h("button", {
-        className: "btn btn-primary btn-sm",
+        className: "btn btn-primary",
         disabled: loading || !q.trim(),
         onClick: search
       }, loading ? "Searching…" : "Search users")
@@ -3077,31 +3216,51 @@ function UsersTab() {
       rows: users,
       maxRows: 50,
       onRowClick: (row) => selectUser(row),
-      rowHint: "Click to select user"
+      rowHint: "Click to select user",
+      cellFmt: {
+        Active: v => h(FFBadge, {kind: ffTruthy(v) ? "ok" : "off"},
+          ffTruthy(v) ? "Active" : "Inactive"),
+        LastLogin: v => v
+          ? h("span", {className: "ff-date", title: String(v)}, fmtDateTime(v))
+          : ""
+      }
     }),
-    sel && h("div", {className: "insp-kv"},
-      h("div", {className: "insp-kv-title"}, `User: ${sel.Name} (${sel.Alias})`),
-      h("div", {className: "insp-kv-row"},
-        h("span", {className: "insp-kv-k"}, "Username"),
-        h("span", {className: "insp-kv-v"}, sel.Username)),
-      h("div", {className: "insp-kv-row"},
-        h("span", {className: "insp-kv-k"}, "Id"),
-        h("span", {className: "insp-kv-v"}, sel.Id)),
-      h("div", {className: "insp-kv-row"},
-        h("span", {className: "insp-kv-k"}, "E-mail"),
-        h("span", {className: "insp-kv-v"}, sel.Email || "—")),
-      h("div", {className: "insp-kv-row"},
-        h("span", {className: "insp-kv-k"}, "Profile"),
-        h("span", {className: "insp-kv-v"},
-          detailLoading ? "…" : (detail ? detail.profile : "—"))),
-      h("div", {className: "insp-kv-row"},
-        h("span", {className: "insp-kv-k"}, "Language"),
-        h("span", {className: "insp-kv-v"}, sel.Language || "—")),
-      h("div", {className: "insp-kv-row"},
-        h("span", {className: "insp-kv-k"}, "Last login"),
-        h("span", {className: "insp-kv-v"},
-          detailLoading ? "…" : (detail && detail.lastLogin ? detail.lastLogin : "—"))),
-      h("div", {className: "insp-toolbar insp-toolbar-wrap", style: {marginTop: "8px", marginBottom: "0"}},
+    sel && h("div", {className: "user-card"},
+      h("div", {className: "user-head"},
+        h("div", {className: "user-avatar"},
+          (sel.Alias || sel.Name || "?").slice(0, 2).toUpperCase()),
+        h("div", {style: {minWidth: 0}},
+          h("div", {className: "user-name"},
+            sel.Name,
+            sel.Alias ? ` (${sel.Alias})` : "",
+            " ",
+            sel.Active != null && h(FFBadge, {kind: ffTruthy(sel.Active) ? "ok" : "off"},
+              ffTruthy(sel.Active) ? "Active" : "Inactive")
+          ),
+          h("div", {className: "user-handle"}, sel.Username)
+        )
+      ),
+      h("div", {className: "user-chips"},
+        h(FFBadge, {kind: "info"},
+          detailLoading ? "Loading profile…" : (detail ? detail.profile : "Profile")),
+        sel.Language && h(FFBadge, {key: "lang"}, sel.Language)
+      ),
+      h("div", null,
+        h("div", {className: "insp-kv-row"},
+          h("span", {className: "insp-kv-k"}, "Id"),
+          h("span", {className: "insp-kv-v ff-mono"}, sel.Id)),
+        h("div", {className: "insp-kv-row"},
+          h("span", {className: "insp-kv-k"}, "E-mail"),
+          h("span", {className: "insp-kv-v"}, sel.Email || "—")),
+        h("div", {className: "insp-kv-row"},
+          h("span", {className: "insp-kv-k"}, "Last login"),
+          h("span", {
+            className: "insp-kv-v ff-date",
+            title: detail && detail.lastLogin ? String(detail.lastLogin) : ""
+          },
+            detailLoading ? "…" : (detail && detail.lastLogin ? fmtDateTime(detail.lastLogin) : "—")))
+      ),
+      h("div", {className: "user-actions"},
         h("button", {
           className: "btn btn-primary btn-sm",
           disabled: busy === "login",
@@ -3262,8 +3421,38 @@ function UsersTab() {
 // Runs anonymous Apex through the Tooling API (the same endpoint the
 // Developer Console's "Open Execute Anonymous Window" uses) and pulls
 // the resulting debug log — no Dev Console needed.
+const APEX_KEYWORDS = new Set((
+  "abstract and as before boolean break byte case cast catch char class const continue " +
+  "currency date datetime decimal default delete desc do double else enum export extends " +
+  "false final finally float for from global goto group having if implements import in inner " +
+  "insert instanceof int integer interface into like limit list long loop map merge new not " +
+  "null object on or outer override package private protected public return returning search " +
+  "select set short static super switch synchronized testmethod this throw throws transient " +
+  "trigger try undelete update upsert using virtual void webservice when where while with without"
+).split(" "));
+
+function apexHighlight(src) {
+  const text = String(src == null ? "" : src);
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")|\b(\d+(?:\.\d+)?)\b|\b([A-Za-z_][A-Za-z0-9_]*)\b/g;
+  let out = "";
+  let last = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    out += esc(text.slice(last, m.index));
+    if (m[1]) out += `<span class="tok-c">${esc(m[1])}</span>`;
+    else if (m[2]) out += `<span class="tok-s">${esc(m[2])}</span>`;
+    else if (m[3]) out += `<span class="tok-n">${esc(m[3])}</span>`;
+    else if (APEX_KEYWORDS.has(m[4].toLowerCase())) out += `<span class="tok-k">${esc(m[4])}</span>`;
+    else out += esc(m[4]);
+    last = m.index + m[0].length;
+  }
+  out += esc(text.slice(last));
+  return out;
+}
+
 const APEX_TEMPLATES = [
-  {label: "Debug test", code: "System.debug('Hello from ForceForge');"},
+  {label: "Debug test", code: "System.debug('Hello from sfMetaMind');"},
   {label: "Query loop", code:
 `List<Account> accs = [SELECT Id, Name FROM Account LIMIT 5];
 for (Account a : accs) {
@@ -3281,11 +3470,18 @@ async function apexExecute(code) {
   return res || {};
 }
 
-async function apexLatestLog() {
+async function apexLatestLog(sinceIso) {
   const userId = await appTabsResolveCurrentUserId();
-  const since = new Date().toISOString().replace(/\.\d+Z$/, "Z");
-  const soql = `SELECT Id FROM ApexLog WHERE LogUserId = '${userId}' ` +
-    `AND StartTime >= ${since} ORDER BY StartTime DESC LIMIT 1`;
+  let soql = `SELECT Id FROM ApexLog WHERE LogUserId = '${userId}'`;
+  if (sinceIso) {
+    // Window from run start minus clock-skew margin — never "now": the fresh
+    // log's StartTime is seconds in the past by the time we query for it.
+    const t = new Date(new Date(sinceIso).getTime() - 10000);
+    if (!isNaN(t.getTime())) {
+      soql += ` AND StartTime >= ${t.toISOString().replace(/\.\d+Z$/, "Z")}`;
+    }
+  }
+  soql += " ORDER BY StartTime DESC LIMIT 1";
   const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
     encodeURIComponent(soql), {useCache: false});
   if (!res.records || !res.records.length) return null;
@@ -3300,27 +3496,38 @@ async function apexLatestLog() {
 // Continuation lines attach to the previous row.
 function parseApexLog(text) {
   const rows = [];
-  const re = /^(\d{1,2}:\d{2}:\d{2}:\d{1,3})\s+([A-Z][A-Z0-9_]*)\s*(.*)$/;
+  // Pipe format (modern): 18:20:45.1 (1444464)|USER_INFO|[EXTERNAL]|…
+  const rePipe = /^(\d{1,2}:\d{2}:\d{2})[:.](\d+)\s*(?:\(\d+\))?\|([A-Z][A-Z0-9_]*)\|(.*)$/;
+  // Space format (older): 18:16:06:001 USER_INFO [EXTERNAL]|…
+  const reSpace = /^(\d{1,2}:\d{2}:\d{2}:\d{1,3})\s+([A-Z][A-Z0-9_]*)(?:\s+(.*))?$/;
+  const pad = d => String(d || "0").padEnd(3, "0").slice(0, 3);
   for (const line of String(text || "").split("\n")) {
     if (!line.trim()) continue;
-    const m = re.exec(line);
+    let m = rePipe.exec(line);
+    if (m) {
+      rows.push({ts: `${m[1]}:${pad(m[2])}`, event: m[3], details: m[4] || ""});
+      continue;
+    }
+    m = reSpace.exec(line);
     if (m) {
       rows.push({ts: m[1], event: m[2], details: m[3] || ""});
-    } else if (rows.length) {
-      rows[rows.length - 1].details += "\n" + line;
-    } else {
-      rows.push({ts: "", event: "", details: line});
+      continue;
     }
+    // Continuation lines (stack traces) attach to the previous row. Anything
+    // before the first timestamp is preamble (version, levels, Execute
+    // Anonymous source) — it stays in the Raw log only, never a table row.
+    if (rows.length) rows[rows.length - 1].details += "\n" + line;
   }
   return rows;
 }
 
 function ApexTab() {
-  const [code, setCode] = ffUseSession("apex", "code", "System.debug('Hello from ForceForge');");
+  const [code, setCode] = ffUseSession("apex", "code", "System.debug('Hello from sfMetaMind');");
   const [running, setRunning] = React.useState(false);
   const [exec, setExec] = ffUseSession("apex", "exec", null);
   const [error, setError] = React.useState(null);
   const [log, setLog] = ffUseSession("apex", "log", null);
+  const [logNote, setLogNote] = React.useState(null);
   const [logLoading, setLogLoading] = React.useState(false);
   const [openLog, setOpenLog] = ffUseSession("apex", "openLog", true);
   const [debugOnly, setDebugOnly] = ffUseSession("apex", "debugOnly", false);
@@ -3328,6 +3535,9 @@ function ApexTab() {
   const [logFilter, setLogFilter] = ffUseSession("apex", "logFilter", "");
   const [history, setHistory] = React.useState(() => ffLoadJson("ff_apex_history", []));
   const taRef = React.useRef(null);
+  const hlRef = React.useRef(null);
+  const gutterRef = React.useRef(null);
+  const [selRange, setSelRange] = React.useState({start: 0, end: 0});
 
   const pushHistory = (snippet, ok) => {
     setHistory(prev => {
@@ -3338,24 +3548,33 @@ function ApexTab() {
     });
   };
 
-  const fetchLog = async () => {
+  const fetchLog = async (sinceIso) => {
     setLogLoading(true);
+    setLogNote(null);
     try {
-      // Logs can lag a beat behind execution.
+      // Log writes lag execution by a beat — try twice before giving up.
       await new Promise(r => setTimeout(r, 1500));
-      const body = await apexLatestLog();
-      setLog(body == null
-        ? "No fresh debug log found yet — check Setup → Debug Logs."
-        : body.slice(0, 30000));
+      let body = await apexLatestLog(sinceIso);
+      if (body == null) {
+        await new Promise(r => setTimeout(r, 2500));
+        body = await apexLatestLog(sinceIso);
+      }
+      if (body == null) {
+        setLog(null);
+        setLogNote("No fresh debug log found — check Setup → Debug Logs, or tick Open Log and run again.");
+      } else {
+        setLog(body.slice(0, 30000));
+      }
     } catch (e) {
-      setLog("Could not fetch debug log: " + e.message);
+      setLog(null);
+      setLogNote("Could not fetch debug log: " + e.message);
     } finally {
       setLogLoading(false);
     }
   };
 
-  const run = async () => {
-    const snippet = String(code || "");
+  const run = async (snippetOverride) => {
+    const snippet = String(snippetOverride == null ? (code || "") : snippetOverride);
     if (!snippet.trim()) { setError("Enter some Apex code first"); return; }
     if (encodeURIComponent(snippet).length > 16000) {
       setError("Script is too long for URL-based execution — split it into smaller chunks.");
@@ -3365,11 +3584,13 @@ function ApexTab() {
     setError(null);
     setExec(null);
     setLog(null);
+    setLogNote(null);
+    const startedAt = new Date().toISOString();
     try {
       const r = await apexExecute(snippet);
       setExec(r);
       pushHistory(snippet, r.compiled && r.success);
-      if (openLog) await fetchLog();
+      if (openLog) await fetchLog(startedAt);
     } catch (e) {
       setError(e.message);
       pushHistory(snippet, false);
@@ -3378,15 +3599,40 @@ function ApexTab() {
     }
   };
 
+  const runHighlighted = () => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const s = ta.selectionStart ?? 0;
+    const e = ta.selectionEnd ?? 0;
+    if (e <= s) return;
+    run(String(code || "").slice(s, e));
+  };
+
+  const syncSel = e => {
+    const t = e.target;
+    setSelRange({start: t.selectionStart ?? 0, end: t.selectionEnd ?? 0});
+  };
+
+  const onTermScroll = e => {
+    const t = e.target;
+    if (hlRef.current) {
+      hlRef.current.scrollTop = t.scrollTop;
+      hlRef.current.scrollLeft = t.scrollLeft;
+    }
+    if (gutterRef.current) gutterRef.current.scrollTop = t.scrollTop;
+  };
+
   const downloadLog = () => {
     if (!log) return;
     downloadText("apex-execute-anonymous.log", log, "text/plain;charset=utf-8");
   };
 
   const ok = exec && exec.compiled && exec.success;
+  const hasSel = selRange.end > selRange.start && selRange.end <= String(code || "").length;
+  const lineCount = Math.max(1, String(code || "").split("\n").length);
 
   return h("div", {className: "insp-panel"},
-    h("p", {className: "app-section-hint"},
+    h("p", {className: "insp-hint-strip"},
       "Execute Anonymous Apex — same engine as the Developer Console (Debug → Open Execute Anonymous Window). Batch, callouts and queries all work."
     ),
     h("div", {className: "insp-toolbar insp-toolbar-wrap"},
@@ -3396,7 +3642,10 @@ function ApexTab() {
           value: "",
           onChange: e => {
             const idx = parseInt(e.target.value, 10);
-            if (!isNaN(idx) && history[idx]) setCode(history[idx].code);
+            if (!isNaN(idx) && history[idx]) {
+              setCode(history[idx].code);
+              setSelRange({start: 0, end: 0});
+            }
             e.target.value = "";
           }
         },
@@ -3407,6 +3656,54 @@ function ApexTab() {
           )
         )
       ),
+      h("div", {className: "insp-chips-row"},
+        h("span", {className: "insp-chips-label"}, "Templates:"),
+        APEX_TEMPLATES.map(t =>
+          h("button", {
+            key: t.label,
+            className: "insp-chip",
+            title: "Insert template",
+            onClick: () => { setCode(t.code); setSelRange({start: 0, end: 0}); }
+          }, t.label)
+        )
+      )
+    ),
+    h("div", {className: "apex-term"},
+      h("div", {className: "apex-gutter", ref: gutterRef, "aria-hidden": "true"},
+        Array.from({length: lineCount}, (_, i) =>
+          h("div", {key: i, className: "apex-ln"}, String(i + 1)))
+      ),
+      h("div", {className: "apex-pane"},
+        h("pre", {className: "apex-hl", ref: hlRef, "aria-hidden": "true"},
+          h("code", {dangerouslySetInnerHTML: {__html: apexHighlight(code)}})
+        ),
+        h("textarea", {
+          ref: taRef,
+          className: "apex-input",
+          value: code,
+          spellCheck: false,
+          onChange: e => setCode(e.target.value),
+          onSelect: syncSel,
+          onScroll: onTermScroll,
+          onKeyDown: e => {
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
+            if (e.key === "Tab") {
+              e.preventDefault();
+              const ta = taRef.current;
+              if (ta) {
+                const s = ta.selectionStart ?? code.length;
+                setCode(code.slice(0, s) + "  " + code.slice(ta.selectionEnd ?? s));
+                requestAnimationFrame(() => {
+                  try { ta.focus(); ta.setSelectionRange(s + 2, s + 2); } catch (e2) { /* ignore */ }
+                });
+              }
+            }
+          },
+          placeholder: "Enter Apex Code… (Ctrl+Enter to execute)"
+        })
+      )
+    ),
+    h("div", {className: "apex-bar"},
       h("label", {className: "insp-check", title: "Fetch the debug log automatically after each run"},
         h("input", {
           type: "checkbox",
@@ -3415,50 +3712,25 @@ function ApexTab() {
         }),
         h("span", null, "Open Log")
       ),
-      h("button", {
-        className: "btn btn-primary btn-sm",
-        disabled: running || !code.trim(),
-        onClick: run
-      }, running ? "Executing…" : "Execute"),
       log && h("button", {
         className: "btn btn-secondary btn-sm",
         onClick: downloadLog
-      }, "Download Log")
-    ),
-    h("div", {className: "insp-chips-row"},
-      h("span", {className: "insp-chips-label"}, "Templates:"),
-      APEX_TEMPLATES.map(t =>
+      }, "Download Log"),
+      h("div", {className: "apex-bar-end"},
         h("button", {
-          key: t.label,
-          className: "insp-chip",
-          title: "Insert template",
-          onClick: () => setCode(t.code)
-        }, t.label)
+          className: "btn btn-primary btn-sm",
+          disabled: running || !code.trim(),
+          title: "Execute the whole script (Ctrl+Enter)",
+          onClick: () => run()
+        }, running ? "Executing…" : "Execute"),
+        h("button", {
+          className: "btn btn-secondary btn-sm",
+          disabled: running || !hasSel,
+          title: hasSel ? "Execute only the selected code" : "Select code in the editor first",
+          onClick: runHighlighted
+        }, "Execute Highlighted")
       )
     ),
-    h("textarea", {
-      ref: taRef,
-      className: "insp-soql",
-      style: {minHeight: "180px"},
-      value: code,
-      spellCheck: false,
-      onChange: e => setCode(e.target.value),
-      onKeyDown: e => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
-        if (e.key === "Tab") {
-          e.preventDefault();
-          const ta = taRef.current;
-          if (ta) {
-            const s = ta.selectionStart ?? code.length;
-            setCode(code.slice(0, s) + "  " + code.slice(ta.selectionEnd ?? s));
-            requestAnimationFrame(() => {
-              try { ta.focus(); ta.setSelectionRange(s + 2, s + 2); } catch (e2) { /* ignore */ }
-            });
-          }
-        }
-      },
-      placeholder: "Enter Apex Code… (Ctrl+Enter to execute)"
-    }),
     error && h("div", {className: "insp-error"}, error),
     exec && (ok
       ? h("div", {className: "insp-ok"}, "Apex executed successfully (compiled ✓).")
@@ -3470,14 +3742,17 @@ function ApexTab() {
             String(exec.exceptionStackTrace).slice(0, 4000))
         )
     ),
-    (logLoading || log) && h("div", {className: "insp-meta"},
-      logLoading ? "Fetching debug log…" : `Execution Log (${log.length} chars)`,
+    (logLoading || log || logNote) && h("div", {className: "insp-meta"},
+      logLoading
+        ? "Fetching debug log…"
+        : (log ? `Execution Log (${log.length} chars)` : "Debug log"),
       !logLoading && h("button", {
         className: "field-action-btn",
         style: {marginLeft: "8px"},
-        onClick: fetchLog
-      }, "Refresh log")
+        onClick: () => fetchLog()
+      }, log ? "Refresh log" : "Retry")
     ),
+    logNote && h("div", {className: "insp-warn"}, logNote),
     log && (() => {
       const allRows = parseApexLog(log);
       const events = [...new Set(allRows.map(r => r.event).filter(Boolean))].sort();
@@ -3492,7 +3767,13 @@ function ApexTab() {
             h("input", {
               type: "checkbox",
               checked: debugOnly,
-              onChange: e => setDebugOnly(e.target.checked)
+              onChange: e => {
+                const v = e.target.checked;
+                setDebugOnly(v);
+                // Debug Only means USER_DEBUG — drop a conflicting event pick
+                // so the rows can't be filtered away twice.
+                if (v) setEventFilter("");
+              }
             }),
             h("span", null, "Debug Only")
           ),
@@ -3536,8 +3817,8 @@ function ApexTab() {
                   className: r.event === "USER_DEBUG" ? "insp-row-hl" : ""
                 },
                   h("td", {className: "insp-nowrap"}, r.ts),
-                  h("td", {className: "insp-nowrap"}, r.event),
-                  h("td", {className: "insp-wrap", title: r.details}, r.details)
+                  h("td", null, h("span", {className: "ff-log-ev", title: r.event}, r.event)),
+                  h("td", {className: "insp-nowrap", title: r.details}, r.details)
                 )
               )
             )
@@ -3749,6 +4030,72 @@ function logsStatusKind(status) {
   if (s.startsWith("fail")) return "fail";
   if (s.startsWith("ab")) return "warn";
   return "other";
+}
+
+// Split an AI analysis into "SECTION NAME" + body blocks so each section can
+// be colour-coded. Tolerates numbering/markdown emphasis around the heading.
+// Returns [] when nothing heading-like is found.
+function parseAnalysisSections(text) {
+  const src = String(text || "").replace(/\r\n/g, "\n").trim();
+  if (!src) return [];
+  const out = [];
+  let cur = null;
+  for (const line of src.split("\n")) {
+    const t = line.trim()
+      .replace(/^[#*\s]+/, "")
+      .replace(/[*#\s:]+$/, "");
+    const isHeading = /^[A-Z][A-Z0-9 &/()-]{1,48}$/.test(t) && /[A-Z]{2}/.test(t);
+    if (isHeading) {
+      if (cur) out.push(cur);
+      cur = {heading: t, body: []};
+    } else if (cur) {
+      cur.body.push(line);
+    } else {
+      cur = {heading: "", body: [line]};
+    }
+  }
+  if (cur) out.push(cur);
+  return out
+    .map(s => ({heading: s.heading, body: s.body.join("\n").trim()}))
+    .filter(s => s.heading || s.body);
+}
+
+// Map a section heading to its colour family.
+function analysisSectionKind(heading) {
+  const h = String(heading || "").toUpperCase();
+  if (h.includes("ERROR") || h.includes("ISSUE") || h.includes("FAIL")) return "err";
+  if (h.includes("NEXT") || h.includes("ACTION")) return "next";
+  if (h.includes("DEBUG") || h.includes("HIGHLIGHT") || h.includes("DETAIL")) return "debug";
+  if (h.includes("HAPPEN") || h.includes("SUMMARY") || h.includes("OVERVIEW")) return "info";
+  return "plain";
+}
+
+// Colour-coded card for the AI Quick Analysis response. Errors render red
+// (green "None." when there are none), NEXT STEP teal, DEBUG HIGHLIGHTS
+// purple, WHAT HAPPENED blue; unknown sections get a neutral tint.
+function AnalysisReport({text, copied, onCopy}) {
+  const secs = parseAnalysisSections(text);
+  const iconFor = {info: "📋", err: "⚠️", next: "🧭", debug: "🔍", plain: "📄"};
+  return h("div", {className: "ai-report"},
+    secs.length
+      ? secs.map((s, i) => {
+          const kind = analysisSectionKind(s.heading);
+          const noneOk = kind === "err" && /^(none|no errors?|nil|n\/a)\.?$/i.test(s.body);
+          const cls = noneOk ? "ok" : kind;
+          return h("div", {key: i, className: `ai-sec ai-sec-${cls}`},
+            s.heading && h("div", {className: "ai-sec-h"},
+              `${noneOk ? "✅" : (iconFor[kind] || "📄")} ${s.heading}`),
+            h("div", {className: "ai-sec-body"}, s.body || (noneOk ? "None." : "—"))
+          );
+        })
+      : h("div", {className: "ai-sec ai-sec-plain"},
+          h("div", {className: "ai-sec-body"}, text)),
+    h("button", {
+      className: copied ? "field-action-btn btn-ok" : "field-action-btn",
+      style: {marginTop: "2px", alignSelf: "flex-start"},
+      onClick: onCopy
+    }, copied ? "Copied ✓" : "Copy")
+  );
 }
 
 function LogsTab() {
@@ -4538,14 +4885,11 @@ function LogsTab() {
                 ),
               selAnalysis && selAnalysis.error && selAnalysis.error !== "NO_LLM_CONFIG" &&
                 h("div", {className: "insp-error"}, selAnalysis.error),
-              selAnalysis && selAnalysis.text && h("div", {className: "logs-ai-text"},
-                selAnalysis.text,
-                h("button", {
-                  className: copied ? "field-action-btn btn-ok" : "field-action-btn",
-                  style: {marginTop: "6px"},
-                  onClick: copyAnalysis
-                }, copied ? "Copied ✓" : "Copy")
-              )
+              selAnalysis && selAnalysis.text && h(AnalysisReport, {
+                text: selAnalysis.text,
+                copied,
+                onCopy: copyAnalysis
+              })
             ),
             h("div", {className: "logs-ai-section"},
               h("div", {className: "logs-ai-h"}, "💬 Ask AI About This Log"),
@@ -4587,11 +4931,17 @@ function LogsTab() {
           h("div", {className: "insp-toolbar insp-toolbar-wrap"},
             h("span", {className: "insp-meta"},
               `Log ${openLog.name} · ${allRows.length} lines`),
-            h("label", {className: "insp-check"},
+            h("label", {className: "insp-check", title: "Show only USER_DEBUG lines (your System.debug output)"},
               h("input", {
                 type: "checkbox",
                 checked: debugOnly,
-                onChange: e => setDebugOnly(e.target.checked)
+                onChange: e => {
+                  const v = e.target.checked;
+                  setDebugOnly(v);
+                  // Debug Only means USER_DEBUG — drop the competing filter so
+                  // rows can't be filtered away twice (dropdown shares logFilter).
+                  if (v) setLogFilter("");
+                }
               }),
               h("span", null, "Debug Only")
             ),
@@ -4626,7 +4976,11 @@ function LogsTab() {
           h(ResultTable, {
             columns: ["Timestamp", "Event", "Details"],
             rows: shown.map(r => ({Timestamp: r.ts, Event: r.event, Details: r.details})),
-            maxRows: 2000
+            maxRows: 2000,
+            cellFmt: {
+              Event: v => h("span", {className: "ff-log-ev", title: String(v)}, String(v)),
+              Details: v => h("span", {className: "ff-log-det", title: String(v)}, String(v))
+            }
           }),
           h("details", {className: "insp-details"},
             h("summary", null, "Raw log"),
@@ -4653,24 +5007,36 @@ export function InspectorPanel() {
   ];
   // A restored snapshot may name a tab id that no longer exists.
   const active = tabs.some(t => t.id === tab) ? tab : "soql";
-  return h("div", {className: "insp-root"},
+  const pickTab = id => {
+    if (id !== tab) {
+      setTab(id);
+      // Tab content heights differ — start each tab at the top.
+      const body = document.querySelector(".inspector-body");
+      if (body) body.scrollTop = 0;
+    }
+  };
+  // The pill bar lives OUTSIDE the scroller (shell = nav + body) so it can
+  // never scroll away with the content.
+  return h("div", {className: "insp-shell"},
     h("div", {className: "insp-tabs"},
       tabs.map(t =>
         h("button", {
           key: t.id,
           className: `insp-tab ${active === t.id ? "active" : ""}`,
-          onClick: () => setTab(t.id)
+          onClick: () => pickTab(t.id)
         }, t.label)
       )
     ),
-    active === "soql" && h(SoqlTab),
-    active === "apex" && h(ApexTab),
-    active === "records" && h(RecordsTab),
-    active === "export" && h(ExportTab),
-    active === "import" && h(ImportTab),
-    active === "users" && h(UsersTab),
-    active === "logs" && h(LogsTab),
-    active === "org" && h(OrgTab),
-    active === "apptabs" && h(AppTabsTab)
+    h("div", {className: "inspector-body"},
+      active === "soql" && h(SoqlTab),
+      active === "apex" && h(ApexTab),
+      active === "records" && h(RecordsTab),
+      active === "export" && h(ExportTab),
+      active === "import" && h(ImportTab),
+      active === "users" && h(UsersTab),
+      active === "logs" && h(LogsTab),
+      active === "org" && h(OrgTab),
+      active === "apptabs" && h(AppTabsTab)
+    )
   );
 }

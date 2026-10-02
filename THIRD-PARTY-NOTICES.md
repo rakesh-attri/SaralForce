@@ -1,4 +1,4 @@
-# Third-Party Notices (ForceForge)
+# Third-Party Notices (sfMetaMind)
 
 This project combines original work with code derived from permissively
 licensed open-source projects, plus vendored libraries. Each item below
@@ -28,7 +28,7 @@ retains its original license terms.
   font files are NOT bundled.
 
 ## Trademark note
-ForceForge is an independent project by Bhajan Mandali and is not affiliated
+sfMetaMind is an independent project by Bhajan Mandali and is not affiliated
 with, sponsored, or endorsed by Salesforce, Inc. or by the authors of
 Salesforce-Inspector-reloaded. "Salesforce" is used nominatively to describe
 interoperability with Salesforce orgs.
