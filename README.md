@@ -34,7 +34,7 @@ send it: business purpose, key fields and their data types, expected record volu
 relationships to standard objects, must-have vs. nice-to-have features, and security and
 sharing recommendations — with **Accept** / **Discard** controls.
 
-<img src="docs/screenshots/ai-object-creator.png" alt="Object Creator with AI Enhanced Prompt" width="720">
+<img src="docs/screenshots/ai-debug-logs.png" alt="Debug Logs with AI Quick Analysis panel" width="720">
 
 ### SOQL editor
 
@@ -46,7 +46,7 @@ When Salesforce rejects a query, the extension asks the LLM for a **✨ Suggeste
 a plain-English explanation of what went wrong plus the corrected query, with
 **Apply & Run** and **Copy** buttons.
 
-<img src="docs/screenshots/ai-soql.png" alt="SOQL two-column editor with AI suggested fix" width="720">
+<img src="docs/screenshots/ai-object-creator.png" alt="Object Creator with AI Enhanced Prompt" width="720">
 
 ### Debug logs
 
@@ -56,7 +56,8 @@ a plain-English explanation of what went wrong plus the corrected query, with
   call; **Re-run** forces a fresh call when you want one.
 - **💬 Ask AI** — a per-log chat for drilling into any line of the trace.
 
-<img src="docs/screenshots/ai-debug-logs.png" alt="Debug Logs with AI Quick Analysis panel" width="720">
+<img src="docs/screenshots/ai-soql.png" alt="SOQL two-column editor with AI suggested fix" width="720">
+
 
 ## Installation
 
