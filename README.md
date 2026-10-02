@@ -13,7 +13,50 @@ Session handling builds on ideas from [Salesforce Inspector Reloaded](https://gi
 - **One-Click Deploy**: Creates the custom object and all fields directly in your Salesforce org via the Tooling API
 - **Relationship Fields**: AI suggests Lookup and Master-Detail relationships when appropriate
 - **Field Permissions**: Configurable field-level security during deployment
+- **AI Query Repair**: SOQL errors are explained and auto-fixed by the LLM with one-click apply
+- **AI Log Analysis**: Debug logs get a plain-English verdict plus per-log AI chat
 - **Inspector Tools**: SOQL runner, record browser, CSV export/import, user management, debug-log viewer with AI analysis, org info, app-tab assignment
+
+## AI Features
+
+Every AI action uses the same LLM configured on the Options page — your API key stays in
+local storage, and only the relevant prompt/log text is sent to the provider you chose.
+
+### Object Builder chat
+
+Describe what you want in plain English and the AI proposes the complete object — labels,
+API names, data types, required flags, picklist values, and Lookup/Master-Detail
+relationships. Keep chatting to refine it ("add a field for resolution notes", "make
+Priority required") and deploy when the visual preview looks right.
+
+**✨ Enhance Prompt** turns a rough one-liner into a structured design brief before you
+send it: business purpose, key fields and their data types, expected record volume,
+relationships to standard objects, must-have vs. nice-to-have features, and security and
+sharing recommendations — with **Accept** / **Discard** controls.
+
+<img src="docs/screenshots/ai-object-creator.png" alt="Object Creator with AI Enhanced Prompt" width="720">
+
+### SOQL editor
+
+A two-column workspace: LLM provider chip, row limit, run button, query history and
+saved queries on the left; the query editor, colour-coded field explorer and results
+table on the right — no horizontal scrolling.
+
+When Salesforce rejects a query, the extension asks the LLM for a **✨ Suggested fix**:
+a plain-English explanation of what went wrong plus the corrected query, with
+**Apply & Run** and **Copy** buttons.
+
+<img src="docs/screenshots/ai-soql.png" alt="SOQL two-column editor with AI suggested fix" width="720">
+
+### Debug logs
+
+- **⚡ AI Quick Analysis (Plain English)** — a one-click verdict per log rendered as four
+  cards: *What happened*, *Errors*, *Debug highlights*, *Next step*. Results are cached
+  per log ID, so clicking **Analyzed** again shows the saved result without another AI
+  call; **Re-run** forces a fresh call when you want one.
+- **💬 Ask AI** — a per-log chat for drilling into any line of the trace.
+
+<img src="docs/screenshots/ai-debug-logs.png" alt="Debug Logs with AI Quick Analysis panel" width="720">
 
 ## Installation
 
@@ -108,7 +151,8 @@ The AI will update the proposal accordingly.
 ## LLM Provider Configuration
 
 OpenAI, Anthropic Claude, Google Gemini, and any OpenAI-compatible endpoint
-(OpenCodeZen, etc.) are supported.
+(OpenCodeZen, etc.) are supported. One configuration drives every AI feature —
+the object-builder chat, Enhance Prompt, SOQL query repair, and debug-log analysis.
 
 - **API Key**: your provider's key (stored only in your browser's local storage)
 - **Base URL**: only needed for OpenAI-compatible endpoints
