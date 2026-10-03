@@ -1,8 +1,8 @@
 {
-  "name": "sfMetaMind",
+  "name": "SaralForce",
   "description": "AI-powered Salesforce toolkit: design custom objects, SOQL runner, CSV data import/export, and org info. Supports OpenAI, Claude, Gemini, and OpenAI-compatible APIs.",
-  "version": "1.4.1",
-  "version_name": "1.4.1",
+  "version": "1.4.2",
+  "version_name": "1.4.2",
   "icons": {
     "16": "icon16.png",
     "32": "icon32.png",
@@ -10,7 +10,7 @@
     "128": "icon128.png"
   },
   "action": {
-    "default_title": "Open sfMetaMind (Ctrl+Shift+S)",
+    "default_title": "Open SaralForce (Ctrl+Shift+S)",
     "default_icon": {
       "16": "icon16.png",
       "32": "icon32.png",
@@ -135,7 +135,7 @@
         "default": "Ctrl+Shift+S",
         "mac": "Command+Shift+S"
       },
-      "description": "Open sfMetaMind"
+      "description": "Open SaralForce"
     }
   }
 }

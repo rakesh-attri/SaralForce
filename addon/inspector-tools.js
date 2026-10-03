@@ -286,7 +286,7 @@ function ffSaveJson(key, val) {
 }
 
 // ── Sidebar session snapshot ────────────────────────────────────────────────
-// Minimizing (main sfMetaMind button) destroys the sidebar iframe, so live
+// Minimizing (main SaralForce button) destroys the sidebar iframe, so live
 // React state dies with it. App._saveState serializes this snapshot into
 // sessionStorage on `sfoc-save-state` and restores it in the constructor on
 // reopen — same round-trip the builder chat already uses. Nothing writes the
@@ -2154,7 +2154,7 @@ async function appTabsResolveCurrentUserId() {
       const uid = data?.user_id || data?.userId || (data?.sub ? String(data.sub).split("/").pop() : null);
       if (uid) return uid;
     } catch (e) {
-      console.warn("[sfMetaMind] AppTabs identity lookup failed for", u, e.message);
+      console.warn("[SaralForce] AppTabs identity lookup failed for", u, e.message);
     }
   }
   throw new Error("Could not get user identity (tried userinfo and /id, last status " + lastStatus + ")");
@@ -2188,7 +2188,7 @@ async function appTabsEnsureTabVisibleForMe(tabApiName) {
         return nn && targets.some(t => nn.startsWith(t) || t.startsWith(nn));
       }) || label;
   } catch (e) {
-    console.warn("[sfMetaMind] AppTabs profile listMetadata failed:", e.message);
+    console.warn("[SaralForce] AppTabs profile listMetadata failed:", e.message);
   }
   const xml = `<met:metadata xsi:type="met:Profile">` +
     `<met:fullName>${appTabsEscXml(fullName)}</met:fullName>` +
@@ -2206,7 +2206,7 @@ async function appTabsTabExists(tabApiName) {
     const names = await appTabsListMetadataFullNames("CustomTab");
     if (names.some(n => String(n).trim().toLowerCase() === want)) return true;
   } catch (e) {
-    console.warn("[sfMetaMind] AppTabs tab-exists listMetadata failed:", e.message);
+    console.warn("[SaralForce] AppTabs tab-exists listMetadata failed:", e.message);
   }
   try {
     const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
@@ -2215,7 +2215,7 @@ async function appTabsTabExists(tabApiName) {
       {useCache: false});
     if (res.records && res.records.length) return true;
   } catch (e) {
-    console.warn("[sfMetaMind] AppTabs tab-exists Tooling failed:", e.message);
+    console.warn("[SaralForce] AppTabs tab-exists Tooling failed:", e.message);
   }
   return false;
 }
@@ -2258,7 +2258,7 @@ async function appTabsLoadApps() {
       }
       if (apps.length) break;
     } catch (e) {
-      console.warn("[sfMetaMind] AppTabs Tooling query failed:", e.message);
+      console.warn("[SaralForce] AppTabs Tooling query failed:", e.message);
     }
   }
   // Reconcile with listMetadata truth: standard apps (ServiceConsole, Sales…)
@@ -2272,7 +2272,7 @@ async function appTabsLoadApps() {
       if (!nameSet.has(a.fullName.toLowerCase())) {
         const prefixed = "standard__" + a.fullName;
         if (nameSet.has(prefixed.toLowerCase())) {
-          console.log(`[sfMetaMind] AppTabs standard prefix: ${a.fullName} → ${prefixed}`);
+          console.log(`[SaralForce] AppTabs standard prefix: ${a.fullName} → ${prefixed}`);
           seen.delete(a.fullName.toLowerCase());
           a.fullName = prefixed;
           seen.add(prefixed.toLowerCase());
@@ -2283,7 +2283,7 @@ async function appTabsLoadApps() {
       push(n, n);
     }
   } catch (e) {
-    console.warn("[sfMetaMind] AppTabs listMetadata reconcile failed:", e.message);
+    console.warn("[SaralForce] AppTabs listMetadata reconcile failed:", e.message);
   }
   apps.sort((a, b) => a.label.localeCompare(b.label));
   if (!apps.length) throw new Error("No apps found (Tooling + listMetadata both empty)");
@@ -2315,14 +2315,14 @@ async function appTabsLoadCustomTabs() {  const tabs = [];
       }
       if (tabs.length) break;
     } catch (e) {
-      console.warn("[sfMetaMind] AppTabs CustomTab query failed:", e.message);
+      console.warn("[SaralForce] AppTabs CustomTab query failed:", e.message);
     }
   }
   try {
     const names = await appTabsListMetadataFullNames("CustomTab");
     for (const n of names) push(n, n);
   } catch (e) {
-    console.warn("[sfMetaMind] AppTabs listMetadata CustomTab failed:", e.message);
+    console.warn("[SaralForce] AppTabs listMetadata CustomTab failed:", e.message);
   }
   tabs.sort((a, b) => a.label.localeCompare(b.label));
   return tabs;
@@ -2489,7 +2489,7 @@ function AppTabsTab() {
         ? fnEl.textContent.trim()
         : fullName;
       let existing = appTabsOfRecords(records);
-      console.log(`[sfMetaMind] AppTabs read "${realName}": tabs=[${existing.join(", ")}]`);
+      console.log(`[SaralForce] AppTabs read "${realName}": tabs=[${existing.join(", ")}]`);
       if (existing.includes(tab)) {
         setStatus(`"${tab}" is already on "${realName}" — nothing to do. If you still don't see it, switch apps once to refresh the nav bar.`);
         setCurrentTabs(existing);
@@ -2566,7 +2566,7 @@ function AppTabsTab() {
             ws.appendChild(mapping);
             mapped.add(t);
           }
-          console.log(`[sfMetaMind] AppTabs workspace mappings ensured for console app (${mapped.size} mapped)`);
+          console.log(`[SaralForce] AppTabs workspace mappings ensured for console app (${mapped.size} mapped)`);
         }
       }
       // Standard apps must be written as standard__Name — retry with the
@@ -2578,7 +2578,7 @@ function AppTabsTab() {
         if (/no CustomApplication named/i.test(ue.message || "") &&
             !/^standard__/i.test(writeName)) {
           writeName = "standard__" + writeName;
-          console.log(`[sfMetaMind] AppTabs retrying update as "${writeName}"`);
+          console.log(`[SaralForce] AppTabs retrying update as "${writeName}"`);
           await appTabsUpdateRecords(writeName, records);
         } else {
           throw ue;
@@ -2592,7 +2592,7 @@ function AppTabsTab() {
         await new Promise(r => setTimeout(r, 1500));
         const verify = await appTabsReadRecords(writeName);
         postTabs = appTabsOfRecords(verify);
-        console.log(`[sfMetaMind] AppTabs verify "${writeName}" attempt ${i + 1}: tabs=[${postTabs.join(", ")}]`);
+        console.log(`[SaralForce] AppTabs verify "${writeName}" attempt ${i + 1}: tabs=[${postTabs.join(", ")}]`);
         if (postTabs.includes(tab)) { ok = true; break; }
       }
       setCurrentTabs(postTabs);
@@ -3452,7 +3452,7 @@ function apexHighlight(src) {
 }
 
 const APEX_TEMPLATES = [
-  {label: "Debug test", code: "System.debug('Hello from sfMetaMind');"},
+  {label: "Debug test", code: "System.debug('Hello from SaralForce');"},
   {label: "Query loop", code:
 `List<Account> accs = [SELECT Id, Name FROM Account LIMIT 5];
 for (Account a : accs) {
@@ -3522,7 +3522,7 @@ function parseApexLog(text) {
 }
 
 function ApexTab() {
-  const [code, setCode] = ffUseSession("apex", "code", "System.debug('Hello from sfMetaMind');");
+  const [code, setCode] = ffUseSession("apex", "code", "System.debug('Hello from SaralForce');");
   const [running, setRunning] = React.useState(false);
   const [exec, setExec] = ffUseSession("apex", "exec", null);
   const [error, setError] = React.useState(null);

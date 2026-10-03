@@ -66,7 +66,7 @@ export class OpenAICompatibleProvider {
         });
       } catch (e) {
         // Fall back to direct fetch if messaging failed.
-        console.warn("[sfMetaMind] background llmFetch failed, direct fetch:", e.message);
+        console.warn("[SaralForce] background llmFetch failed, direct fetch:", e.message);
         res = null;
         try {
           const response = await fetch(endpoint, {method: "POST", headers, body});

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" width="100%" height="100%"><defs>
+<!-- Background Gradient -->
+<linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#0f172a" />
+<stop offset="100%" stop-color="#1e293b" />
+</linearGradient>
+<!-- Brand Accent Gradient (Cyan to Blue) -->
+<linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+<stop offset="0%" stop-color="#38bdf8" />
+<stop offset="100%" stop-color="#2563eb" />
+</linearGradient>
+<!-- Glow Effect -->
+<filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+<feGaussianBlur stdDeviation="6" result="blur" />
+<feComposite in="SourceGraphic" in2="blur" operator="over" />
+</filter>
+</defs>
+<!-- Background Card -->
+<rect width="400" height="120" rx="16" fill="url(#bgGrad)" />
+<!-- ICON SECTION (Left side) -->
+<g transform="translate(30, 25)">
+<!-- Outer Glow Shape -->
+<path d="M35 12 C24 12 15 20 13 31 C8 32 4 37 4 43 C4 49 9 54 15 54 L62 54 C68 54 73 49 73 43 C73 38 70 33 65 31 C63 20 54 12 43 12 C40 12 37 13 35 12 Z"
+          fill="url(#brandGrad)" opacity="0.15" filter="url(#glow)" />
+<!-- Main Cloud / Node Icon representing Salesforce inspector / developer tool -->
+<path d="M33 10 C22.5 10 14 18.5 14 29 C9 30 5 34.5 5 40 C5 45.5 9.5 50 15 50 L58 50 C63.5 50 68 45.5 68 40 C68 35 64 31 59 30 C57 19.5 48.5 10 38 10 C35.5 10 34.2 10.5 33 10 Z"
+          fill="none" stroke="url(#brandGrad)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+<!-- Code / Inspect Brackets inside the icon (< / >) -->
+<path d="M26 31 L20 37 L26 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M47 31 L53 37 L47 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" />
+<line x1="41" y1="28" x2="32" y2="46" stroke="#ffffff" stroke-width="3" stroke-linecap="round" />
+</g>
+<!-- TEXT SECTION (Right side) -->
+<g transform="translate(118, 73)">
+<!-- Saral Text -->
+<text x="0" y="0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+          font-size="42" font-weight="700" fill="#ffffff" letter-spacing="-0.5">Saral</text>
+<!-- Force Text -->
+<text x="96" y="0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+          font-size="42" font-weight="700" fill="url(#brandGrad)" letter-spacing="-0.5">Force</text>
+<!-- Tagline -->
+<text x="2" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+          font-size="12" font-weight="500" fill="#94a3b8" letter-spacing="1.5">DEVELOPER INSPECTOR UTILITY</text>
+</g>
+</svg>

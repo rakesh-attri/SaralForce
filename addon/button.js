@@ -56,8 +56,8 @@
       font-family: 'Salesforce Sans', Arial, sans-serif;
       opacity: 0.6;
     `;
-    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="112" fill="#0a1c33"/><g fill="#ffffff"><circle cx="176" cy="272" r="74"/><circle cx="272" cy="222" r="98"/><circle cx="366" cy="276" r="68"/><rect x="176" y="272" width="190" height="66"/></g></svg>`;
-    btn.title = "sfMetaMind";
+    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="sfbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e293b"/></linearGradient><linearGradient id="sfbr" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2563eb"/></linearGradient></defs><rect width="120" height="120" rx="26" fill="url(#sfbg)"/><g transform="translate(14.5,21) scale(1.18)"><path d="M35 12 C24 12 15 20 13 31 C8 32 4 37 4 43 C4 49 9 54 15 54 L62 54 C68 54 73 49 73 43 C73 38 70 33 65 31 C63 20 54 12 43 12 C40 12 37 13 35 12 Z" fill="url(#sfbr)" opacity="0.15"/><path d="M33 10 C22.5 10 14 18.5 14 29 C9 30 5 34.5 5 40 C5 45.5 9.5 50 15 50 L58 50 C63.5 50 68 45.5 68 40 C68 35 64 31 59 30 C57 19.5 48.5 10 38 10 C35.5 10 34.2 10.5 33 10 Z" fill="none" stroke="url(#sfbr)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 31 L20 37 L26 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M47 31 L53 37 L47 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="41" y1="28" x2="32" y2="46" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/></g></svg>`;
+    btn.title = "SaralForce";
 
     btn.addEventListener("mouseenter", () => {
       btn.style.opacity = "1";
@@ -128,9 +128,9 @@
       `;
       header.innerHTML = `
         <span style="display:flex;align-items:center;gap:8px;">
-          <svg width="14" height="14" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="112" fill="#0a1c33"/><g fill="#ffffff"><circle cx="176" cy="272" r="74"/><circle cx="272" cy="222" r="98"/><circle cx="366" cy="276" r="68"/><rect x="176" y="272" width="190" height="66"/></g></svg>
-          sfMetaMind
-          <span style="font-weight:400;opacity:0.7;font-size:11px;">AI Toolkit</span>
+          <svg width="14" height="14" viewBox="0 0 120 120" aria-hidden="true"><rect width="120" height="120" rx="26" fill="#0f172a"/><g transform="translate(14.5,21) scale(1.18)"><path d="M33 10 C22.5 10 14 18.5 14 29 C9 30 5 34.5 5 40 C5 45.5 9.5 50 15 50 L58 50 C63.5 50 68 45.5 68 40 C68 35 64 31 59 30 C57 19.5 48.5 10 38 10 C35.5 10 34.2 10.5 33 10 Z" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 31 L20 37 L26 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M47 31 L53 37 L47 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="41" y1="28" x2="32" y2="46" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/></g></svg>
+          SaralForce
+          <span style="font-weight:400;opacity:0.7;font-size:11px;">Developer Inspector Utility</span>
         </span>
       `;
 

@@ -99,4 +99,4 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 // Farewell page on uninstall. Chrome only allows http(s) uninstall URLs,
 // so addon/goodbye.html is hosted via GitHub Pages (repo Settings → Pages).
 // Preview locally by opening addon/goodbye.html in the browser.
-chrome.runtime.setUninstallURL("https://rakesh-attri.github.io/sfMetaMind/addon/goodbye.html");
+chrome.runtime.setUninstallURL("https://rakesh-attri.github.io/SaralForce/addon/goodbye.html");

@@ -51,6 +51,10 @@ body {
   margin: 0;
 }
 
+.app-title-accent {
+  color: #38bdf8;
+}
+
 .app-subtitle {
   font-size: 12px;
   opacity: 0.8;
@@ -210,7 +214,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  background: #f8fafc;
+  background:
+    url("mascot-watermark.png") center center / 340px auto no-repeat,
+    radial-gradient(760px 340px at 6% -4%, rgba(59, 130, 246, 0.13), transparent 65%),
+    radial-gradient(700px 360px at 97% 4%, rgba(139, 92, 246, 0.13), transparent 62%),
+    radial-gradient(820px 400px at 50% 108%, rgba(14, 165, 233, 0.10), transparent 65%),
+    linear-gradient(160deg, #edf4ff 0%, #f2f1fc 40%, #f7f9fc 75%, #f8fafc 100%);
+  background-repeat: no-repeat, repeat, repeat, repeat, repeat;
+  background-position: center center, 0 0, 0 0, 0 0, 0 0;
+  background-size: 340px auto, auto, auto, auto, auto;
 }
 
 /* Messages */
@@ -260,15 +272,18 @@ body {
   font-size: 10px;
   font-weight: 600;
   margin-bottom: 2px;
-  padding: 0 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
 }
 
 .user-avatar {
   color: #0070d2;
+  background: rgba(0, 112, 210, 0.09);
 }
 
 .assistant-avatar {
   color: #2e844a;
+  background: rgba(46, 132, 74, 0.10);
 }
 
 .message-bubble {
@@ -3032,7 +3047,7 @@ button:focus-visible {
   accent-color: #0176d3;
 }
 
-/* ── sfMetaMind · App Tabs steps & current-tab chips ── */
+/* ── SaralForce · App Tabs steps & current-tab chips ── */
 .insp-current {
   margin-bottom: 4px;
 }
@@ -3051,7 +3066,7 @@ button:focus-visible {
   align-self: flex-end;
 }
 
-/* ── sfMetaMind · Apex code terminal ─────────────────── */
+/* ── SaralForce · Apex code terminal ─────────────────── */
 .apex-term {
   display: flex;
   height: 200px;
@@ -3160,7 +3175,7 @@ button:focus-visible {
   gap: 8px;
 }
 
-/* ── sfMetaMind · Execution-log table cells (SF-style) ── */
+/* ── SaralForce · Execution-log table cells (SF-style) ── */
 .ff-log-ev {
   display: inline-block;
   max-width: 140px;

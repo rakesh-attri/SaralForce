@@ -546,7 +546,7 @@ class App extends React.Component {
     // of the host page; `sfoc-save-state` (sidebar minimize) is the only
     // write path besides this.
     if (this.state.currentProposal) {
-      this.loadProfiles().catch(e => console.warn("[sfMetaMind] mount loadProfiles:", e.message));
+      this.loadProfiles().catch(e => console.warn("[SaralForce] mount loadProfiles:", e.message));
     }
   }
 
@@ -572,7 +572,7 @@ class App extends React.Component {
     // NOTE: app assignment lives in Inspector → App Tabs now; the builder no
     // longer loads apps or auto-assigns.
     if (this.state.currentProposal && prevState.currentProposal !== this.state.currentProposal) {
-      this.loadProfiles().catch(e => console.warn("[sfMetaMind] proposal loadProfiles:", e.message));
+      this.loadProfiles().catch(e => console.warn("[SaralForce] proposal loadProfiles:", e.message));
     }
   }
 
@@ -892,11 +892,11 @@ class App extends React.Component {
     let completedSteps = 0;
 
     try {
-      console.log("[sfMetaMind] Starting deployment. Object:", currentProposal.object.name, "Fields:", fieldsToDeploy.length);
+      console.log("[SaralForce] Starting deployment. Object:", currentProposal.object.name, "Fields:", fieldsToDeploy.length);
       const createdFields = [];
 
       this.setState({deploymentStep: `Creating object "${currentProposal.object.label}"...`});
-      console.log("[sfMetaMind] Step 1: Creating object...");
+      console.log("[SaralForce] Step 1: Creating object...");
       // Fail fast if the object already exists (EntityDefinition query).
       try {
         const baseName = currentProposal.object.name.replace(/__c$/, "");
@@ -911,7 +911,7 @@ class App extends React.Component {
         }
       } catch (preErr) {
         if (/already exists|Suggested rename/i.test(preErr.message)) throw preErr;
-        console.warn("[sfMetaMind] Duplicate pre-check skipped:", preErr.message);
+        console.warn("[SaralForce] Duplicate pre-check skipped:", preErr.message);
       }
       let objectResult;
       try {
@@ -925,14 +925,14 @@ class App extends React.Component {
         }
         throw objErr;
       }
-      console.log("[sfMetaMind] Object create response:", objectResult);
+      console.log("[SaralForce] Object create response:", objectResult);
       completedSteps++;
 
       if (objectResult.id && (objectResult.done === "false" || objectResult.state === "InProgress")) {
-        console.log("[sfMetaMind] Object creation is async, polling status with id:", objectResult.id);
+        console.log("[SaralForce] Object creation is async, polling status with id:", objectResult.id);
         this.setState({deploymentStep: `Creating object "${currentProposal.object.label}" (async)...`});
         await this.pollDeployStatus(objectResult.id);
-        console.log("[sfMetaMind] Object creation confirmed complete");
+        console.log("[SaralForce] Object creation confirmed complete");
       }
 
       this.setState(prev => ({
@@ -949,7 +949,7 @@ class App extends React.Component {
       if (this._deployAborted) throw new Error("Deployment cancelled");
 
       this.setState({deploymentStep: "Waiting for metadata propagation (8s)..."});
-      console.log("[sfMetaMind] Step 2: Waiting 8s for metadata propagation...");
+      console.log("[SaralForce] Step 2: Waiting 8s for metadata propagation...");
       await this.delay(8000);
       completedSteps++;
       this.setState(prev => ({deploymentProgress: Math.round((completedSteps / totalSteps) * 100)}));
@@ -960,7 +960,7 @@ class App extends React.Component {
         const field = fieldsToDeploy[i];
         const fieldNum = i + 1;
         this.setState({deploymentStep: `Creating field ${fieldNum}/${fieldsToDeploy.length}: "${field.label}"...`});
-        console.log(`[sfMetaMind] Step 3.${fieldNum}: Creating field "${field.label}" (${field.type})...`);
+        console.log(`[SaralForce] Step 3.${fieldNum}: Creating field "${field.label}" (${field.type})...`);
 
         let fieldCreated = false;
         let lastError = null;
@@ -969,18 +969,18 @@ class App extends React.Component {
           if (this._deployAborted) throw new Error("Deployment cancelled");
           try {
             const fieldXml = this.buildFieldXml(currentProposal.object.name, field);
-            console.log(`[sfMetaMind]   Field SOAP XML (attempt ${attempt + 1}):`, fieldXml.substring(0, 200) + "...");
+            console.log(`[SaralForce]   Field SOAP XML (attempt ${attempt + 1}):`, fieldXml.substring(0, 200) + "...");
             const fieldResult = await this.metaSoapRequest("create", fieldXml);
             if (fieldResult.id && (fieldResult.done === "false" || fieldResult.state === "InProgress")) {
-              console.log(`[sfMetaMind]   Field "${field.label}" async, polling...`, fieldResult.id);
+              console.log(`[SaralForce]   Field "${field.label}" async, polling...`, fieldResult.id);
               await this.pollDeployStatus(fieldResult.id);
             }
             fieldCreated = true;
-            console.log(`[sfMetaMind]   Field "${field.label}" created successfully`);
+            console.log(`[SaralForce]   Field "${field.label}" created successfully`);
             break;
           } catch (fieldErr) {
             lastError = fieldErr;
-            console.error(`[sfMetaMind]   Field "${field.label}" attempt ${attempt + 1} failed:`, fieldErr.message);
+            console.error(`[SaralForce]   Field "${field.label}" attempt ${attempt + 1} failed:`, fieldErr.message);
             // Soft-deleted relationship keeps the name — retry with a unique suffix.
             if (isRelationshipCollisionError(fieldErr) && relCollisionRetries < 3) {
               relCollisionRetries++;
@@ -989,7 +989,7 @@ class App extends React.Component {
                 ? coll.name
                 : safeRelationshipName(field, currentProposal.object.name);
               const next = `${base.replace(/_+\d+$/, "")}_${1 + relCollisionRetries}`;
-              console.warn(`[sfMetaMind]   Relationship collision on ${coll?.parent || "?"} — retrying as "${next}"`);
+              console.warn(`[SaralForce]   Relationship collision on ${coll?.parent || "?"} — retrying as "${next}"`);
               field.relationshipName = next;
               await this.delay(500);
               attempt--; // collision retry does not consume the normal attempt budget
@@ -997,13 +997,13 @@ class App extends React.Component {
             }
             // Field already present from a prior run — treat as success.
             if (isDuplicateError(fieldErr) && /field|CustomField/i.test(fieldErr.message || "")) {
-              console.warn(`[sfMetaMind]   Field "${field.label}" already exists — treating as success`);
+              console.warn(`[SaralForce]   Field "${field.label}" already exists — treating as success`);
               fieldCreated = true;
               break;
             }
             if (attempt < 4) {
               const waitTime = 2000 * (attempt + 1);
-              console.log(`[sfMetaMind]   Retrying in ${waitTime}ms...`);
+              console.log(`[SaralForce]   Retrying in ${waitTime}ms...`);
               await this.delay(waitTime);
             }
           }
@@ -1036,7 +1036,7 @@ class App extends React.Component {
       const createdFieldNames = createdFields.map(f => f.name);
 
       this.setState({deploymentStep: "Granting field-level security..."});
-      console.log("[sfMetaMind] Step 4: Granting FLS for", createdFieldNames.length, "created field(s)...");
+      console.log("[SaralForce] Step 4: Granting FLS for", createdFieldNames.length, "created field(s)...");
       if (createdFieldNames.length) {
         await this.grantFieldPermissions(currentProposal.object.name, createdFieldNames);
       }
@@ -1059,7 +1059,7 @@ class App extends React.Component {
       // same as Setup's "Add Field" checkbox (append as last field).
       {
         this.setState({deploymentStep: "Adding fields to page layout..."});
-        console.log("[sfMetaMind] Step 4b: Adding fields to default layout...", createdFieldNames);
+        console.log("[SaralForce] Step 4b: Adding fields to default layout...", createdFieldNames);
         let layoutOk;
         if (createdFieldNames.length === 0) {
           layoutOk = {ok: true, method: "noop"};
@@ -1074,7 +1074,7 @@ class App extends React.Component {
               layoutFieldNames = createdFieldNames.filter(n => exist.has(n));
             }
           } catch (existErr) {
-            console.warn("[sfMetaMind] Field existence check skipped:", existErr.message);
+            console.warn("[SaralForce] Field existence check skipped:", existErr.message);
           }
           try {
             layoutOk = await this.addFieldsToDefaultLayout(currentProposal.object.name, layoutFieldNames);
@@ -1105,7 +1105,7 @@ class App extends React.Component {
       if (this._deployAborted) throw new Error("Deployment cancelled");
 
       this.setState({deploymentStep: "Creating tab..."});
-      console.log("[sfMetaMind] Step 5: Creating tab...");
+      console.log("[SaralForce] Step 5: Creating tab...");
       const tabResult = await this.createTab(currentProposal.object.name, currentProposal.object.label);
       completedSteps++;
       this.setState(prev => ({
@@ -1134,7 +1134,7 @@ class App extends React.Component {
                 this.setState({availableProfiles: all});
               }
             } catch (e) {
-              console.warn("[sfMetaMind] Profile list query failed:", e.message);
+              console.warn("[SaralForce] Profile list query failed:", e.message);
             }
           }
           if (visLabels.length === 0) visLabels = ["System Administrator"];
@@ -1142,7 +1142,7 @@ class App extends React.Component {
             ? `${visLabels.length} selected profile${visLabels.length === 1 ? "" : "s"}`
             : `all profiles (${visLabels.length})`;
           this.setState({deploymentStep: `Setting tab visibility (${modeLabel})...`});
-          console.log("[sfMetaMind] Step 6: Setting tab visibility for", modeLabel);
+          console.log("[SaralForce] Step 6: Setting tab visibility for", modeLabel);
           const visResult = await this.setTabVisibilityForProfiles(
             currentProposal.object.name, visLabels, []);
           // Safety net: the signed-in user must see the tab even if bulk
@@ -1150,7 +1150,7 @@ class App extends React.Component {
           try {
             await this.ensureCurrentUserVisibility(currentProposal.object.name);
           } catch (curErr) {
-            console.warn("[sfMetaMind] ensureCurrentUserVisibility:", curErr.message);
+            console.warn("[SaralForce] ensureCurrentUserVisibility:", curErr.message);
           }
           completedSteps++;
           const visCount = visResult.ok ? (visResult.updated || []).length : 0;
@@ -1169,7 +1169,7 @@ class App extends React.Component {
           }));
         } catch (visErr) {
           if (/cancelled/i.test(visErr.message)) throw visErr;
-          console.warn("[sfMetaMind] Tab visibility step failed:", visErr.message);
+          console.warn("[SaralForce] Tab visibility step failed:", visErr.message);
           completedSteps++;
           this.setState(prev => ({
             deploymentResults: [...prev.deploymentResults, {
@@ -1190,18 +1190,18 @@ class App extends React.Component {
         deploymentStep: "Deployment complete!",
         deploymentProgress: 100
       });
-      console.log("[sfMetaMind] Deployment complete!");
+      console.log("[SaralForce] Deployment complete!");
 
     } catch (err) {
       if (this._deployAborted) {
-        console.log("[sfMetaMind] Deployment cancelled by user");
+        console.log("[SaralForce] Deployment cancelled by user");
         this.setState({
           deploymentStatus: "cancelled",
           deploymentStep: "Deployment cancelled",
           error: "Deployment was cancelled."
         });
       } else {
-        console.error("[sfMetaMind] Deployment failed:", err);
+        console.error("[SaralForce] Deployment failed:", err);
         this.setState({
           deploymentStatus: "complete",
           deploymentStep: "Deployment failed",
@@ -1234,7 +1234,7 @@ class App extends React.Component {
 
   async metaSoapRequest(action, metadataXml) {
     const url = "https://" + sfConn.instanceHostname + "/services/Soap/m/" + apiVersion;
-    console.log("[sfMetaMind] SOAP request to:", url, "Action:", action);
+    console.log("[SaralForce] SOAP request to:", url, "Action:", action);
 
     const envelope = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:met="http://soap.sforce.com/2006/04/metadata" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -1250,7 +1250,7 @@ class App extends React.Component {
   </soapenv:Body>
 </soapenv:Envelope>`;
 
-    console.log("[sfMetaMind] SOAP envelope length:", envelope.length);
+    console.log("[SaralForce] SOAP envelope length:", envelope.length);
 
     // Per-request AbortController: timeout must NOT abort the shared deploy
     // controller (that permanently kills every later SOAP call). Listen to
@@ -1292,10 +1292,10 @@ class App extends React.Component {
       }
     }
 
-    console.log("[sfMetaMind] SOAP response status:", response.status);
+    console.log("[SaralForce] SOAP response status:", response.status);
 
     const responseText = await response.text();
-    console.log("[sfMetaMind] SOAP response (first 500 chars):", responseText.substring(0, 500));
+    console.log("[SaralForce] SOAP response (first 500 chars):", responseText.substring(0, 500));
 
     if (response.status !== 200) {
       const faultMatch = responseText.match(/<faultstring[^>]*>([^<]*)<\/faultstring>/);
@@ -1309,7 +1309,7 @@ class App extends React.Component {
     const doc = parser.parseFromString(responseText, "text/xml");
     const parseError = doc.querySelector("parsererror");
     if (parseError) {
-      console.error("[sfMetaMind] XML parse error:", parseError.textContent);
+      console.error("[SaralForce] XML parse error:", parseError.textContent);
       this.noteSoapDebug(action, metadataXml, responseText);
       throw new Error("Failed to parse Metadata API response XML");
     }
@@ -1343,7 +1343,7 @@ class App extends React.Component {
       const message = messageEl ? messageEl.textContent : null;
       const statusCode = statusCodeEl ? statusCodeEl.textContent : null;
 
-      console.log("[sfMetaMind] Parsed result:", {id, done, state, success, message, statusCode});
+      console.log("[SaralForce] Parsed result:", {id, done, state, success, message, statusCode});
 
       if (success === "false" && errorsEl) {
         const msgEl = errorsEl.querySelector("message");
@@ -1479,7 +1479,7 @@ class App extends React.Component {
     const result = await this.metaSoapRequest("updateMetadata", xml);
     // updateMetadata can run async — poll or the caller verifies too early.
     if (result && result.id && (result.done === "false" || result.state === "InProgress")) {
-      console.log(`[sfMetaMind] updateMetadata(${xsiType}) async, polling ${result.id}...`);
+      console.log(`[SaralForce] updateMetadata(${xsiType}) async, polling ${result.id}...`);
       await this.pollDeployStatus(result.id);
     }
     return result;
@@ -1489,7 +1489,7 @@ class App extends React.Component {
     for (let i = 0; i < maxAttempts; i++) {
       if (this._deployAborted) throw new Error("Deployment cancelled");
       await this.delay(3000);
-      console.log(`[sfMetaMind] Polling create status (${i + 1}/${maxAttempts})...`);
+      console.log(`[SaralForce] Polling create status (${i + 1}/${maxAttempts})...`);
 
       const checkXml = `<met:id>${deployId}</met:id>`;
 
@@ -1497,18 +1497,18 @@ class App extends React.Component {
       try {
         result = await this.metaSoapRequest("checkStatus", checkXml);
       } catch (netErr) {
-        console.warn("[sfMetaMind] Poll network error:", netErr.message);
+        console.warn("[SaralForce] Poll network error:", netErr.message);
         if (i === maxAttempts - 1) throw netErr;
         continue;
       }
 
-      console.log("[sfMetaMind] Create status:", result);
+      console.log("[SaralForce] Create status:", result);
 
       if (result.state === "Failed" || result.state === "Error") {
         throw new Error(result.message || result.errorMessage || "Metadata creation failed");
       }
       if (result.done === "true" || result.state === "Completed") {
-        console.log("[sfMetaMind] Create completed successfully");
+        console.log("[SaralForce] Create completed successfully");
         return;
       }
     }
@@ -1538,7 +1538,7 @@ class App extends React.Component {
     parts.push(`  ${nameFieldXml}`);
     parts.push(`</met:metadata>`);
 
-    console.log("[sfMetaMind] Object XML:", parts.join("\n"));
+    console.log("[SaralForce] Object XML:", parts.join("\n"));
     return parts.join("\n");
   }
 
@@ -1664,7 +1664,7 @@ class App extends React.Component {
         const uid = data?.user_id || data?.userId || (data?.sub ? String(data.sub).split("/").pop() : null);
         if (uid) return uid;
       } catch (e) {
-        console.warn("[sfMetaMind] Identity lookup failed for", u, e.message);
+        console.warn("[SaralForce] Identity lookup failed for", u, e.message);
       }
     }
     throw new Error("Could not get user identity (tried userinfo and /id, last status " + lastStatus + ")");
@@ -1699,7 +1699,7 @@ class App extends React.Component {
       const userRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=SELECT+ProfileId+FROM+User+WHERE+Id=%27${userId}%27`);
       const profileId = userRes.records?.[0]?.ProfileId;
       if (!profileId) {
-        console.warn("[sfMetaMind] Could not determine user profile for FLS");
+        console.warn("[SaralForce] Could not determine user profile for FLS");
         return;
       }
 
@@ -1709,7 +1709,7 @@ class App extends React.Component {
           encodeURIComponent(`SELECT Id FROM PermissionSet WHERE ProfileId = '${profileId}' AND IsOwnedByProfile = true LIMIT 1`));
         parentId = psRes.records?.[0]?.Id || null;
       } catch (psErr) {
-        console.warn("[sfMetaMind] PermissionSet lookup failed:", psErr.message);
+        console.warn("[SaralForce] PermissionSet lookup failed:", psErr.message);
       }
       if (!parentId) {
         // Fallback: match by profile name (Admin / System Administrator, etc.)
@@ -1725,11 +1725,11 @@ class App extends React.Component {
         } catch (e) { /* ignore */ }
       }
       if (!parentId) {
-        console.warn("[sfMetaMind] No PermissionSet for profile", profileId, "- skipping FLS REST (use Setup → field → Set field-level security)");
+        console.warn("[SaralForce] No PermissionSet for profile", profileId, "- skipping FLS REST (use Setup → field → Set field-level security)");
         return;
       }
 
-      console.log("[sfMetaMind] Granting FLS via PermissionSet:", parentId, "for profile", profileId);
+      console.log("[SaralForce] Granting FLS via PermissionSet:", parentId, "for profile", profileId);
 
       for (const fieldName of fieldNames) {
         const fieldFullName = `${objectName}.${fieldName}`;
@@ -1744,17 +1744,17 @@ class App extends React.Component {
               PermissionsEdit: true
             }
           });
-          console.log("[sfMetaMind] FLS granted for:", fieldFullName);
+          console.log("[SaralForce] FLS granted for:", fieldFullName);
         } catch (flsErr) {
           // Already exists is fine; anything else is worth a warning only.
           if (!/duplicate|already exists/i.test(flsErr.message || "")) {
-            console.warn("[sfMetaMind] FLS skip for", fieldFullName, flsErr.message);
+            console.warn("[SaralForce] FLS skip for", fieldFullName, flsErr.message);
           }
         }
         await new Promise(resolve => setTimeout(resolve, 300));
       }
     } catch (err) {
-      console.warn("[sfMetaMind] Could not grant FLS:", err.message);
+      console.warn("[SaralForce] Could not grant FLS:", err.message);
     }
   }
 
@@ -1779,7 +1779,7 @@ class App extends React.Component {
           fullName = detail.FullName || null;
         }
       } catch (e) {
-        console.warn("[sfMetaMind] Layout lookup failed:", e.message);
+        console.warn("[SaralForce] Layout lookup failed:", e.message);
       }
       if (!fullName) {
         return {ok: false, error: "No default layout found (open Setup to add fields manually)"};
@@ -1858,17 +1858,17 @@ class App extends React.Component {
       const realName = (fnEl && fnEl.textContent) || fullName;
       try {
         await this.metadataUpdateRecords("Layout", realName, records);
-        console.log("[sfMetaMind] Layout updated with fields:", toAdd.join(", "));
+        console.log("[SaralForce] Layout updated with fields:", toAdd.join(", "));
         return {ok: true, method: "metadata", added: toAdd.length};
       } catch (updErr) {
         const updDebug = this.lastSoapDebugText();
-        console.warn("[sfMetaMind] Layout update failed:", updErr.message, "— trying new-layout fallback...");
+        console.warn("[SaralForce] Layout update failed:", updErr.message, "— trying new-layout fallback...");
         // Fallback: create a FRESH layout via the proven async create() op.
         // We author 100% of this XML (no round-trip), so whatever strictness
         // rejects the update can't bite here.
         const fb = await this.createLayoutWithFields(objectName, records, toAdd);
         if (fb.ok) return fb;
-        console.warn("[sfMetaMind] Layout fallback failed:", fb.error);
+        console.warn("[SaralForce] Layout fallback failed:", fb.error);
         return {
           ok: false,
           error: updErr.message + (fb.error ? " | new-layout fallback: " + fb.error : ""),
@@ -1876,7 +1876,7 @@ class App extends React.Component {
         };
       }
     } catch (err) {
-      console.warn("[sfMetaMind] Layout update failed:", err.message);
+      console.warn("[SaralForce] Layout update failed:", err.message);
       return {ok: false, error: err.message, debug: this.lastSoapDebugText()};
     }
   }
@@ -1980,7 +1980,7 @@ class App extends React.Component {
       if (res.id && (res.done === "false" || res.state === "InProgress")) {
         await this.pollDeployStatus(res.id);
       }
-      console.log("[sfMetaMind] Fallback layout created:", newName);
+      console.log("[SaralForce] Fallback layout created:", newName);
       return {ok: true, method: "create-fallback", added: toAdd.length, layoutName: newName};
     } catch (e) {
       return {ok: false, error: e.message};
@@ -2008,7 +2008,7 @@ class App extends React.Component {
       } else {
         attempts.push(`listMetadata: no match among ${this._profileMetadataNames.length} profiles`);
       }
-      console.warn(`[sfMetaMind] Could not resolve profile "${label}" — ${attempts.join("; ")}`);
+      console.warn(`[SaralForce] Could not resolve profile "${label}" — ${attempts.join("; ")}`);
       return {error: attempts.join("; ") || "no candidates tried"};
     }
     const candidates = label === "System Administrator"
@@ -2023,7 +2023,7 @@ class App extends React.Component {
         }
         attempts.push(`"${cand}": not found`);
       } catch (e) {
-        console.warn(`[sfMetaMind] Profile read failed for "${cand}":`, e.message);
+        console.warn(`[SaralForce] Profile read failed for "${cand}":`, e.message);
         attempts.push(`"${cand}": ${e.message}`);
       }
     }
@@ -2044,10 +2044,10 @@ class App extends React.Component {
         attempts.push(`listMetadata: no match among ${names.length} profiles`);
       }
     } catch (e) {
-      console.warn("[sfMetaMind] Profile listMetadata failed:", e.message);
+      console.warn("[SaralForce] Profile listMetadata failed:", e.message);
       attempts.push(`listMetadata: ${e.message}`);
     }
-    console.warn(`[sfMetaMind] Could not resolve profile "${label}" — ${attempts.join("; ")}`);
+    console.warn(`[SaralForce] Could not resolve profile "${label}" — ${attempts.join("; ")}`);
     return {error: attempts.join("; ") || "no candidates tried"};
   }
 
@@ -2123,7 +2123,7 @@ class App extends React.Component {
       try {
         this._profileMetadataNames = await this.listMetadataFullNames("Profile");
       } catch (e) {
-        console.warn("[sfMetaMind] Profile listMetadata warm-up failed:", e.message);
+        console.warn("[SaralForce] Profile listMetadata warm-up failed:", e.message);
       }
     }
     // Bulk mode skips the per-profile readMetadata pre-check (each Profile
@@ -2217,12 +2217,12 @@ class App extends React.Component {
           // updateMetadata can run async — poll or visibility isn't applied
           // when the user opens App Launcher right after deploy.
           if (upd && upd.id && (upd.done === "false" || upd.state === "InProgress")) {
-            console.log(`[sfMetaMind] Profile visibility async, polling ${upd.id}...`);
+            console.log(`[SaralForce] Profile visibility async, polling ${upd.id}...`);
             await this.pollDeployStatus(upd.id);
           }
-          console.log(`[sfMetaMind] Tab/record-type visibility set on profile "${fullName}"`);
+          console.log(`[SaralForce] Tab/record-type visibility set on profile "${fullName}"`);
         } else {
-          console.log(`[sfMetaMind] Visibility already correct on profile "${fullName}"`);
+          console.log(`[SaralForce] Visibility already correct on profile "${fullName}"`);
         }
         done.push(fullName);
       } catch (e) {
@@ -2312,26 +2312,26 @@ class App extends React.Component {
           const names = await this.listMetadataFullNames("CustomTab");
           if (names.some(n => n === objectName)) return true;
         } catch (e) {
-          console.warn("[sfMetaMind] Tab verify listMetadata failed:", e.message);
+          console.warn("[SaralForce] Tab verify listMetadata failed:", e.message);
         }
         await this.delay(2000);
       }
       return false;
     };
     try {
-      console.log("[sfMetaMind] Creating tab via Metadata API...", tabDetail);
+      console.log("[SaralForce] Creating tab via Metadata API...", tabDetail);
       const res = await this.metaSoapRequest("create", this.buildTabXml(objectName, objectLabel));
       if (res && res.id && (res.done === "false" || res.state === "InProgress")) {
-        console.log("[sfMetaMind] Tab creation async, polling...", res.id);
+        console.log("[SaralForce] Tab creation async, polling...", res.id);
         await this.pollDeployStatus(res.id);
       }
-      console.log("[sfMetaMind] Tab created via Metadata API for:", objectName);
+      console.log("[SaralForce] Tab created via Metadata API for:", objectName);
       if (!(await verifyTab())) {
         return {ok: false, error: `Tab creation reported success but "${objectName}" not found in CustomTab metadata after re-reads — wait a minute and retry, or check Setup → Tabs.`};
       }
       return {ok: true, method: "metadata"};
     } catch (soapErr) {
-      console.warn("[sfMetaMind] Metadata tab failed:", soapErr.message, "— trying Tooling API...");
+      console.warn("[SaralForce] Metadata tab failed:", soapErr.message, "— trying Tooling API...");
       const firstErr = soapErr.message;
       const developerName = objectName.replace(/__c$/, "");
       const toolingBodies = [
@@ -2346,16 +2346,16 @@ class App extends React.Component {
             method: "POST",
             body: toolingBodies[i]
           });
-          console.log("[sfMetaMind] Tab created via Tooling API for:", objectName);
+          console.log("[SaralForce] Tab created via Tooling API for:", objectName);
           if (!(await verifyTab())) {
             return {ok: false, error: `Tab creation reported success but "${objectName}" not found in CustomTab metadata after re-reads — wait a minute and retry, or check Setup → Tabs.`};
           }
           return {ok: true, method: "tooling"};
         } catch (toolErr) {
-          console.warn(`[sfMetaMind] Tooling tab attempt ${i + 1} failed:`, toolErr.message);
+          console.warn(`[SaralForce] Tooling tab attempt ${i + 1} failed:`, toolErr.message);
           if (i === toolingBodies.length - 1) {
             const msg = `Metadata: ${firstErr}; Tooling: ${toolErr.message}`;
-            console.warn("[sfMetaMind] Tab creation failed:", msg);
+            console.warn("[SaralForce] Tab creation failed:", msg);
             return {ok: false, error: msg};
           }
         }
@@ -2504,7 +2504,7 @@ class App extends React.Component {
       this._profilesLoading = false;
       this.setState({availableProfiles: names, profilesLoading: false});
     } catch (e) {
-      console.warn("[sfMetaMind] Could not load profiles:", e.message);
+      console.warn("[SaralForce] Could not load profiles:", e.message);
       this._profilesLoading = false;
       this.setState({profilesLoading: false});
     }
@@ -2523,10 +2523,10 @@ class App extends React.Component {
         await this.loadApps();
       }
       if (!this.state.selectedApp || !this.state.availableApps.length) return;
-      console.log("[sfMetaMind] Auto-assigning tab to pre-selected app:", this.state.selectedApp);
+      console.log("[SaralForce] Auto-assigning tab to pre-selected app:", this.state.selectedApp);
       await this.assignTabToApp();
     } catch (e) {
-      console.warn("[sfMetaMind] Auto-assign failed:", e.message);
+      console.warn("[SaralForce] Auto-assign failed:", e.message);
     } finally {
       this._autoAssignRunning = false;
     }
@@ -2570,11 +2570,11 @@ class App extends React.Component {
         encodeURIComponent(`SELECT Name FROM Profile WHERE Id = '${pid}'`));
       const name = pres?.records?.[0]?.Name;
       if (!name) return null;
-      console.log(`[sfMetaMind] Ensuring tab DefaultOn on current user profile "${name}"`);
+      console.log(`[SaralForce] Ensuring tab DefaultOn on current user profile "${name}"`);
       const res = await this.setTabVisibilityForProfiles(objectName, [name], []);
       return res;
     } catch (e) {
-      console.warn("[sfMetaMind] Current-user tab visibility failed:", e.message);
+      console.warn("[SaralForce] Current-user tab visibility failed:", e.message);
       return null;
     }
   }
@@ -2595,7 +2595,7 @@ class App extends React.Component {
       if (!row) return null;
       return String(row.DeveloperName || row.Name || "").trim() || null;
     } catch (e) {
-      console.warn("[sfMetaMind] resolveCustomAppFullNameById failed:", e.message);
+      console.warn("[SaralForce] resolveCustomAppFullNameById failed:", e.message);
       return null;
     }
   }
@@ -2633,19 +2633,19 @@ class App extends React.Component {
           const dn = a.DeveloperName || a.Name || a.MasterLabel;
           put([a.DeveloperName, a.Name, a.MasterLabel, dn], dn);
         }
-        console.log(`[sfMetaMind] CustomApp developer map Tooling: ${map.size} (${soql})`);
+        console.log(`[SaralForce] CustomApp developer map Tooling: ${map.size} (${soql})`);
         if (map.size) break;
       } catch (e) {
-        console.warn("[sfMetaMind] Tooling CustomApplication map failed:", e.message);
+        console.warn("[SaralForce] Tooling CustomApplication map failed:", e.message);
       }
     }
     // listMetadata fullNames (metadata truth).
     try {
       const names = await this.listMetadataFullNames("CustomApplication");
       for (const n of names) put([n, n.replace(/_/g, " ")], n);
-      if (names.length) console.log(`[sfMetaMind] CustomApp map +listMetadata: ${map.size}`);
+      if (names.length) console.log(`[SaralForce] CustomApp map +listMetadata: ${map.size}`);
     } catch (e) {
-      console.warn("[sfMetaMind] listMetadata CustomApplication map failed:", e.message);
+      console.warn("[SaralForce] listMetadata CustomApplication map failed:", e.message);
     }
     // AppMenuItem: Label ↔ Name for TabSet apps.
     try {
@@ -2656,7 +2656,7 @@ class App extends React.Component {
         put([a.Label, a.Name], a.Name);
       }
     } catch (e) {
-      console.warn("[sfMetaMind] AppMenuItem map failed:", e.message);
+      console.warn("[SaralForce] AppMenuItem map failed:", e.message);
     }
     this._appDevMap = map;
     return map;
@@ -2677,7 +2677,7 @@ class App extends React.Component {
     try {
       map = await this.fetchCustomAppDeveloperMap();
     } catch (e) {
-      console.warn("[sfMetaMind] resolveAppFullNameCandidates map:", e.message);
+      console.warn("[SaralForce] resolveAppFullNameCandidates map:", e.message);
     }
     const probes = [...(names || []), label].filter(Boolean);
     if (map && map.size) {
@@ -2746,7 +2746,7 @@ class App extends React.Component {
     const note = (label, err) => {
       const msg = err && err.message ? err.message : String(err || "empty");
       attempts.push(`${label}: ${msg}`);
-      console.warn(`[sfMetaMind] loadApps ${label} failed:`, msg);
+      console.warn(`[SaralForce] loadApps ${label} failed:`, msg);
     };
 
     try {
@@ -2789,7 +2789,7 @@ class App extends React.Component {
           push(deduped, isSfId(disp) ? deduped[0] : disp);
         }
         if (!apps.length) throw new Error("parsed 0 apps from AppMenu");
-        console.log(`[sfMetaMind] loadApps AppMenu: ${apps.length} apps`);
+        console.log(`[SaralForce] loadApps AppMenu: ${apps.length} apps`);
       } catch (e) {
         note("AppMenu AppSwitcher", e);
       }
@@ -2806,7 +2806,7 @@ class App extends React.Component {
             push([a.Name, a.Label, a.DeveloperName], label);
           }
           if (!apps.length) throw new Error("parsed 0 apps from AppMenuItem");
-          console.log(`[sfMetaMind] loadApps AppMenuItem: ${apps.length} apps`);
+          console.log(`[SaralForce] loadApps AppMenuItem: ${apps.length} apps`);
         } catch (e) {
           note("AppMenuItem SOQL", e);
         }
@@ -2818,7 +2818,7 @@ class App extends React.Component {
           const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
             encodeURIComponent(`SELECT Id, MasterLabel, DeveloperName FROM CustomApplication ORDER BY MasterLabel`));
           for (const a of (res.records || [])) push([a.DeveloperName, a.MasterLabel], a.MasterLabel || a.DeveloperName);
-          console.log(`[sfMetaMind] loadApps Tooling: ${apps.length} apps`);
+          console.log(`[SaralForce] loadApps Tooling: ${apps.length} apps`);
         } catch (e) {
           note("Tooling CustomApplication", e);
         }
@@ -2830,7 +2830,7 @@ class App extends React.Component {
           const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
             encodeURIComponent(`SELECT Id, DeveloperName FROM CustomApplication ORDER BY DeveloperName`));
           for (const a of (res.records || [])) push(a.DeveloperName, a.DeveloperName);
-          console.log(`[sfMetaMind] loadApps SOQL: ${apps.length} apps`);
+          console.log(`[SaralForce] loadApps SOQL: ${apps.length} apps`);
         } catch (e) {
           note("CustomApplication SOQL", e);
         }
@@ -2842,7 +2842,7 @@ class App extends React.Component {
           const names = await this.listMetadataFullNames("CustomApplication");
           if (!names.length) throw new Error("0 fullNames");
           for (const n of names) push(n, n.replace(/_/g, " "));
-          console.log(`[sfMetaMind] loadApps listMetadata: ${apps.length} apps`);
+          console.log(`[SaralForce] loadApps listMetadata: ${apps.length} apps`);
         } catch (e) {
           note("listMetadata CustomApplication", e);
         }
@@ -2877,9 +2877,9 @@ class App extends React.Component {
             }
           }
         }
-        console.log(`[sfMetaMind] loadApps enriched with developer map (${map.size} entries)`);
+        console.log(`[SaralForce] loadApps enriched with developer map (${map.size} entries)`);
       } catch (e) {
-        console.warn("[sfMetaMind] loadApps developer-map enrich failed:", e.message);
+        console.warn("[SaralForce] loadApps developer-map enrich failed:", e.message);
       }
 
       const loadError = apps.length
@@ -2957,9 +2957,9 @@ class App extends React.Component {
         const br = resolvedSet.has(b.toLowerCase()) ? 0 : 1;
         return ar - br;
       });
-      console.log(`[sfMetaMind] assign candidates for "${appLabel}":`, candidateNames);
+      console.log(`[SaralForce] assign candidates for "${appLabel}":`, candidateNames);
     } catch (e) {
-      console.warn("[sfMetaMind] resolveAppFullNameCandidates:", e.message);
+      console.warn("[SaralForce] resolveAppFullNameCandidates:", e.message);
     }
     // Never send a Salesforce Id as CustomApplication fullName.
     const usableNames = candidateNames.filter(n => !isSfId(n));
@@ -3025,7 +3025,7 @@ class App extends React.Component {
             if (rec) {
               records = rec;
               fullName = hit;
-              console.log(`[sfMetaMind] assign fuzzy-resolved "${appLabel}" → "${hit}"`);
+              console.log(`[SaralForce] assign fuzzy-resolved "${appLabel}" → "${hit}"`);
             }
           }
         } catch (e2) {
@@ -3058,7 +3058,7 @@ class App extends React.Component {
           `CustomApplication metadata fullName must be a developer name, not an Id.`
         );
       }
-      console.log(`[sfMetaMind] assignTabToApp read "${fullName}": tabs=[${existingTabs.join(", ")}]`);
+      console.log(`[SaralForce] assignTabToApp read "${fullName}": tabs=[${existingTabs.join(", ")}]`);
       if (existingTabs.includes(tabName)) {
         this.setState({
           deploymentStatus: "complete",
@@ -3137,7 +3137,7 @@ class App extends React.Component {
             if (domLocal(child) === "tabs" && child.textContent) postTabs.push(child.textContent.trim());
           }
         }
-        console.log(`[sfMetaMind] assignTabToApp verify "${fullName}" tabs=[${postTabs.join(", ")}] (was ${preCount})`);
+        console.log(`[SaralForce] assignTabToApp verify "${fullName}" tabs=[${postTabs.join(", ")}] (was ${preCount})`);
         if (!postTabs.includes(tabName)) {
           // Cross-check via Tooling so we don't false-fail on a flaky read.
           let toolingHas = false;
@@ -3147,7 +3147,7 @@ class App extends React.Component {
                 `SELECT Id, DeveloperName, Name FROM CustomApplication WHERE DeveloperName = '${fullName.replace(/'/g, "\\'")}' OR Name = '${appLabel.replace(/'/g, "\\'")}' LIMIT 1`));
             toolingHas = !!(tRes.records && tRes.records.length);
           } catch (te) {
-            console.warn("[sfMetaMind] Tooling app cross-check failed:", te.message);
+            console.warn("[SaralForce] Tooling app cross-check failed:", te.message);
           }
           throw new Error(
             `Update reported success but "${tabName}" is missing from "${appLabel}" ` +
@@ -3171,7 +3171,7 @@ class App extends React.Component {
         }
       } catch (verifyErr) {
         if (/cancelled/i.test(verifyErr.message)) throw verifyErr;
-        console.warn("[sfMetaMind] assignTabToApp verify failed:", verifyErr.message);
+        console.warn("[SaralForce] assignTabToApp verify failed:", verifyErr.message);
         // Still surface verify problems — a "success" that dropped tabs is worse than an error.
         throw verifyErr;
       }
@@ -3190,7 +3190,7 @@ class App extends React.Component {
       try {
         await this.ensureCurrentUserVisibility(currentProposal.object.name);
       } catch (visErr) {
-        console.warn("[sfMetaMind] post-assign visibility:", visErr.message);
+        console.warn("[SaralForce] post-assign visibility:", visErr.message);
       }
     } catch (err) {
       if (/cancelled/i.test(err.message)) {
@@ -3234,7 +3234,7 @@ class App extends React.Component {
           this.setState({availableProfiles: all});
         }
       } catch (e) {
-        console.warn("[sfMetaMind] Profile list query failed:", e.message);
+        console.warn("[SaralForce] Profile list query failed:", e.message);
       }
     }
     if (visLabels.length === 0) visLabels = ["System Administrator"];
@@ -3254,7 +3254,7 @@ class App extends React.Component {
       try {
         await this.ensureCurrentUserVisibility(currentProposal.object.name);
       } catch (curErr) {
-        console.warn("[sfMetaMind] ensureCurrentUserVisibility:", curErr.message);
+        console.warn("[SaralForce] ensureCurrentUserVisibility:", curErr.message);
       }
       const visCount = visResult.ok ? (visResult.updated || []).length : 0;
       this.setState(prev => ({
@@ -3339,7 +3339,7 @@ class App extends React.Component {
       const visLabels = this.getVisibilityLabels();
       await this.setTabVisibilityForProfiles(currentProposal.object.name, visLabels, rts);
     } catch (e) {
-      console.warn("[sfMetaMind] Record type visibility update failed:", e.message);
+      console.warn("[SaralForce] Record type visibility update failed:", e.message);
     }
     this.setState({
       deploymentStatus: "complete",
@@ -3368,7 +3368,7 @@ class App extends React.Component {
         h("div", {className: "app-header"},
           h("div", {className: "header-left"},
             h("img", {className: "logo-chip", src: "logo-mark.png", alt: ""}),
-            h("h1", {className: "app-title"}, "sfMetaMind"),
+            h("h1", {className: "app-title"}, "Saral", h("span", {className: "app-title-accent"}, "Force")),
             h("span", {className: "app-subtitle"}, "Inspector · SOQL / Apex / Data / Logs / Org")
           ),
           h("div", {className: "header-right"},
@@ -3410,7 +3410,7 @@ class App extends React.Component {
       h("div", {className: "app-header"},
         h("div", {className: "header-left"},
           h("img", {className: "logo-chip", src: "logo-mark.png", alt: ""}),
-          h("h1", {className: "app-title"}, "sfMetaMind"),
+          h("h1", {className: "app-title"}, "Saral", h("span", {className: "app-title-accent"}, "Force")),
           h("span", {className: "app-subtitle"}, "AI Object Builder & Org Toolkit")
         ),
         h("div", {className: "header-right"},

@@ -145,7 +145,7 @@ class OptionsApp extends React.Component {
 
     return h("div", {className: "options-container"},
       h("div", {className: "options-header"},
-        h("img", {className: "options-logo", src: "logo-full.png", alt: "sfMetaMind"}),
+        h("img", {className: "options-logo", src: "logo-full.png", alt: "SaralForce"}),
         h("h1", null, "Settings"),
         h("p", {className: "subtitle"}, "Configure your AI provider for generating Salesforce objects and fields")
       ),
@@ -241,7 +241,7 @@ class OptionsApp extends React.Component {
 
       h("div", {className: "options-section"},
         h("h2", null, "About"),
-        h("p", null, "sfMetaMind is an AI Object Builder & Org Toolkit for Salesforce. Describe the data you want to capture in plain language and it drafts a complete custom object with fields — refine it in chat, improve prompts with one click, then deploy straight to your org."),
+        h("p", null, "SaralForce is an AI Object Builder & Org Toolkit for Salesforce. Describe the data you want to capture in plain language and it drafts a complete custom object with fields — refine it in chat, improve prompts with one click, then deploy straight to your org."),
         h("p", null, "The built-in Inspector adds a SOQL runner with AI error fixes, Apex execution, record browser, CSV export and import, user management, debug-log viewer with AI analysis, org info, and app-tab assignment. Works with OpenAI, Anthropic Claude, Google Gemini, or any OpenAI-compatible endpoint using your own API key."),
         h("p", null, "Your API key is stored locally in your browser and never shared. Org data stays between your browser and Salesforce — only the text you type reaches your chosen AI provider."),
         h("p", {style: {fontSize: "12px", color: "#706e6b"}}, "Developed by ©Bhajan Mandali · Independent project, not affiliated with Salesforce.")

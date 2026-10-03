@@ -1,6 +1,6 @@
-# sfMetaMind Privacy Policy
+# SaralForce Privacy Policy
 
-sfMetaMind is an independent project by Bhajan Mandali, not affiliated with
+SaralForce is an independent project by Bhajan Mandali, not affiliated with
 Salesforce, Inc. or any LLM provider.
 
 ## What the extension accesses and why
@@ -27,7 +27,7 @@ Salesforce, Inc. or any LLM provider.
 ## What we do NOT do
 
 - No analytics, no tracking, no telemetry.
-- No remote servers of our own: there is no sfMetaMind backend — the
+- No remote servers of our own: there is no SaralForce backend — the
   extension talks directly to Salesforce and to your chosen LLM provider.
 - We do not sell, share, or disclose your data to anyone.
 
@@ -38,4 +38,4 @@ Salesforce, Inc. or any LLM provider.
 - Host permissions: Salesforce domains (API access) and LLM provider
   endpoints (chat completions) — nothing else.
 
-Questions: open an issue at https://github.com/rakesh-attri/sfMetaMind.
+Questions: open an issue at https://github.com/rakesh-attri/SaralForce.

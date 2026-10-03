@@ -1,8 +1,8 @@
-# sfMetaMind - AI Object Builder & Org Toolkit
+# SaralForce - AI Object Builder & Org Toolkit
 
 A Chrome browser extension that uses LLM (Large Language Models) to help you design and create Salesforce custom objects and fields from natural language descriptions.
 
-Session handling builds on ideas from [Salesforce Inspector Reloaded](https://github.com/tprouvot/Salesforce-Inspector-reloaded) (MIT licensed — see `LICENSE` and `THIRD-PARTY-NOTICES.md`). sfMetaMind is an independent project by Bhajan Mandali and is not affiliated with, sponsored, or endorsed by Salesforce, Inc.
+Session handling builds on ideas from [Salesforce Inspector Reloaded](https://github.com/tprouvot/Salesforce-Inspector-reloaded) (MIT licensed — see `LICENSE` and `THIRD-PARTY-NOTICES.md`). SaralForce is an independent project by Bhajan Mandali and is not affiliated with, sponsored, or endorsed by Salesforce, Inc.
 
 ## Features
 
@@ -95,7 +95,7 @@ a plain-English explanation of what went wrong plus the corrected query, with
 5. **Start creating objects**:
    - Navigate to your Salesforce org
    - Click the extension icon
-   - Click **sfMetaMind** sidebar button
+   - Click **SaralForce** sidebar button
    - Describe the object you want to create!
 
 ## Usage Examples
