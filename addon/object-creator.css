@@ -1402,6 +1402,24 @@ td .plan-cell-input {
   box-shadow: 0 0 0 3px rgba(1, 118, 211, 0.18);
 }
 
+.insp-field textarea {
+  font-size: 12px;
+  padding: 6px 9px;
+  border: 1px solid #cfd8e6;
+  border-radius: 7px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  background: #fff;
+  color: #1e2a3d;
+  resize: vertical;
+  min-height: 58px;
+}
+
+.insp-field textarea:focus {
+  outline: none;
+  border-color: #0176d3;
+  box-shadow: 0 0 0 3px rgba(1, 118, 211, 0.18);
+}
+
 .insp-field-checks {
   display: flex;
   flex-wrap: wrap;
@@ -1643,6 +1661,81 @@ td .plan-cell-input {
   color: #032d60;
 }
 
+.soql-id-hint {
+  font-weight: 700;
+  color: #000;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.apex-ai-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Salesforce Sans', Arial, sans-serif;
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid #cfd8e6;
+  background: #f3f6fa;
+  color: #54698d;
+  transition: background .18s ease, border-color .18s ease,
+    color .18s ease, box-shadow .18s ease;
+}
+
+.apex-ai-toggle:hover {
+  border-color: #b893f5;
+  color: #5b2cc4;
+  background: #f5f0ff;
+}
+
+.apex-ai-toggle.is-on {
+  background: linear-gradient(90deg, #6d28d9, #9333ea);
+  border-color: #6d28d9;
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(124, 58, 237, 0.35);
+}
+
+.apex-ai-toggle.is-on:hover {
+  background: linear-gradient(90deg, #5b21b6, #7e22ce);
+  border-color: #5b21b6;
+  color: #fff;
+}
+
+.apex-ai-spark {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.apex-ai-toggle.is-on .apex-ai-spark {
+  filter: drop-shadow(0 0 3px rgba(233, 213, 255, 0.9));
+}
+
+.apex-ai-state {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #e4eaf3;
+  color: #8ba0c0;
+}
+
+.apex-ai-toggle.is-on .apex-ai-state {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+.apex-ai-hint {
+  font-size: 11px;
+  color: #7c6f9b;
+  font-style: italic;
+  align-self: center;
+}
 .insp-soql {
   width: 100%;
   min-height: 96px;

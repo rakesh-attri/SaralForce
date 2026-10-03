@@ -4,7 +4,6 @@
   let sfHost = null;
   let sidebarOpen = false;
   let sidebarContainer = null;
-  let sidebarExpanded = false;
 
   function getHostFromUrl(url) {
     try {
@@ -103,7 +102,7 @@
         position: fixed;
         top: 0;
         right: 0;
-        width: 480px;
+        width: min(920px, 75vw);
         height: 100vh;
         z-index: 2147483646;
         box-shadow: -4px 0 24px rgba(0,0,0,0.2);
@@ -188,53 +187,8 @@
       `;
       iframe.src = chrome.runtime.getURL(`object-creator.html?host=${sfHost}`);
 
-      // Floating expand/collapse pill pinned to the panel's left edge (center).
-      // Lives outside the iframe so it never covers app content.
-      const resizeBtn = document.createElement("button");
-      resizeBtn.id = "sf-object-creator-resize";
-      resizeBtn.type = "button";
-      resizeBtn.title = "Expand panel";
-      resizeBtn.style.cssText = `
-        position: absolute;
-        left: -18px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 18px;
-        height: 64px;
-        padding: 0;
-        border: none;
-        border-radius: 8px 0 0 8px;
-        background: #ffb35c;
-        color: #032d60;
-        cursor: pointer;
-        font-size: 12px;
-        line-height: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: -2px 0 8px rgba(0,0,0,0.25);
-        opacity: 0.85;
-        z-index: 2;
-        font-family: 'Salesforce Sans', Arial, sans-serif;
-      `;
-      resizeBtn.innerHTML = "&#187;";
-      resizeBtn.addEventListener("mouseenter", () => resizeBtn.style.opacity = "1");
-      resizeBtn.addEventListener("mouseleave", () => resizeBtn.style.opacity = "0.85");
-      resizeBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        // Expanded = min(920px, 75vw); skip when the window is too narrow to grow.
-        const maxW = Math.min(920, window.innerWidth * 0.75);
-        if (!sidebarExpanded && maxW <= 485) return;
-        sidebarExpanded = !sidebarExpanded;
-        sidebarContainer.style.width = sidebarExpanded ? "min(920px, 75vw)" : "480px";
-        resizeBtn.innerHTML = sidebarExpanded ? "&#171;" : "&#187;";
-        resizeBtn.title = sidebarExpanded ? "Collapse panel" : "Expand panel";
-      });
-
       sidebarContainer.appendChild(header);
       sidebarContainer.appendChild(iframe);
-      sidebarContainer.appendChild(resizeBtn);
       document.body.appendChild(sidebarContainer);
 
       // Store session for the iframe to pick up
@@ -271,9 +225,329 @@
       sidebarContainer = null;
     }, 300);
     sidebarOpen = false;
-    sidebarExpanded = false;
     document.getElementById("sf-object-creator-btn")?.style.setProperty("opacity", "0.6");
   }
+
+  // ─── API Names overlay: show field API names on the Salesforce page ──
+  // The panel's "API Names" button postMessages here; we read the open
+  // record via the UI API and drop a copyable chip under every field label.
+  let apiNamesActive = false;
+  let apiNamesBusy = false;
+
+  function ensureApiNamesStyle() {
+    if (document.getElementById("sfapi-style")) return;
+    const style = document.createElement("style");
+    style.id = "sfapi-style";
+    style.textContent = `
+      .sfapi-name-chip {
+        display: inline-flex; align-items: center; gap: 4px;
+        margin: 2px 0 6px; padding: 1px 7px;
+        font-family: 'Salesforce Sans', Arial, sans-serif;
+        font-size: 11px; line-height: 1.6; font-weight: 600;
+        color: #0176d3; background: #eef4ff;
+        border: 1px solid #d5e2f7; border-radius: 999px;
+        cursor: pointer; user-select: none;
+        transition: background .15s ease, border-color .15s ease, transform .15s ease;
+      }
+      .sfapi-name-chip:hover {
+        background: #dbeafe; border-color: #93c5fd; transform: translateY(-1px);
+      }
+      .sfapi-name-chip::after {
+        content: "\\29C9"; opacity: 0; font-size: 10px; transition: opacity .15s ease;
+      }
+      .sfapi-name-chip:hover::after { opacity: .85; }
+      .sfapi-name-chip.sfapi-copied {
+        color: #2e844a; background: #eafbea; border-color: #9fe0ad;
+      }
+      .sfapi-name-chip.sfapi-copied::after { content: none; }
+      .sfapi-toast {
+        position: fixed; right: 18px; bottom: 18px; z-index: 2147483647;
+        max-width: 400px;
+        background: #032d60; color: #fff;
+        font: 600 13px/1.45 'Salesforce Sans', Arial, sans-serif;
+        padding: 10px 14px; border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(2, 16, 44, .35);
+        animation: sfapi-toast-in .25s ease;
+      }
+      .sfapi-toast.sfapi-toast-err { background: #ba0517; }
+      @keyframes sfapi-toast-in {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function apiNamesToast(text, isError) {
+    ensureApiNamesStyle();
+    let t = document.getElementById("sfapi-toast");
+    if (!t) {
+      t = document.createElement("div");
+      t.id = "sfapi-toast";
+      document.body.appendChild(t);
+    }
+    t.textContent = text;
+    t.className = isError ? "sfapi-toast sfapi-toast-err" : "sfapi-toast";
+    t.style.display = "block";
+    clearTimeout(apiNamesToast._h);
+    apiNamesToast._h = setTimeout(() => { t.style.display = "none"; }, 4000);
+  }
+
+  // Deep query that pierces open shadow roots (Lightning renders fields in LWCs).
+  function deepElements(root, out) {
+    out = out || [];
+    const nodes = root.querySelectorAll("*");
+    for (const el of nodes) {
+      out.push(el);
+      if (el.shadowRoot) deepElements(el.shadowRoot, out);
+    }
+    return out;
+  }
+
+  function removeApiNameChips() {
+    for (const el of deepElements(document.body)) {
+      if (el.classList && el.classList.contains("sfapi-name-chip")) el.remove();
+    }
+  }
+
+  function copyTextPlain(text) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;opacity:0;pointer-events:none;";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    } catch (e) { /* best effort */ }
+  }
+
+  function copyApiText(api) {
+    let p = Promise.resolve(false);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        p = navigator.clipboard.writeText(api).then(() => true).catch(() => false);
+      }
+    } catch (e) { p = Promise.resolve(false); }
+    Promise.race([p, new Promise((r) => setTimeout(() => r(false), 400))])
+      .then((ok) => { if (!ok) copyTextPlain(api); });
+  }
+
+  function buildApiChip(api) {
+    ensureApiNamesStyle();
+    const chip = document.createElement("span");
+    chip.className = "sfapi-name-chip";
+    chip.textContent = api;
+    chip.title = "Click to copy " + api;
+    chip.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      copyApiText(api);
+      chip.textContent = "\u2713 Copied";
+      chip.classList.add("sfapi-copied");
+      setTimeout(() => {
+        chip.textContent = api;
+        chip.classList.remove("sfapi-copied");
+      }, 900);
+    }, true);
+    return chip;
+  }
+
+  function getRecordInfo() {
+    const parts = [location.pathname, location.hash.replace(/^#/, "")];
+    for (const p of parts) {
+      const m = p.match(/\/(?:r|sObject)\/([A-Za-z0-9_]+)\/([a-zA-Z0-9]{15,18})(?:\/|$)/);
+      if (m) return {obj: m[1], id: m[2]};
+      const m2 = p.match(/\/([A-Za-z0-9_]+)\/([a-zA-Z0-9]{15,18})(?:\/view)?\/?$/);
+      if (m2) return {obj: m2[1], id: m2[2]};
+    }
+    const rid = new URLSearchParams(location.search).get("rid");
+    if (rid && /^[a-zA-Z0-9]{15,18}$/.test(rid)) return {obj: null, id: rid};
+    return null;
+  }
+
+  function sfFetchJson(url, token) {
+    return fetch(url, {
+      headers: {"Authorization": "Bearer " + token, "Accept": "application/json"}
+    }).then(async (res) => {
+      const text = await res.text().catch(() => "");
+      let data = null;
+      let parseErr = false;
+      try { data = JSON.parse(text); } catch (e) { parseErr = true; }
+      if (!res.ok) {
+        const msg = (Array.isArray(data) && data[0] && data[0].message) ||
+          (data && data.message) || (parseErr && text ? String(text).slice(0, 160) : "") ||
+          ("HTTP " + res.status);
+        throw new Error(msg);
+      }
+      return {data, parseErr, text};
+    });
+  }
+
+  function labelMapFromRecord(data) {
+    const m = new Map();
+    const fields = (data && data.fields) || {};
+    for (const api of Object.keys(fields)) {
+      const f = fields[api];
+      if (f && f.label && !m.has(f.label)) m.set(f.label, api);
+    }
+    return m;
+  }
+
+  function labelMapFromDescribe(desc) {
+    const m = new Map();
+    for (const f of ((desc && desc.fields) || [])) {
+      if (f && f.label && f.name && !m.has(f.label)) m.set(f.label, f.name);
+    }
+    return m;
+  }
+
+  // UI API layout shape: sections[].layoutRows[].layoutItems[].layoutComponents[]
+  // Each item carries the page label; each Field component carries apiName + field label.
+  function labelMapFromSections(layout) {
+    const m = new Map();
+    for (const sec of ((layout && layout.sections) || [])) {
+      for (const row of (sec.layoutRows || [])) {
+        for (const item of (row.layoutItems || [])) {
+          const comps = (item.layoutComponents || [])
+            .filter(c => c && c.apiName && c.componentType === "Field");
+          if (!comps.length) continue;
+          if (item.label && !m.has(item.label)) {
+            const match = comps.find(c => c.label === item.label);
+            m.set(item.label, (match || comps[0]).apiName);
+          }
+          for (const c of comps) {
+            if (c.label && !m.has(c.label)) m.set(c.label, c.apiName);
+          }
+        }
+      }
+    }
+    return m;
+  }
+
+  function injectApiChips(labelMap) {
+    removeApiNameChips();
+    const SKIP = new Set(["SCRIPT", "STYLE", "SVG", "A", "BUTTON", "INPUT",
+      "TEXTAREA", "SELECT", "OPTION", "IFRAME", "NOSCRIPT", "CODE", "PRE"]);
+    let count = 0;
+    for (const el of deepElements(document.body)) {
+      if (SKIP.has(el.tagName)) continue;
+      if (el.closest && el.closest("#sf-object-creator-sidebar-host, #sf-object-creator-btn, #sfapi-toast, .sfapi-name-chip")) continue;
+      const text = (el.textContent || "").trim();
+      if (!text || text.length > 60 || !labelMap.has(text)) continue;
+      // Innermost matching element only — skip wrappers with same text child.
+      let hasSameChild = false;
+      for (const c of el.children || []) {
+        if ((c.textContent || "").trim() === text) { hasSameChild = true; break; }
+      }
+      if (hasSameChild) continue;
+      if (el.nextElementSibling && el.nextElementSibling.classList &&
+          el.nextElementSibling.classList.contains("sfapi-name-chip")) continue;
+      el.insertAdjacentElement("afterend", buildApiChip(labelMap.get(text)));
+      count++;
+    }
+    return count;
+  }
+
+  function toggleApiNames() {
+    if (apiNamesBusy) return;
+    const existing = deepElements(document.body)
+      .filter(el => el.classList && el.classList.contains("sfapi-name-chip"));
+    if (apiNamesActive && existing.length) {
+      existing.forEach(el => el.remove());
+      apiNamesActive = false;
+      apiNamesToast("API names hidden.");
+      return;
+    }
+    const rec = getRecordInfo();
+    if (!rec || !rec.id) {
+      apiNamesToast("Open a Salesforce record page to show API names.", true);
+      return;
+    }
+    apiNamesBusy = true;
+    apiNamesToast("Loading API names\u2026");
+    chrome.runtime.sendMessage({message: "getSession", sfHost}, (session) => {
+      if (!session || !session.key) {
+        apiNamesBusy = false;
+        apiNamesToast("No active Salesforce session — log in first.", true);
+        return;
+      }
+      const token = session.key;
+      const recordUrl = `${location.origin}/services/data/v67.0/ui-api/records/${rec.id}?layoutTypes=Full`;
+      let rawRecord = null;
+      const describeMap = (obj) => sfFetchJson(
+        `${location.origin}/services/data/v67.0/sobjects/${obj}/describe`, token
+      ).then((r) => labelMapFromDescribe(r.data));
+      // Layout endpoint uses the same UI API auth path as the record call (REST
+      // describe 401s on some orgs), so it is the primary fallback.
+      const layoutMap = (obj, recordTypeId) => {
+        const url = `${location.origin}/services/data/v67.0/ui-api/layout/${obj}?layoutType=Full&mode=View` +
+          (recordTypeId ? `&recordTypeId=${encodeURIComponent(recordTypeId)}` : "");
+        return sfFetchJson(url, token).then((r) => labelMapFromSections(r.data));
+      };
+      const fallbackMap = (obj, recordTypeId) =>
+        layoutMap(obj, recordTypeId).catch((e) => {
+          console.warn("[SaralForce] API Names: UI API layout request failed.", e && e.message);
+          return null;
+        }).then((m) => {
+          if (m && m.size) return m;
+          console.warn("[SaralForce] API Names: layout had no fields; trying REST describe as last resort.");
+          return describeMap(obj).catch((e) => {
+            console.warn("[SaralForce] API Names: REST describe failed.", e && e.message);
+            return new Map();
+          });
+        });
+      sfFetchJson(recordUrl, token)
+        .then((r) => {
+          rawRecord = r.data;
+          if (r.parseErr) {
+            console.warn("[SaralForce] API Names: UI API response was not JSON.", (r.text || "").slice(0, 300));
+          }
+          let m = labelMapFromRecord(r.data);
+          if (!m.size) m = labelMapFromSections(r.data && r.data.layout);
+          if (m.size) return m;
+          const obj = (r.data && r.data.apiName) || rec.obj;
+          console.warn("[SaralForce] API Names: record response had no labels; fetching UI API layout.", r.data);
+          if (!obj) return m;
+          return fallbackMap(obj, (r.data && r.data.recordTypeId) || "");
+        }, (err) => {
+          if (!rec.obj) throw err;
+          console.warn("[SaralForce] API Names: record request failed; using layout/describe.", err && err.message);
+          return fallbackMap(rec.obj, "");
+        })
+        .then((labelMap) => {
+          apiNamesBusy = false;
+          if (!labelMap.size) {
+            console.warn("[SaralForce] API Names: no label mappings available. UI API payload:", rawRecord);
+            apiNamesToast("No fields found on this record layout.", true);
+            return;
+          }
+          const count = injectApiChips(labelMap);
+          if (count) {
+            apiNamesActive = true;
+            apiNamesToast(`\u2728 ${count} API name${count === 1 ? "" : "s"} shown — click any chip to copy.`);
+          } else {
+            apiNamesActive = false;
+            apiNamesToast("No field labels matched on this page — scroll to the Details section and try again.", true);
+          }
+        })
+        .catch(err => {
+          apiNamesBusy = false;
+          apiNamesActive = false;
+          apiNamesToast("Could not load API names: " + err.message, true);
+        });
+    });
+  }
+
+  // The panel iframe (and the app when opened standalone) asks us to toggle.
+  window.addEventListener("message", (event) => {
+    if (!event.data || event.data.type !== "sfoc-show-api-names") return;
+    const ifr = document.getElementById("sf-object-creator-iframe");
+    const fromPanel = ifr && event.source === ifr.contentWindow;
+    const fromSelf = event.source === window;
+    if (!fromPanel && !fromSelf) return;
+    toggleApiNames();
+  });
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

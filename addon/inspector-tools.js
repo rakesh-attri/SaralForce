@@ -267,6 +267,45 @@ async function suggestSoqlFix(failedQuery, sfError) {
   };
 }
 
+// Ask the Options-configured LLM to review Apex for compile errors BEFORE a run
+// (or after Salesforce rejects it). Never executes anything itself.
+// Returns {ok, error, line, explanation, fixedCode}.
+async function apexAiCheck(sourceCode, serverError) {
+  const config = getSavedConfig();
+  if (!config || !hasValidConfig()) {
+    throw new Error("NO_LLM_CONFIG");
+  }
+  const provider = getLLMProvider(config.provider);
+  const messages = [
+    {role: "system", content:
+      "You are a Salesforce Apex expert helping a beginner. " +
+      "Find compile errors: missing semicolons, unbalanced braces, unknown methods or variables, " +
+      "wrong types, bad SOQL syntax. " +
+      "Reply with ONLY a JSON object: " +
+      '{"ok": true, "error": "", "line": null, "explanation": "", "fixedCode": ""} when the code is fine, ' +
+      'or {"ok": false, "error": "<the compile error in plain words>", "line": <number or null>, ' +
+      '"explanation": "<1-2 simple sentences a beginner understands>", "fixedCode": "<the FULL corrected code>"}'},
+    {role: "user", content:
+      serverError
+        ? `Salesforce rejected this code with: ${serverError}\n\nApex code:\n${String(sourceCode || "").slice(0, 12000)}`
+        : `Apex code:\n${String(sourceCode || "").slice(0, 12000)}`}
+  ];
+  const raw = config.baseUrl
+    ? await provider.sendMessage(messages, config.apiKey, config.model, null, config.baseUrl)
+    : await provider.sendMessage(messages, config.apiKey, config.model, null);
+  const parsed = parseJsonFromText(raw);
+  if (!parsed || typeof parsed.ok !== "boolean") {
+    throw new Error("LLM did not return a usable check. Raw reply: " + String(raw).slice(0, 300));
+  }
+  return {
+    ok: !!parsed.ok,
+    error: String(parsed.error || ""),
+    line: parsed.line || null,
+    explanation: String(parsed.explanation || ""),
+    fixedCode: String(parsed.fixedCode || "")
+  };
+}
+
 // ─── Shared: per-org localStorage, cached object/describe lists ──
 function ffHostKey() {
   try { return sfConn.instanceHostname || "default"; }
@@ -787,6 +826,8 @@ function SoqlTab() {
         result && h("div", {className: "insp-meta"},
           `${result.totalSize} row(s) · pages OK · query ends LIMIT ${/\blimit\s+(\d+)/i.exec(result.query)?.[1] || "—"}`
         ),
+        result && h("div", {className: "soql-id-hint"},
+          "Click on any Id to Show the all data for record"),
         result && h(ResultTable, {
           columns: result.columns,
           rows: result.rows,
@@ -1065,15 +1106,16 @@ function ImportTab() {
   const [headers, setHeaders] = ffUseSession("import", "headers", []);
   const [records, setRecords] = ffUseSession("import", "records", []);
   const [fieldMap, setFieldMap] = ffUseSession("import", "fieldMap", {});
+  const [pasteText, setPasteText] = ffUseSession("import", "pasteText", "");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [result, setResult] = ffUseSession("import", "result", null);
 
-  const onFile = async (file) => {
+  // Shared loader for both the file picker and the paste box.
+  const loadCsvText = (text, name) => {
     setError(null);
     setResult(null);
-    if (!file) return;
-    const text = await file.text();
+    if (!text) return;
     setCsvText(text);
     const parsed = parseCsv(text);
     setHeaders(parsed.headers);
@@ -1085,8 +1127,21 @@ function ImportTab() {
     }
     setFieldMap(map);
     // Guess object from filename: Account.csv → Account
-    const base = file.name.replace(/\.[^.]+$/, "");
-    if (/^[A-Za-z][A-Za-z0-9_]*$/.test(base)) setObjectApi(prev => prev || base);
+    if (name) {
+      const base = name.replace(/\.[^.]+$/, "");
+      if (/^[A-Za-z][A-Za-z0-9_]*$/.test(base)) setObjectApi(prev => prev || base);
+    }
+  };
+
+  const onFile = async (file) => {
+    if (!file) return;
+    const text = await file.text();
+    loadCsvText(text, file.name);
+  };
+
+  const loadPasted = () => {
+    if (!pasteText.trim()) return;
+    loadCsvText(pasteText, "");
   };
 
   const importRows = async () => {
@@ -1153,6 +1208,23 @@ function ImportTab() {
           onChange: e => onFile(e.target.files && e.target.files[0])
         })
       )
+    ),
+    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
+      h("label", {className: "insp-field insp-field-grow"},
+        h("span", null, "…or paste CSV (first line = column headers)"),
+        h("textarea", {
+          rows: 3,
+          value: pasteText,
+          placeholder: "Id,Name,Industry\n001xx…,Acme,Technology",
+          onChange: e => setPasteText(e.target.value)
+        })
+      ),
+      h("button", {
+        className: "btn btn-secondary btn-sm",
+        style: {alignSelf: "flex-end"},
+        disabled: !pasteText.trim(),
+        onClick: loadPasted
+      }, "Load pasted CSV")
     ),
     records.length > 0 && h("div", {className: "insp-meta"},
       `${records.length} data row(s) · ${headers.length} column(s)`
@@ -3538,6 +3610,13 @@ function ApexTab() {
   const hlRef = React.useRef(null);
   const gutterRef = React.useRef(null);
   const [selRange, setSelRange] = React.useState({start: 0, end: 0});
+  const [useAi, setUseAi] = ffUseSession("apex", "useAi", false);
+  const [aiBusy, setAiBusy] = React.useState(false);
+  const [aiCheck, setAiCheck] = React.useState(null);
+  const [aiNote, setAiNote] = React.useState(null);
+  const openSettings = () => {
+    chrome.runtime.sendMessage({message: "openOptions", host: ""});
+  };
 
   const pushHistory = (snippet, ok) => {
     setHistory(prev => {
@@ -3573,7 +3652,8 @@ function ApexTab() {
     }
   };
 
-  const run = async (snippetOverride) => {
+  const run = async (snippetOverride, opts) => {
+    const skipAiCheck = !!(opts && opts.skipAiCheck);
     const snippet = String(snippetOverride == null ? (code || "") : snippetOverride);
     if (!snippet.trim()) { setError("Enter some Apex code first"); return; }
     if (encodeURIComponent(snippet).length > 16000) {
@@ -3585,11 +3665,43 @@ function ApexTab() {
     setExec(null);
     setLog(null);
     setLogNote(null);
+    setAiNote(null);
+    setAiCheck(null);
     const startedAt = new Date().toISOString();
     try {
+      // Pre-flight: with "Use AI" on, let the model scan for compile errors
+      // first — a detected problem BLOCKS the run and shows a suggested fix.
+      if (useAi && !skipAiCheck) {
+        setAiBusy(true);
+        try {
+          const chk = await apexAiCheck(snippet, null);
+          if (!chk.ok) {
+            setAiCheck(Object.assign({stage: "preflight"}, chk));
+            return;
+          }
+        } catch (e) {
+          setAiNote(e.message === "NO_LLM_CONFIG"
+            ? "AI check skipped — set a provider + API key in Options."
+            : "AI check failed: " + e.message);
+        } finally {
+          setAiBusy(false);
+        }
+      }
       const r = await apexExecute(snippet);
       setExec(r);
       pushHistory(snippet, r.compiled && r.success);
+      // On-error: Salesforce still rejected it → offer an AI fix when enabled.
+      if (useAi && !(r.compiled && r.success) && r.compileProblem) {
+        setAiBusy(true);
+        try {
+          const chk = await apexAiCheck(snippet, r.compileProblem);
+          if (!chk.ok) setAiCheck(Object.assign({stage: "server"}, chk));
+        } catch (e) {
+          if (e.message !== "NO_LLM_CONFIG") setAiNote("AI fix unavailable: " + e.message);
+        } finally {
+          setAiBusy(false);
+        }
+      }
       if (openLog) await fetchLog(startedAt);
     } catch (e) {
       setError(e.message);
@@ -3712,6 +3824,28 @@ function ApexTab() {
         }),
         h("span", null, "Open Log")
       ),
+      h("button", {
+        type: "button",
+        className: `apex-ai-toggle${useAi ? " is-on" : ""}`,
+        onClick: () => {
+          const v = !useAi;
+          setUseAi(v);
+          if (!v) {
+            setAiCheck(null);
+            setAiNote(null);
+          }
+        },
+        title: useAi
+          ? "AI pre-check is ON — code is scanned before each run; compile errors get a suggested fix"
+          : "Turn on to let AI scan your code before each run and fix compile errors",
+        "aria-pressed": useAi ? "true" : "false"
+      },
+        h("span", {className: "apex-ai-spark", "aria-hidden": "true"}, "\u2728"),
+        h("span", null, "Use AI"),
+        h("span", {className: "apex-ai-state"}, useAi ? "ON" : "OFF")
+      ),
+      useAi && h("span", {className: "apex-ai-hint"},
+        "pre-checks code before each run"),
       log && h("button", {
         className: "btn btn-secondary btn-sm",
         onClick: downloadLog
@@ -3741,6 +3875,36 @@ function ApexTab() {
           exec.exceptionStackTrace && h("pre", {className: "insp-log insp-log-small"},
             String(exec.exceptionStackTrace).slice(0, 4000))
         )
+    ),
+    aiNote && h("div", {className: "insp-warn"}, aiNote),
+    aiBusy && h("div", {className: "insp-meta"}, "✨ AI is checking your code…"),
+    aiCheck && h("div", {className: "insp-fix"},
+      h("div", {className: "insp-fix-title"}, "✨ AI suggested fix"),
+      h("div", {className: "insp-fix-why"},
+        (aiCheck.stage === "server"
+          ? `Salesforce compile error: ${aiCheck.error || exec?.compileProblem || "rejected the code"}`
+          : `Likely compile error${aiCheck.line ? ` (line ${aiCheck.line})` : ""}: ${aiCheck.error || "problem found"}`),
+        aiCheck.explanation ? ` — ${aiCheck.explanation}` : ""),
+      aiCheck.fixedCode && h("div", {className: "insp-fix-query"}, aiCheck.fixedCode),
+      h("div", {className: "insp-toolbar", style: {marginBottom: "0", marginTop: "8px"}},
+        h("button", {
+          className: "btn btn-primary btn-sm",
+          disabled: running || !aiCheck.fixedCode,
+          onClick: () => {
+            const fixed = aiCheck.fixedCode;
+            setAiCheck(null);
+            setCode(fixed);
+            run(fixed, {skipAiCheck: true});
+          }
+        }, running ? "Running…" : "Apply & Run"),
+        h("button", {
+          className: "btn btn-secondary btn-sm",
+          onClick: async () => {
+            try { await navigator.clipboard.writeText(aiCheck.fixedCode); }
+            catch (e) { /* ignore */ }
+          }
+        }, "Copy")
+      )
     ),
     (logLoading || log || logNote) && h("div", {className: "insp-meta"},
       logLoading
@@ -4144,6 +4308,7 @@ function LogsTab() {
   const [win, setWin] = ffUseSession("logs", "win", null);
   const chatRef = React.useRef(null);
   const aiRef = React.useRef(null);
+  const logDataRef = React.useRef(null);
 
   React.useEffect(() => {
     (async () => {
@@ -4463,6 +4628,12 @@ function LogsTab() {
       setOpenLog({id: lg.Id, name: lg.Id, text: String(text || "")});
       setLogFilter("");
       setDebugOnly(false);
+      // Jump to the freshly opened raw-log block.
+      requestAnimationFrame(() => {
+        if (logDataRef.current && logDataRef.current.scrollIntoView) {
+          logDataRef.current.scrollIntoView({block: "start", behavior: "smooth"});
+        }
+      });
     } catch (e) {
       setLogsErr(`Could not fetch the log body: ${e.message}`);
     }
@@ -4482,11 +4653,12 @@ function LogsTab() {
   // it just selects the log and shows the saved result.
   const analyzeLog = async (lg, force) => {
     setSelId(lg.Id);
+    // Always surface the AI pane (right column) so the analysis is visible.
+    if (aiRef.current && aiRef.current.scrollIntoView) {
+      aiRef.current.scrollIntoView({block: "nearest", behavior: "smooth"});
+    }
     const prev = analyses[lg.Id];
     if (prev && prev.text && !force) {
-      if (aiRef.current && aiRef.current.scrollIntoView) {
-        aiRef.current.scrollIntoView({block: "nearest", behavior: "smooth"});
-      }
       return;
     }
     setAnalyzingId(lg.Id);
@@ -4821,7 +4993,14 @@ function LogsTab() {
                   className: "btn btn-secondary btn-sm",
                   onClick: () => {
                     setSelId(lg.Id);
-                    if (chatRef.current) chatRef.current.focus();
+                    // Focus after re-render — chatRef is null until the pane
+                    // has a selected log to render the chat input for.
+                    requestAnimationFrame(() => {
+                      if (aiRef.current && aiRef.current.scrollIntoView) {
+                        aiRef.current.scrollIntoView({block: "nearest", behavior: "smooth"});
+                      }
+                      if (chatRef.current) chatRef.current.focus();
+                    });
                   }
                 }, "💬 Ask AI"),
                 h("button", {
@@ -4927,7 +5106,7 @@ function LogsTab() {
         const shown = allRows.filter(r =>
           (!debugOnly || r.event === "USER_DEBUG") &&
           (!f || `${r.ts} ${r.event} ${r.details}`.toLowerCase().includes(f)));
-        return h("div", {style: {marginTop: "12px"}},
+        return h("div", {ref: logDataRef, style: {marginTop: "12px"}},
           h("div", {className: "insp-toolbar insp-toolbar-wrap"},
             h("span", {className: "insp-meta"},
               `Log ${openLog.name} · ${allRows.length} lines`),
@@ -4996,7 +5175,7 @@ export function InspectorPanel() {
   const [tab, setTab] = ffUseSession("inspector", "tab", "soql");
   const tabs = [
     {id: "soql", label: "SOQL"},
-    {id: "apex", label: "Apex"},
+    {id: "apex", label: "Run-Apex"},
     {id: "records", label: "Records"},
     {id: "export", label: "Export"},
     {id: "import", label: "Import"},

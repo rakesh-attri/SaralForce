@@ -3377,6 +3377,14 @@ class App extends React.Component {
               onClick: () => this.setState({uiMode: "builder"}),
               title: "Back to Object Builder"
             }, "← Builder"),
+            h("button", {
+              className: "header-btn",
+              onClick: () => {
+                try { window.parent.postMessage({type: "sfoc-show-api-names"}, "*"); }
+                catch (e) { /* not embedded — nothing to toggle */ }
+              },
+              title: "Show API names on this Salesforce page (click again to hide)"
+            }, "API Names"),
             !sfConn.sessionId && h("button", {
               className: "header-btn",
               onClick: () => startSalesforceLogin(this.props.sfHost).catch(e => this.setState({error: "Login failed: " + e.message})),
@@ -3419,6 +3427,14 @@ class App extends React.Component {
             onClick: () => this.setState({uiMode: "inspector"}),
             title: "SOQL, Data Import/Export, Org Info"
           }, "Inspector"),
+          h("button", {
+            className: "header-btn",
+            onClick: () => {
+              try { window.parent.postMessage({type: "sfoc-show-api-names"}, "*"); }
+              catch (e) { /* not embedded — nothing to toggle */ }
+            },
+            title: "Show API names on this Salesforce page (click again to hide)"
+          }, "API Names"),
           !sfConn.sessionId && h("button", {
             className: "header-btn",
             onClick: () => startSalesforceLogin(this.props.sfHost).catch(e => this.setState({error: "Login failed: " + e.message})),
