@@ -2941,6 +2941,12 @@ button:focus-visible {
   color: #8c4b02;
 }
 
+.ff-badge-err {
+  background: #fdeded;
+  border: 1px solid #f5c2c0;
+  color: #ba0517;
+}
+
 /* Org Info hero + limit tiles */
 .org-hero {
   background: linear-gradient(135deg, #f7fbff 0%, #eef4fc 100%);
@@ -3358,6 +3364,53 @@ button:focus-visible {
   color: #032d60;
 }
 
+.org-card-wide {
+  grid-column: 1 / -1;
+}
+
+.audit-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.audit-at {
+  font-size: 11px;
+  color: #54698d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audit-details {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.audit-details summary {
+  cursor: pointer;
+  color: #0176d3;
+  font-size: 11.5px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.audit-facts {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid #e6ebf3;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
 .org-dl {
   margin: 0;
 }
@@ -3442,6 +3495,73 @@ button:focus-visible {
   margin-top: 14px;
   padding-top: 4px;
   border-top: 1px solid #f1f5f9;
+}
+
+/* Permission sets card (Org Info) */
+.perm-block {
+  margin-top: 4px;
+}
+
+.perm-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  margin: 2px 0 6px;
+  border: 1px solid #dddbda;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #16325c;
+}
+
+.perm-search:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.perm-list {
+  max-height: 240px;
+  overflow: auto;
+  border-top: 1px solid #eef2f8;
+}
+
+.perm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px;
+  border-bottom: 1px solid #f2f5fa;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.perm-row:hover {
+  background: #f6faff;
+}
+
+.perm-l {
+  color: #16325c;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+
+.perm-n {
+  margin-left: auto;
+  color: #7c8db0;
+  font-family: Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.perm-more {
+  font-size: 11px;
+  color: #7c8db0;
+  padding-top: 6px;
 }
 
 /* Footer flag (real SVG tricolor) */

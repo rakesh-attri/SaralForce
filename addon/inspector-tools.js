@@ -146,6 +146,29 @@ function fmtNum(n) {
   return typeof n === "number" ? n.toLocaleString() : String(n);
 }
 
+function fmtStorage(mb) {
+  if (typeof mb !== "number") return String(mb);
+  if (mb >= 1024) {
+    const gb = mb / 1024;
+    return (gb >= 100 ? gb.toFixed(0) : gb.toFixed(1)) + " GB";
+  }
+  return Math.round(mb) + " MB";
+}
+
+// Relative label for list rows ("just now", "5m ago", "3h ago", "2d ago"),
+// falling back to the absolute date past 30 days. Computed per render — the
+// lists are static snapshots, no timer re-renders them.
+function ffAgo(value) {
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value ? String(value) : "";
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  if (s < 86400 * 30) return Math.floor(s / 86400) + "d ago";
+  return fmtDateTime(value);
+}
+
 function FFBadge({kind, children}) {
   return h("span", {className: "ff-badge ff-badge-" + (kind || "info")}, children);
 }
@@ -1307,11 +1330,27 @@ function OrgTab() {
         counts = cRes && typeof cRes.totalSize === "number" ? cRes.totalSize : null;
       } catch (e) { /* ignore */ }
 
+      // Permission sets — best effort, each query failing independently.
+      const q = (soql) => sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent(soql), {useCache: false});
+      const uid = user && (user.user_id || user.Id);
+      const [psRes, psgRes, mineRes] = await Promise.all([
+        q("SELECT Id, Label, Name, Description, NamespacePrefix, LicenseId, IsOwnedByProfile, CreatedDate " +
+          "FROM PermissionSet WHERE IsOwnedByProfile = false ORDER BY Label LIMIT 2000").catch(() => null),
+        q("SELECT COUNT() FROM PermissionSetGroup").catch(() => null),
+        uid
+          ? q("SELECT COUNT() FROM PermissionSetAssignment WHERE AssigneeId = '" + uid + "'").catch(() => null)
+          : Promise.resolve(null)
+      ]);
+
       setInfo({
         org: org.records && org.records[0] ? org.records[0] : null,
         limits: limits || null,
         user,
-        customObjects: counts
+        customObjects: counts,
+        permsets: psRes ? {records: psRes.records || [], total: psRes.totalSize || 0} : null,
+        permsetGroups: psgRes && typeof psgRes.totalSize === "number" ? psgRes.totalSize : null,
+        myPermsets: mineRes && typeof mineRes.totalSize === "number" ? mineRes.totalSize : null
       });
     } catch (e) {
       setError(e.message);
@@ -1339,28 +1378,39 @@ function OrgTab() {
   const limitPlain = [];
   if (info?.limits) {
     const L = info.limits;
+    // The Limits API returns storage as DataStorageMB/FileStorageMB (MB,
+    // requires Manage Users); older orgs/docs may use DataStorage/FileStorage.
     const aliases = [
-      ["Data Storage", ["DataStorage"]],
-      ["File Storage", ["FileStorage"]],
+      ["Data Storage", ["DataStorageMB", "DataStorage"]],
+      ["File Storage", ["FileStorageMB", "FileStorage"]],
       ["Daily API requests", ["DailyApiRequests"]],
-      ["Daily Bulk API", ["DailyBulkApiRequests"]],
+      ["Daily Bulk API", ["DailyBulkApiRequests", "DailyBulkBatches"]],
       ["Daily Streaming events", ["DailyStreamingApiEvents"]],
       ["Daily Scratch Orgs", ["DailyScratchOrgs"]],
-      ["Concurrent Async GET", ["ConcurrentAsyncGet"]],
+      ["Concurrent Async GET", ["ConcurrentAsyncGet", "ConcurrentAsyncGetReportInstances"]],
       ["Daily Workspace Node Count", ["DailyWorkspaceNodeCount"]]
     ];
     for (const [label, keys] of aliases) {
       let bucket = null;
-      for (const k of keys) bucket = L[k] || bucket;
+      let matchedKey = null;
+      for (const k of keys) {
+        if (L[k] != null) { bucket = L[k]; matchedKey = k; }
+      }
       if (bucket && typeof bucket === "object") {
         if (bucket.Max != null) {
-          limitTiles.push({label, max: bucket.Max, remaining: bucket.Remaining});
+          limitTiles.push({
+            label,
+            max: bucket.Max,
+            remaining: bucket.Remaining,
+            storage: /MB$/.test(matchedKey)
+          });
         } else {
           limitPlain.push([label, JSON.stringify(bucket)]);
         }
       }
     }
   }
+  const hasStorage = limitTiles.some(t => t.storage);
 
   const org = info && info.org;
   const orgRows = [];
@@ -1410,21 +1460,29 @@ function OrgTab() {
       h("div", {className: "org-card"},
         h("div", {className: "org-card-h"},
           h("span", {className: "org-card-ico"}, "📈"),
-          h("span", {className: "org-card-t"}, "API Limits")
+          h("span", {className: "org-card-t"}, "Org Limits")
         ),
         limitTiles.length > 0
           ? limitTiles.map(r => {
               const remaining = r.remaining != null ? r.remaining : r.max;
-              const pct = r.max > 0
-                ? Math.max(0, Math.min(100, Math.round(remaining / r.max * 100)))
-                : 100;
-              const kind = pct > 60 ? "" : (pct > 30 ? " warn" : " crit");
+              let pct, kind;
+              if (r.storage) {
+                // Storage bars show usage (high = bad); values are MB.
+                const used = Math.max(0, r.max - remaining);
+                pct = r.max > 0 ? Math.max(0, Math.min(100, Math.round(used / r.max * 100))) : 0;
+                kind = pct > 90 ? " crit" : (pct > 70 ? " warn" : "");
+              } else {
+                pct = r.max > 0 ? Math.max(0, Math.min(100, Math.round(remaining / r.max * 100))) : 100;
+                kind = pct > 60 ? "" : (pct > 30 ? " warn" : " crit");
+              }
               return h("div", {key: r.label, className: "limit-item"},
                 h("div", {className: "limit-label"}, r.label),
                 h("div", {className: "limit-bar"},
                   h("div", {className: "limit-fill" + kind, style: {width: pct + "%"}})),
                 h("div", {className: "limit-foot"},
-                  h("span", null, `${fmtNum(remaining)} / ${fmtNum(r.max)}`),
+                  h("span", null, r.storage
+                    ? `${fmtStorage(r.max - remaining)} of ${fmtStorage(r.max)} used`
+                    : `${fmtNum(remaining)} / ${fmtNum(r.max)}`),
                   h("span", {className: "limit-pct"}, `${pct}%`))
               );
             })
@@ -1436,9 +1494,485 @@ function OrgTab() {
               h("dd", null, v)
             )
           )
+        ),
+        !hasStorage && limitTiles.length > 0 &&
+          h("div", {className: "insp-hint-strip", style: {margin: "10px 0 0"}},
+            "Data/File storage not returned — requires the Manage Users permission.")
+      ),
+
+      // Permission sets — counts + searchable list.
+      h(PermSetsCard, {info}),
+
+      // Setup changes (SetupAuditTrail) — newest 200, search + copy.
+      h(SetupAuditCard, {info}),
+
+      // Logins (LoginHistory) — newest 200, status badges + copy.
+      h(LoginHistoryCard, {info}),
+
+      // AI hygiene audit — facts gathered on demand, then one LLM call.
+      h(AuditCard, {info})
+    )
+  );
+}
+
+function PermSetsCard({info}) {
+  const [filter, setFilter] = React.useState("");
+  const [copied, setCopied] = React.useState(null);
+  const ps = info && info.permsets;
+  const list = (ps && ps.records) || [];
+  const licensed = list.filter(p => p && p.LicenseId).length;
+
+  const stats = [];
+  stats.push(["Total", ps ? fmtNum(ps.total) : null]);
+  if (info && info.myPermsets != null) stats.push(["Assigned to me", fmtNum(info.myPermsets)]);
+  if (ps) stats.push(["Licensed (needs PSL)", fmtNum(licensed)]);
+  if (info && info.permsetGroups != null) stats.push(["Permission set groups", fmtNum(info.permsetGroups)]);
+  const anyStat = stats.some(([, v]) => v != null);
+
+  const needle = filter.trim().toLowerCase();
+  const shown = needle
+    ? list.filter(p => p && (
+        (p.Label || "").toLowerCase().includes(needle) ||
+        (p.Name || "").toLowerCase().includes(needle)))
+    : list;
+
+  const copy = (name) => {
+    try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(name); } catch (e) { /* ignore */ }
+    setCopied(name);
+    setTimeout(() => setCopied(null), 1200);
+  };
+
+  return h("div", {className: "org-card"},
+    h("div", {className: "org-card-h"},
+      h("span", {className: "org-card-ico"}, "🔐"),
+      h("span", {className: "org-card-t"}, "Permission Sets")
+    ),
+    anyStat
+      ? h("dl", {className: "org-dl"},
+          stats.map(([k, v]) =>
+            h("div", {key: k, className: "org-dl-row"},
+              h("dt", null, k),
+              h("dd", null, v == null ? "—" : String(v))
+            )
+          )
+        )
+      : h("div", {className: "insp-empty"}, "No data yet"),
+    list.length > 0 && h("div", {className: "perm-block"},
+      h("input", {
+        className: "perm-search",
+        type: "search",
+        placeholder: `Filter ${fmtNum(list.length)} permission sets\u2026`,
+        value: filter,
+        onChange: (e) => setFilter(e.target.value)
+      }),
+      h("div", {className: "perm-list"},
+        shown.map(p =>
+          h("div", {
+            key: p.Id || p.Name,
+            className: "perm-row",
+            title: "Click to copy " + p.Name,
+            onClick: () => copy(p.Name)
+          },
+            h("span", {className: "perm-l"}, p.Label || p.Name),
+            p.LicenseId ? h(FFBadge, {kind: "warn"}, "PSL") : null,
+            p.NamespacePrefix ? h(FFBadge, {kind: "info"}, "managed") : null,
+            h("span", {className: "perm-n"}, copied === p.Name ? "\u2713 copied" : p.Name)
+          )
+        ),
+        shown.length === 0 && h("div", {className: "insp-empty"}, "No matches")
+      ),
+      ps && ps.total > list.length &&
+        h("div", {className: "perm-more"},
+          `Showing first ${fmtNum(list.length)} of ${fmtNum(ps.total)}`)
+    )
+  );
+}
+
+// ─── Shared searchable list card (Org Info) ─────────────────────────
+// LoginHistory has no traversable `User` relationship (INVALID_FIELD on
+// `User.Name`), so we fetch ids only and resolve display names with a
+// second query. Best-effort: on failure rows keep their raw ids.
+const resolveUserNames = async (rows, idKey) => {
+  const ids = [];
+  rows.forEach(r => { const id = r[idKey]; if (id && ids.indexOf(id) === -1) ids.push(id); });
+  if (!ids.length) return rows;
+  try {
+    const q = "SELECT Id, Name FROM User WHERE Id IN (" +
+      ids.map(i => "'" + i + "'").join(",") + ")";
+    const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` + encodeURIComponent(q));
+    const map = Object.create(null);
+    (res.records || []).forEach(u => { map[u.Id] = u.Name; });
+    rows.forEach(r => { r._name = map[r[idKey]] || null; });
+  } catch (e) { /* keep raw ids */ }
+  return rows;
+};
+
+// Fetches one SOQL list on mount (header Refresh re-runs it), then renders
+// stats, a filter box and click-to-copy rows. `row(r, {copied, copy})`
+// draws each line; `match(r, needle)` does the (already lowercased) filter.
+function OrgLogCard({icon, title, soql, placeholder, match, stats, row, emptyText, postFetch}) {
+  const [rows, setRows] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [filter, setFilter] = React.useState("");
+  const [copied, setCopied] = React.useState(null);
+
+  const load = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent(soql), {useCache: false});
+      let recs = (res && res.records) || [];
+      if (postFetch) recs = await postFetch(recs);
+      setRows(recs);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  React.useEffect(() => { load(); }, []);
+
+  const copy = (key, text) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        const p = navigator.clipboard.writeText(text);
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (e) { /* ignore */ }
+    setCopied(key);
+    setTimeout(() => setCopied(null), 1200);
+  };
+
+  const list = rows || [];
+  const needle = filter.trim().toLowerCase();
+  const shown = needle ? list.filter(r => match(r, needle)) : list;
+
+  return h("div", {className: "org-card"},
+    h("div", {className: "org-card-h"},
+      h("span", {className: "org-card-ico"}, icon),
+      h("span", {className: "org-card-t"}, title),
+      h("div", {className: "audit-actions"},
+        h("button", {
+          className: "field-action-btn",
+          disabled: busy,
+          onClick: load
+        }, busy ? (rows ? "Refreshing…" : "Loading…") : "Refresh"))
+    ),
+    error && h("div", {className: "insp-error"}, error),
+    rows === null && !error &&
+      h("div", {className: "insp-status-info"}, "Loading " + title.toLowerCase() + "\u2026"),
+    rows !== null && stats && h("dl", {className: "org-dl"},
+      stats(rows).map(([k, v]) =>
+        h("div", {key: k, className: "org-dl-row"},
+          h("dt", null, k),
+          h("dd", null, String(v))
+        )
+      )
+    ),
+    rows !== null && list.length === 0 &&
+      h("div", {className: "insp-empty"}, emptyText || "No records found."),
+    rows !== null && list.length > 0 && h(React.Fragment, null,
+      h("input", {
+        className: "perm-search",
+        type: "search",
+        placeholder: placeholder(list.length),
+        value: filter,
+        onChange: (e) => setFilter(e.target.value)
+      }),
+      h("div", {className: "perm-list"},
+        shown.map(r => row(r, {copied, copy})),
+        shown.length === 0 && h("div", {className: "insp-empty"}, "No matches")
+      ),
+      list.length >= 200 &&
+        h("div", {className: "perm-more"}, "Showing the newest 200 rows.")
+    )
+  );
+}
+
+// Newest setup changes — the SOQL-visible Setup Audit Trail object.
+// Row click opens a detail popup (Esc / overlay-click / × close); the popup
+// keeps the copy-row action as a button.
+function SetupAuditCard({info}) {
+  const me = info && info.user && (info.user.user_id || info.user.Id);
+  const nm = (r) => r._name || r.CreatedById || "Unknown user";
+  const [detail, setDetail] = React.useState(null);
+  const [copied, setCopied] = React.useState(false);
+  const lineOf = (r) => [ffAgo(r.CreatedDate), nm(r), r.Action, r.Section, r.Display]
+    .filter(x => x != null && x !== "").join(" | ");
+  const copyLine = (text) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        const p = navigator.clipboard.writeText(text);
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (e) { /* clipboard unavailable — ignore */ }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+  React.useEffect(() => {
+    if (!detail) return;
+    const onKey = (e) => { if (e.key === "Escape") setDetail(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detail]);
+  return h(React.Fragment, null,
+    h(OrgLogCard, {
+      icon: "\ud83d\udcdc",
+      title: "Setup Audit Trail",
+      soql: "SELECT Id, CreatedDate, CreatedById, Action, Section, Display " +
+        "FROM SetupAuditTrail ORDER BY CreatedDate DESC LIMIT 200",
+      postFetch: (rows) => resolveUserNames(rows, "CreatedById"),
+      emptyText: "No setup changes recorded.",
+      placeholder: (n) => `Filter ${fmtNum(n)} setup changes\u2026`,
+      match: (r, needle) =>
+        [nm(r), r.Section, r.Action, r.Display].join(" ").toLowerCase().includes(needle),
+      stats: (rows) => [
+        ["Total", fmtNum(rows.length)],
+        ["Changed by me", fmtNum(rows.filter(r => me && r.CreatedById === me).length)]
+      ],
+      row: (r) => h("div", {
+          key: r.Id || r.Display,
+          className: "perm-row",
+          title: "Click to view details: " + lineOf(r),
+          onClick: () => { setCopied(false); setDetail(r); }
+        },
+        h("span", {className: "perm-l"}, r.Display || r.Action || "(change)"),
+        me && r.CreatedById === me && h(FFBadge, {kind: "info"}, "you"),
+        r.Section && h(FFBadge, {kind: "off"}, r.Section),
+        h("span", {className: "perm-n"},
+          `${ffAgo(r.CreatedDate)} · ${nm(r)}${r.Action ? " · " + r.Action : ""}`)
+      )
+    }),
+    detail && h("div", {
+        className: "ff-modal-overlay",
+        onMouseDown: (e) => { if (e.target === e.currentTarget) setDetail(null); }
+      },
+      h("div", {className: "ff-modal", role: "dialog", "aria-modal": "true"},
+        h("div", {className: "ff-modal-head"},
+          h("div", {className: "ff-modal-title"}, "Setup change details",
+            h("span", {className: "ff-modal-sub"},
+              ` - ${detail.Section || "Setup"} / ${detail.Action || ""}`)),
+          h("button", {className: "ff-modal-x", title: "Close (Esc)",
+            onClick: () => setDetail(null)}, "\u00d7")
+        ),
+        h("div", {className: "ff-modal-body"},
+          h("div", {className: "insp-table-wrap"},
+            h("table", {className: "insp-table"},
+              h("thead", null,
+                h("tr", null, h("th", null, "Field"), h("th", null, "Value"))),
+              h("tbody", null,
+                [["Change", detail.Display],
+                 ["Action", detail.Action],
+                 ["Section", detail.Section],
+                 ["When", fmtDateTime(detail.CreatedDate)],
+                 ["Changed by", nm(detail)],
+                 ["Record Id", detail.Id]].map(([k, v]) =>
+                  h("tr", {key: k},
+                    h("td", null, k),
+                    h("td", null, v == null || v === "" ? "(Blank)" : String(v))))
+              )
+            )
+          )
+        ),
+        h("div", {className: "insp-toolbar"},
+          h("button", {className: "btn btn-secondary btn-sm",
+            onClick: () => copyLine(lineOf(detail))},
+            copied ? "\u2713 copied" : "Copy row"),
+          h("span", {className: "insp-meta"}, "Esc or click outside to close")
         )
       )
     )
+  );
+}
+
+// Recent logins — success/failure badges, IP in the secondary line.
+function LoginHistoryCard({info}) {
+  const me = info && info.user && (info.user.user_id || info.user.Id);
+  const nm = (r) => r._name || r.UserId || "Unknown user";
+  const failed = (r) => !/^Success/i.test(r.Status || "");
+  return h(OrgLogCard, {
+    icon: "\ud83d\udeaa",
+    title: "Login History",
+    soql: "SELECT Id, UserId, LoginTime, SourceIp, Status, LoginType " +
+      "FROM LoginHistory ORDER BY LoginTime DESC LIMIT 200",
+    postFetch: (rows) => resolveUserNames(rows, "UserId"),
+    emptyText: "No logins recorded.",
+    placeholder: (n) => `Filter ${fmtNum(n)} logins\u2026`,
+    match: (r, needle) =>
+      [nm(r), r.Status, r.SourceIp, r.LoginType]
+        .join(" ").toLowerCase().includes(needle),
+    stats: (rows) => [
+      ["Total", fmtNum(rows.length)],
+      ["Failed", fmtNum(rows.filter(failed).length)]
+    ],
+    row: (r, ctx) => {
+      const key = r.Id || (r.LoginTime + "-" + r.UserId);
+      const bad = failed(r);
+      const line = [ffAgo(r.LoginTime), nm(r), r.Status, r.SourceIp, r.LoginType]
+        .filter(x => x != null && x !== "").join(" | ");
+      return h("div", {
+        key,
+        className: "perm-row",
+        title: "Click to copy: " + line,
+        onClick: () => ctx.copy(key, line)
+      },
+        h("span", {className: "perm-l"}, nm(r)),
+        me && r.UserId === me && h(FFBadge, {kind: "info"}, "you"),
+        h(FFBadge, {kind: bad ? "err" : "ok"}, bad ? "Failed" : "Success"),
+        h("span", {className: "perm-n"},
+          ctx.copied === key
+            ? "\u2713 copied"
+            : `${ffAgo(r.LoginTime)} · ${r.Status || "?"}${r.SourceIp ? " · " + r.SourceIp : ""}`)
+      );
+    }
+  });
+}
+
+// ─── Org hygiene audit: cheap facts → one LLM call → report ────────
+const ORG_AUDIT_SYSTEM =
+  "You are a senior Salesforce org hygiene auditor reviewing ONE org for a beginner admin. " +
+  "You are given a plain-text facts snapshot collected live from the org. " +
+  "Reply as plain text with exactly these sections: SUMMARY, ISSUES, NEXT ACTIONS. " +
+  "Keep it under 250 words. Base every issue strictly on the facts given — never invent " +
+  "numbers, objects or settings that are not in the facts. Call out concrete risks (storage " +
+  "pressure, API usage, inactive users, permission sprawl) with the exact numbers from the " +
+  "facts. NEXT ACTIONS must be short actionable bullets a beginner can do in Setup.";
+
+// Best-effort extra facts for the audit: inactive users, profile count,
+// recent logins. Each query fails independently (read-only COUNT queries).
+async function orgAuditFacts(info) {
+  const q = (soql) => sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+    encodeURIComponent(soql), {useCache: false});
+  const cnt = async (soql) => {
+    try {
+      const r = await q(soql);
+      return r && typeof r.totalSize === "number" ? r.totalSize : null;
+    } catch (e) { return null; }
+  };
+  const [profiles, inactive, neverLoggedIn, psetAssignments] = await Promise.all([
+    cnt("SELECT COUNT() FROM Profile"),
+    cnt("SELECT COUNT() FROM User WHERE IsActive = false"),
+    cnt("SELECT COUNT() FROM User WHERE LastLoginDate = null"),
+    cnt("SELECT COUNT() FROM PermissionSetAssignment")
+  ]);
+  return {profiles, inactive, neverLoggedIn, psetAssignments};
+}
+
+// Compact plain-text snapshot handed to the LLM (and shown under the report).
+function orgAuditSnapshot(info, facts) {
+  const L = (key) => facts && facts[key] != null ? fmtNum(facts[key]) : "unknown";
+  const lines = [];
+  const o = info && info.org;
+  if (o) {
+    lines.push(`Org: ${o.Name || "?"} (${o.OrganizationType || "?"}, ` +
+      `${o.IsSandbox ? "Sandbox" : "Production"}, instance ${o.InstanceName || "?"})`);
+  }
+  if (info && info.customObjects != null) {
+    lines.push(`Customizable objects: ${fmtNum(info.customObjects)}`);
+  }
+  lines.push(`Profiles: ${L("profiles")}`);
+  lines.push(`Inactive users: ${L("inactive")}`);
+  lines.push(`Users who never logged in: ${L("neverLoggedIn")}`);
+  const ps = info && info.permsets;
+  if (ps) {
+    const licensed = ps.records.filter(p => p && p.LicenseId).length;
+    lines.push(`Permission sets (non-profile): ${fmtNum(ps.total)} ` +
+      `(${fmtNum(licensed)} license-restricted, ${L("psetAssignments")} assignments)`);
+  } else {
+    lines.push(`Permission sets (non-profile): unknown`);
+  }
+  if (info && info.permsetGroups != null) lines.push(`Permission set groups: ${fmtNum(info.permsetGroups)}`);
+  const lim = info && info.limits;
+  if (lim) {
+    const pct = (bucket) => {
+      if (!bucket || typeof bucket !== "object" || !bucket.Max) return null;
+      const used = bucket.Max - (bucket.Remaining != null ? bucket.Remaining : bucket.Max);
+      return Math.max(0, Math.min(100, Math.round(used / bucket.Max * 100)));
+    };
+    const d = pct(lim.DataStorageMB || lim.DataStorage);
+    const f = pct(lim.FileStorageMB || lim.FileStorage);
+    const a = pct(lim.DailyApiRequests);
+    if (d != null) lines.push(`Data storage used: ${d}%`);
+    if (f != null) lines.push(`File storage used: ${f}%`);
+    if (a != null) lines.push(`Daily API requests used: ${a}%`);
+  }
+  return lines.join("\n");
+}
+
+// Card in the Org Info grid: Run audit → facts → AI report (persisted per session).
+function AuditCard({info}) {
+  const [running, setRunning] = React.useState(false);
+  const [report, setReport] = ffUseSession("org", "auditReport", null);
+  const [snapshot, setSnapshot] = ffUseSession("org", "auditSnapshot", null);
+  const [auditErr, setAuditErr] = React.useState(null);
+  const [copied, setCopied] = React.useState(false);
+
+  const openSettings = () => {
+    try {
+      chrome.runtime.sendMessage({message: "openOptions", host: ""});
+    } catch (e) { /* extension context only */ }
+  };
+
+  const run = async () => {
+    setAuditErr(null);
+    if (!hasValidConfig()) { setAuditErr("NO_LLM_CONFIG"); return; }
+    setRunning(true);
+    try {
+      const facts = await orgAuditFacts(info);
+      const snap = orgAuditSnapshot(info, facts);
+      setSnapshot(snap);
+      const text = await logsAskLlm(ORG_AUDIT_SYSTEM, "Org hygiene facts:\n" + snap);
+      setReport({text, at: Date.now()});
+    } catch (e) {
+      setAuditErr(e.message === "NO_LLM_CONFIG" ? "NO_LLM_CONFIG" : e.message);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const onCopy = () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText && report) {
+        navigator.clipboard.writeText(report.text);
+      }
+    } catch (e) { /* ignore */ }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+
+  return h("div", {className: "org-card org-card-wide"},
+    h("div", {className: "org-card-h"},
+      h("span", {className: "org-card-ico"}, "🩺"),
+      h("span", {className: "org-card-t"}, "AI Org Hygiene Audit"),
+      h("div", {className: "audit-actions"},
+        report && h("span", {className: "audit-at"},
+          "Last run " + fmtDateTime(report.at)),
+        h("button", {
+          className: "btn btn-primary btn-sm",
+          disabled: running,
+          onClick: run
+        }, running ? "Auditing…" : report ? "Run again" : "Run audit")
+      )
+    ),
+    (!hasValidConfig() || auditErr === "NO_LLM_CONFIG") &&
+      h("div", {className: "insp-warn"},
+        "AI audit needs a provider + API key. ",
+        h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")),
+    auditErr && auditErr !== "NO_LLM_CONFIG" &&
+      h("div", {className: "insp-error"}, auditErr),
+    running && h("div", {className: "insp-status-info"},
+      "Collecting org facts, then asking the AI — usually a few seconds…"),
+    report && h(AnalysisReport, {text: report.text, copied, onCopy}),
+    report && snapshot &&
+      h("details", {className: "audit-details"},
+        h("summary", null, "Facts sent to the AI"),
+        h("pre", {className: "audit-facts"}, snapshot)),
+    !report && !running && !auditErr &&
+      h("div", {className: "insp-hint-strip"},
+        "Runs read-only counts (profiles, inactive users, storage, API) and asks your AI " +
+        "for risks and next steps. Nothing is changed in the org.")
   );
 }
 
