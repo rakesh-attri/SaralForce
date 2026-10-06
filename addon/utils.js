@@ -69,6 +69,32 @@ export async function getPKCEParameters(sfHost) {
   }
 }
 
+// Clipboard write with a synchronous execCommand fallback. The panel runs in
+// an iframe where navigator.clipboard may be blocked by Permissions Policy
+// ("Failed to execute 'writeText' on 'Clipboard'..."), so never surface that
+// raw error to the user — fall back to a textarea + execCommand copy.
+export async function safeCopyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall through to execCommand */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch (e) {
+    return false;
+  }
+}
+
 export function copyToClipboard(value) {
   let temp = document.createElement("input");
   temp.value = "temp";

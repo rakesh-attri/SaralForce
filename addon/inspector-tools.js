@@ -1,5 +1,6 @@
 import {sfConn, apiVersion} from "./inspector.js";
-import {getSavedConfig, getLLMProvider, getProviderConfig, hasValidConfig} from "./llm/llm-service.js";
+import {getSavedConfig, getLLMProvider, getProviderConfig, hasValidConfig, getCelebrateVariant} from "./llm/llm-service.js";
+import {safeCopyText} from "./utils.js";
 
 const h = React.createElement;
 
@@ -445,6 +446,86 @@ async function ffDescribeObject(objApi) {
   return d;
 }
 
+// ─── Shared code-editor pieces (SOQL + Apex tabs) ─────────────────────
+// Success celebration: a paper plane (default) arcs across the editor after
+// a run succeeds. Purely visual — pointer-events:none, aria-hidden, keyed so
+// it plays exactly once per success and unmounts on animationend. The variant
+// (plane | confetti) is read fresh from Settings → Preferences in options.html.
+const CONFETTI_COLORS = ["#22a7f0", "#f59e0b", "#a855f7", "#22c555", "#eab308", "#ec4899"];
+
+function Celebrate({seq, onDone}) {
+  if (!seq) return null;
+  const variant = getCelebrateVariant();
+  return h("div", {
+    key: seq,
+    className: "code-celebrate",
+    "aria-hidden": "true",
+    onAnimationEnd: e => { if (e.target === e.currentTarget) onDone(); }
+  },
+    variant === "confetti"
+      ? Array.from({length: 16}, (_, i) =>
+          h("span", {
+            key: i,
+            className: "cc-chip",
+            style: {"--i": i, background: CONFETTI_COLORS[i % CONFETTI_COLORS.length]}
+          }))
+      : h("span", {className: "cc-plane"},
+          h("svg", {width: 26, height: 26, viewBox: "0 0 24 24", "aria-hidden": "true"},
+            h("path", {
+              d: "M2.5 11.8 L21.5 3.5 L13.6 20.8 L11 13.2 Z",
+              style: {fill: "var(--tok-t, #56d4f1)", stroke: "var(--code-fg, #1e2a3d)"}
+            }),
+            h("path", {
+              d: "M21.5 3.5 L11 13.2",
+              style: {stroke: "var(--code-fg, #1e2a3d)", opacity: 0.55}
+            })))
+  );
+}
+
+// SOQL lexer: comments → strings → numbers → identifiers (contextualized by
+// keyword / function / table-after-FROM / alias-after-AS / column) →
+// operators → punctuation. Output mirrors apexHighlight (escaped HTML).
+const SOQL_KEYWORDS = new Set((
+  "select from where and or not order by group having limit offset asc desc " +
+  "nulls first last like in is null exists between includes excludes with for " +
+  "view update typeof end else when then case as union all inner left right " +
+  "full outer join on distinct using"
+).split(" "));
+const SOQL_LOGIC = new Set(["and", "or", "not", "like", "in", "is", "null",
+  "exists", "between", "includes", "excludes"]);
+
+function soqlHighlight(src) {
+  const text = String(src == null ? "" : src);
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const re = /(\/\/[^\n]*|--[^\n]*|\/\*[\s\S]*?\*\/)|('(?:''|[^'])*'|"(?:\\.|[^"\\])*")|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)|([=<>!]+|[-+*/%^])|([(),;.])/g;
+  let out = "";
+  let last = 0;
+  let prev = "";
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    out += esc(text.slice(last, m.index));
+    if (m[1]) out += `<span class="tok-c">${esc(m[1])}</span>`;
+    else if (m[2]) out += `<span class="tok-s">${esc(m[2])}</span>`;
+    else if (m[3]) out += `<span class="tok-n">${esc(m[3])}</span>`;
+    else if (m[4]) {
+      const w = m[4];
+      const lw = w.toLowerCase();
+      const isCall = /^\s*\(/.test(text.slice(m.index + w.length));
+      if (isCall && !SOQL_KEYWORDS.has(lw)) out += `<span class="tok-fn">${esc(w)}</span>`;
+      else if (SOQL_KEYWORDS.has(lw)) out += `<span class="${SOQL_LOGIC.has(lw) ? "tok-k2" : "tok-k"}">${esc(w)}</span>`;
+      else if (prev === "from" || prev === "join" || prev === "into" || prev === "update") out += `<span class="tok-t">${esc(w)}</span>`;
+      else if (prev === "as") out += `<span class="tok-al">${esc(w)}</span>`;
+      else out += `<span class="tok-col">${esc(w)}</span>`;
+      prev = lw;
+    }
+    else if (m[5]) out += `<span class="tok-op">${esc(m[5])}</span>`;
+    else if (m[6]) out += `<span class="tok-p">${esc(m[6])}</span>`;
+    last = m.index + m[0].length;
+  }
+  out += esc(text.slice(last));
+  return out;
+}
+
 // ─── SOQL tab ───────────────────────────────────────────────
 function SoqlTab() {
   const [query, setQuery] = ffUseSession("soql", "query", "SELECT Id, Name FROM Account LIMIT 50");
@@ -466,6 +547,19 @@ function SoqlTab() {
   const [saved, setSaved] = React.useState(() => ffLoadJson("ff_soql_saved", []));
   const [saveLabel, setSaveLabel] = React.useState("");
   const taRef = React.useRef(null);
+  const hlRef = React.useRef(null);
+  const gutterRef = React.useRef(null);
+  const [celeb, setCeleb] = React.useState(0);
+
+  const lineCount = Math.max(1, String(query || "").split("\n").length);
+  const onTermScroll = e => {
+    const t = e.target;
+    if (hlRef.current) {
+      hlRef.current.scrollTop = t.scrollTop;
+      hlRef.current.scrollLeft = t.scrollLeft;
+    }
+    if (gutterRef.current) gutterRef.current.scrollTop = t.scrollTop;
+  };
 
   React.useEffect(() => {
     ffGetObjects().then(setObjects).catch(() => {});
@@ -513,6 +607,7 @@ function SoqlTab() {
       const colSet = new Set();
       flat.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
       setResult({...r, rows: flat, columns: [...colSet]});
+      setCeleb(c => c + 1);
       setHistory(prev => {
         const next = [{q, ts: Date.now()}, ...prev.filter(h => h.q !== q)].slice(0, 20);
         ffSaveJson("ff_soql_history", next);
@@ -626,6 +721,25 @@ function SoqlTab() {
       return !f || o.name.toLowerCase().includes(f) || (o.label || "").toLowerCase().includes(f);
     })
     .slice(0, 24);
+
+  // Accepting an object suggestion swaps the whole trailing FROM token for
+  // the full API name. The old code appended name.slice(typed.length) and
+  // kept the typed text — that only worked when the typed letters were a
+  // literal prefix of the name; typing "md" for "...__mdt" produced garbage
+  // like "mdANNEL_ORDERS__..." instead of the suggested object.
+  const insertObject = (name) => {
+    if (trailingFrom) {
+      const next = query.slice(0, query.length - trailingFrom[1].length) + name + " ";
+      setQuery(next);
+      const ta = taRef.current;
+      requestAnimationFrame(() => {
+        if (!ta) return;
+        try { ta.focus(); ta.setSelectionRange(next.length, next.length); } catch (e) { /* ignore */ }
+      });
+      return;
+    }
+    insertAtCursor(` ${name}`);
+  };
 
   // Deterministic pastel tone per field/object name (colourful pills, image-style)
   const pillTone = (name) => {
@@ -754,17 +868,27 @@ function SoqlTab() {
           )
         ),
         h("div", {className: "soql-editor-box"},
-          h("textarea", {
-            ref: taRef,
-            className: "insp-soql soql-editor",
-            value: query,
-            spellCheck: false,
-            onChange: e => setQuery(e.target.value),
-            onKeyDown: e => {
-              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
-            },
-            placeholder: "SELECT Id, Name FROM Account LIMIT 50"
-          }),
+          h("div", {className: "soql-term"},
+            h("div", {className: "soql-gutter", ref: gutterRef, "aria-hidden": "true"},
+              Array.from({length: lineCount}, (_, i) =>
+                h("div", {key: i, className: "soql-ln"}, String(i + 1)))),
+            h("div", {className: "soql-pane"},
+              h("pre", {className: "soql-hl", ref: hlRef, "aria-hidden": "true"},
+                h("code", {dangerouslySetInnerHTML: {__html: soqlHighlight(query)}})),
+              h("textarea", {
+                ref: taRef,
+                className: "insp-soql",
+                value: query,
+                spellCheck: false,
+                wrap: "off",
+                onChange: e => setQuery(e.target.value),
+                onScroll: onTermScroll,
+                onKeyDown: e => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
+                },
+                placeholder: "SELECT Id, Name FROM Account LIMIT 50"
+              })),
+            h(Celebrate, {seq: celeb, onDone: () => setCeleb(0)})),
           h("div", {className: "soql-hint-row"},
             h("span", null,
               h("kbd", null, "Ctrl"), " / ", h("kbd", null, "⌘"),
@@ -792,7 +916,7 @@ function SoqlTab() {
             h("button", {
               className: "btn btn-secondary btn-sm",
               onClick: async () => {
-                try { await navigator.clipboard.writeText(suggestion.fixedQuery); }
+                try { await safeCopyText(suggestion.fixedQuery); }
                 catch (e) { /* ignore */ }
               }
             }, "Copy")
@@ -836,7 +960,7 @@ function SoqlTab() {
                 key: o.name,
                 className: "insp-chip t" + pillTone(o.name),
                 title: `${o.label} — click to insert`,
-                onClick: () => insertAtCursor(trailingFrom ? o.name.slice(trailingFrom[1].length) + " " : ` ${o.name}`)
+                onClick: () => insertObject(o.name)
               }, o.name))
           ),
           fromFields && h("button", {
@@ -1537,7 +1661,7 @@ function PermSetsCard({info}) {
     : list;
 
   const copy = (name) => {
-    try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(name); } catch (e) { /* ignore */ }
+    try { safeCopyText(name); } catch (e) { /* ignore */ }
     setCopied(name);
     setTimeout(() => setCopied(null), 1200);
   };
@@ -1635,12 +1759,7 @@ function OrgLogCard({icon, title, soql, placeholder, match, stats, row, emptyTex
   React.useEffect(() => { load(); }, []);
 
   const copy = (key, text) => {
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        const p = navigator.clipboard.writeText(text);
-        if (p && p.catch) p.catch(() => {});
-      }
-    } catch (e) { /* ignore */ }
+    try { safeCopyText(text); } catch (e) { /* ignore */ }
     setCopied(key);
     setTimeout(() => setCopied(null), 1200);
   };
@@ -1702,12 +1821,7 @@ function SetupAuditCard({info}) {
   const lineOf = (r) => [ffAgo(r.CreatedDate), nm(r), r.Action, r.Section, r.Display]
     .filter(x => x != null && x !== "").join(" | ");
   const copyLine = (text) => {
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        const p = navigator.clipboard.writeText(text);
-        if (p && p.catch) p.catch(() => {});
-      }
-    } catch (e) { /* clipboard unavailable — ignore */ }
+    try { safeCopyText(text); } catch (e) { /* ignore */ }
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
   };
@@ -1934,9 +2048,7 @@ function AuditCard({info}) {
 
   const onCopy = () => {
     try {
-      if (navigator.clipboard && navigator.clipboard.writeText && report) {
-        navigator.clipboard.writeText(report.text);
-      }
+      if (report) safeCopyText(report.text);
     } catch (e) { /* ignore */ }
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
@@ -3264,15 +3376,7 @@ function AppTabsTab() {
       `Tab: ${tabName}\n` +
       `Current tabs: ${(currentTabs || []).join(", ") || "unknown"}\n\n${debug}`;
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-      else {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        ta.remove();
-      }
+      await safeCopyText(text);
     } catch (e) { /* ignore */ }
   };
 
@@ -3586,12 +3690,9 @@ function UsersTab() {
 
   const copyId = async () => {
     if (!sel) return;
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(sel.Id);
-      setActionMsg(`Copied Id ${sel.Id}`);
-    } catch (e) {
-      setActionErr(e.message);
-    }
+    const ok = await safeCopyText(sel.Id);
+    if (ok) setActionMsg(`Copied Id ${sel.Id}`);
+    else setActionErr(`Copy was blocked by the browser — copy the Id manually: ${sel.Id}`);
   };
 
   // ── Clone user: same profile/role, copied permission sets, groups ──
@@ -4040,7 +4141,7 @@ const APEX_KEYWORDS = new Set((
 function apexHighlight(src) {
   const text = String(src == null ? "" : src);
   const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")|\b(\d+(?:\.\d+)?)\b|\b([A-Za-z_][A-Za-z0-9_]*)\b/g;
+  const re = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)|([=<>!]+|[-+*/%^])|([(),;.[\]{}])/g;
   let out = "";
   let last = 0;
   let m;
@@ -4049,8 +4150,15 @@ function apexHighlight(src) {
     if (m[1]) out += `<span class="tok-c">${esc(m[1])}</span>`;
     else if (m[2]) out += `<span class="tok-s">${esc(m[2])}</span>`;
     else if (m[3]) out += `<span class="tok-n">${esc(m[3])}</span>`;
-    else if (APEX_KEYWORDS.has(m[4].toLowerCase())) out += `<span class="tok-k">${esc(m[4])}</span>`;
-    else out += esc(m[4]);
+    else if (m[4]) {
+      const w = m[4];
+      if (APEX_KEYWORDS.has(w.toLowerCase())) out += `<span class="tok-k">${esc(w)}</span>`;
+      else if (/^\s*\(/.test(text.slice(m.index + w.length))) out += `<span class="tok-fn">${esc(w)}</span>`;
+      else if (/^[A-Z]/.test(w)) out += `<span class="tok-t">${esc(w)}</span>`;
+      else out += esc(w);
+    }
+    else if (m[5]) out += `<span class="tok-op">${esc(m[5])}</span>`;
+    else if (m[6]) out += `<span class="tok-p">${esc(m[6])}</span>`;
     last = m.index + m[0].length;
   }
   out += esc(text.slice(last));
@@ -4140,9 +4248,12 @@ function ApexTab() {
   const [eventFilter, setEventFilter] = ffUseSession("apex", "eventFilter", "");
   const [logFilter, setLogFilter] = ffUseSession("apex", "logFilter", "");
   const [history, setHistory] = React.useState(() => ffLoadJson("ff_apex_history", []));
+  const [saved, setSaved] = React.useState(() => ffLoadJson("ff_apex_saved", []));
+  const [saveLabel, setSaveLabel] = React.useState("");
   const taRef = React.useRef(null);
   const hlRef = React.useRef(null);
   const gutterRef = React.useRef(null);
+  const [celeb, setCeleb] = React.useState(0);
   const [selRange, setSelRange] = React.useState({start: 0, end: 0});
   const [useAi, setUseAi] = ffUseSession("apex", "useAi", false);
   const [aiBusy, setAiBusy] = React.useState(false);
@@ -4157,6 +4268,28 @@ function ApexTab() {
       const next = [{code: snippet, ts: Date.now(), ok: !!ok},
         ...prev.filter(h => h.code !== snippet)].slice(0, 15);
       ffSaveJson("ff_apex_history", next);
+      return next;
+    });
+  };
+
+  // Save the current editor code as a named template (mirrors the SOQL
+  // "Save Query" flow): chips row + click to load, × to delete.
+  const saveTemplate = () => {
+    const label = saveLabel.trim();
+    const snippet = String(code || "");
+    if (!label || !snippet.trim()) return;
+    setSaved(prev => {
+      const next = [{label, code: snippet}, ...prev.filter(t => t.label !== label)].slice(0, 30);
+      ffSaveJson("ff_apex_saved", next);
+      return next;
+    });
+    setSaveLabel("");
+  };
+
+  const deleteTemplate = (label) => {
+    setSaved(prev => {
+      const next = prev.filter(t => t.label !== label);
+      ffSaveJson("ff_apex_saved", next);
       return next;
     });
   };
@@ -4224,6 +4357,9 @@ function ApexTab() {
       const r = await apexExecute(snippet);
       setExec(r);
       pushHistory(snippet, r.compiled && r.success);
+      // Celebration only on a real success (compiled AND executed OK) —
+      // compile problems, runtime failures and errors never trigger it.
+      if (r && r.compiled && r.success) setCeleb(c => c + 1);
       // On-error: Salesforce still rejected it → offer an AI fix when enabled.
       if (useAi && !(r.compiled && r.success) && r.compileProblem) {
         setAiBusy(true);
@@ -4312,6 +4448,38 @@ function ApexTab() {
             onClick: () => { setCode(t.code); setSelRange({start: 0, end: 0}); }
           }, t.label)
         )
+      ),
+      saved.length > 0 && h("div", {className: "insp-chips-row"},
+        h("span", {className: "insp-chips-label"}, "Saved:"),
+        saved.slice(0, 12).map(s =>
+          h("span", {key: s.label, className: "insp-chip-group"},
+            h("button", {
+              className: "insp-chip",
+              title: s.code.slice(0, 160),
+              onClick: () => { setCode(s.code); setSelRange({start: 0, end: 0}); }
+            }, s.label),
+            h("button", {
+              className: "insp-chip-x",
+              title: `Delete "${s.label}"`,
+              onClick: () => deleteTemplate(s.label)
+            }, "×")
+          )
+        )
+      ),
+      h("div", {className: "soql-save-row"},
+        h("input", {
+          className: "soql-save-input",
+          value: saveLabel,
+          placeholder: "Save as template…",
+          title: "Name the current code and save it as a reusable template",
+          onChange: e => setSaveLabel(e.target.value),
+          onKeyDown: e => { if (e.key === "Enter") saveTemplate(); }
+        }),
+        h("button", {
+          className: "btn btn-primary btn-sm",
+          disabled: !String(code || "").trim(),
+          onClick: saveTemplate
+        }, "Save")
       )
     ),
     h("div", {className: "apex-term"},
@@ -4347,7 +4515,8 @@ function ApexTab() {
           },
           placeholder: "Enter Apex Code… (Ctrl+Enter to execute)"
         })
-      )
+      ),
+      h(Celebrate, {seq: celeb, onDone: () => setCeleb(0)})
     ),
     h("div", {className: "apex-bar"},
       h("label", {className: "insp-check", title: "Fetch the debug log automatically after each run"},
@@ -4434,7 +4603,7 @@ function ApexTab() {
         h("button", {
           className: "btn btn-secondary btn-sm",
           onClick: async () => {
-            try { await navigator.clipboard.writeText(aiCheck.fixedCode); }
+            try { await safeCopyText(aiCheck.fixedCode); }
             catch (e) { /* ignore */ }
           }
         }, "Copy")
@@ -5293,7 +5462,7 @@ function LogsTab() {
   const copyAnalysis = async () => {
     try {
       const text = selAnalysis && selAnalysis.text ? selAnalysis.text : "";
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      await safeCopyText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch (e) { /* clipboard unavailable */ }

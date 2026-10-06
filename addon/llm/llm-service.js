@@ -108,3 +108,22 @@ export function hasValidConfig() {
   if (providerDef.requiresBaseUrl && !config.baseUrl) return false;
   return true;
 }
+
+// Editor success celebration: "plane" (default) or "confetti". Lives in
+// localStorage (shared across the options page and the panel like llmConfig)
+// instead of ffUseSession, because the setting is changed from options.html.
+export const CELEBRATE_VARIANT_KEY = "sfoc_celebrate";
+
+export function getCelebrateVariant() {
+  try {
+    return localStorage.getItem(CELEBRATE_VARIANT_KEY) === "confetti" ? "confetti" : "plane";
+  } catch (e) {
+    return "plane";
+  }
+}
+
+export function setCelebrateVariant(variant) {
+  try {
+    localStorage.setItem(CELEBRATE_VARIANT_KEY, variant === "confetti" ? "confetti" : "plane");
+  } catch (e) { /* ignore */ }
+}

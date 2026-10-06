@@ -1,7 +1,7 @@
 import {sfConn, apiVersion, XML, startSalesforceLogin} from "./inspector.js";
 import {hasValidConfig, getSavedConfig, getLLMProvider, getProviderConfig} from "./llm/llm-service.js";
 import {SYSTEM_PROMPT, REFINEMENT_PROMPT, USER_MESSAGE_TEMPLATE, ENHANCE_SYSTEM_PROMPT} from "./prompts/system-prompt.js";
-import {createSpinForMethod, UserInfoModel, Constants} from "./utils.js";
+import {createSpinForMethod, UserInfoModel, Constants, safeCopyText} from "./utils.js";
 import {InspectorPanel, ffApplyRestore, ffTakeSnapshot} from "./inspector-tools.js";
 
 let h = React.createElement;
@@ -115,27 +115,7 @@ const CUSTOM_APP_AFTER_TABS = new Set([
   "oAuthCustomScope", "platformActionOverrides", "microsite"
 ]);
 
-async function safeCopyText(text) {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch (e) { /* fall through to execCommand */ }
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
-    return !!ok;
-  } catch (e) {
-    return false;
-  }
-}
+// safeCopyText lives in utils.js (shared with inspector-tools.js).
 
 // Namespace-agnostic DOM helpers for Metadata SOAP responses. Server
 // responses mix prefixes (met:/sf:/unprefixed), so match on localName.
@@ -520,7 +500,9 @@ class App extends React.Component {
       appAssigned: false,
       appLoadError: null,
       _appsTried: false,
-      builderMode: saved?.builderMode || "plan"
+      builderMode: saved?.builderMode || "plan",
+      colorTheme: (typeof localStorage !== "undefined" && localStorage.getItem("sfoc_theme")) || "dark",
+      apiNamesOn: false
     };
     this._appsLoading = false;
     this.spinnerCount = 0;
@@ -534,7 +516,109 @@ class App extends React.Component {
     this.forceUpdate();
   }
 
+  applyColorTheme(theme) {
+    const t = theme || this.state.colorTheme || "dark";
+    try {
+      const root = document.documentElement;
+      root.classList.toggle("dark", t === "dark");
+      if (t === "dark") root.setAttribute("data-theme", "dark");
+      else root.removeAttribute("data-theme");
+      if (typeof localStorage !== "undefined") localStorage.setItem("sfoc_theme", t);
+    } catch (e) { /* ignore */ }
+  }
+
+  toggleColorTheme() {
+    const next = (this.state.colorTheme || "dark") === "dark" ? "light" : "dark";
+    this.setState({colorTheme: next}, () => this.applyColorTheme(next));
+  }
+
+  closePanel() {
+    try { window.parent.postMessage({type: "sfoc-close-sidebar"}, "*"); } catch (e) { /* not embedded */ }
+    try {
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({message: "closeSidebar"});
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  toggleApiNames() {
+    try { window.parent.postMessage({type: "sfoc-show-api-names"}, "*"); } catch (e) { /* not embedded */ }
+    this.setState(prev => ({apiNamesOn: !prev.apiNamesOn}));
+  }
+
+  async copyProposalValue(text, e) {
+    const ok = await safeCopyText(String(text == null ? "" : text));
+    try {
+      const btn = e && e.currentTarget;
+      if (btn) {
+        const orig = btn.textContent;
+        btn.textContent = ok ? "Copied!" : "Failed";
+        setTimeout(() => { btn.textContent = orig; }, 1200);
+      }
+    } catch (err) { /* ignore */ }
+    if (!ok) this.setState({error: "Copy failed in this iframe context."});
+  }
+
+  saralSpark() {
+    return h("span", {className: "saral-spark", "aria-hidden": "true"},
+      h("svg", {width: 13, height: 13, viewBox: "0 0 24 24", fill: "none"},
+        h("path", {d: "M12 2 L14.2 9.8 L22 12 L14.2 14.2 L12 22 L9.8 14.2 L2 12 L9.8 9.8 Z", fill: "#7dd3fc", opacity: "0.95"}),
+        h("circle", {cx: "18.5", cy: "5.5", r: "1.6", fill: "#a78bfa"}),
+        h("circle", {cx: "5", cy: "18", r: "1.2", fill: "#38bdf8"})));
+  }
+
+  saralAvatarLabel() {
+    return h("span", {style: {display: "inline-flex", alignItems: "center", gap: "5px"}}, this.saralSpark(), "SaralAI");
+  }
+
+  renderAssistantJson(msg) {
+    let proposal = msg && msg.proposal;
+    if (!proposal && msg && msg.text) {
+      try { proposal = parseJSONFromText(msg.text); } catch (e) { proposal = null; }
+    }
+    const obj = proposal && proposal.object;
+    if (!obj || typeof obj !== "object") return null;
+    const keys = Object.keys(obj).filter(k => obj[k] != null && obj[k] !== "");
+    const fullText = JSON.stringify(proposal, null, 2);
+    return h("div", {className: "saral-code-card"},
+      h("div", {className: "saral-code-head"},
+        this.saralSpark(),
+        h("span", null, "SaralAI proposal"),
+        h("span", {className: "spacer"}),
+        h("button", {
+          className: "saral-copy-all",
+          title: "Copy full JSON",
+          onClick: (e) => this.copyProposalValue(fullText, e)
+        }, "⧉ Copy")
+      ),
+      h("div", {className: "saral-code-inset"},
+        h("div", {className: "saral-code-row"},
+          h("span", {className: "p"}, "{"),
+          h("span", {className: "p"}, '"object": {')
+        ),
+        keys.map(k =>
+          h("div", {key: k, className: "saral-code-row"},
+            h("span", {className: "k"}, `  "${k}"`),
+            h("span", {className: "p"}, ": "),
+            h("span", {className: "s"}, JSON.stringify(obj[k])),
+            h("span", {className: "p"}, ","),
+            h("button", {
+              className: "mini-copy",
+              title: `Copy ${k}`,
+              onClick: (e) => this.copyProposalValue(typeof obj[k] === "string" ? obj[k] : JSON.stringify(obj[k]), e)
+            }, "⧉")
+          )
+        ),
+        h("div", {className: "saral-code-row"},
+          h("span", {className: "p"}, "  }"),
+          h("span", {className: "p"}, "}")
+        )
+      )
+    );
+  }
+
   componentDidMount() {
+    this.applyColorTheme(this.state.colorTheme || "dark");
     if (!hasValidConfig()) {
       this.addSystemMessage("Welcome! Before we begin, please configure your LLM provider in the Options page.");
     } else if (this.state.messages.length === 0) {
@@ -3368,8 +3452,7 @@ class App extends React.Component {
         h("div", {className: "app-header"},
           h("div", {className: "header-left"},
             h("img", {className: "logo-chip", src: "logo-mark.png", alt: ""}),
-            h("h1", {className: "app-title"}, "Saral", h("span", {className: "app-title-accent"}, "Force")),
-            h("span", {className: "app-subtitle"}, "Inspector · SOQL / Apex / Data / Logs / Org")
+            h("h1", {className: "app-title"}, "SaralForce | AI Object Builder & Org Toolkit")
           ),
           h("div", {className: "header-right"},
             h("button", {
@@ -3378,20 +3461,22 @@ class App extends React.Component {
               title: "Back to Object Builder"
             }, "← Builder"),
             h("button", {
-              className: "header-btn",
-              onClick: () => {
-                try { window.parent.postMessage({type: "sfoc-show-api-names"}, "*"); }
-                catch (e) { /* not embedded — nothing to toggle */ }
-              },
+              className: `header-btn${this.state.apiNamesOn ? " active" : ""}`,
+              onClick: () => this.toggleApiNames(),
               title: "Show API names on this Salesforce page (click again to hide)"
-            }, "API Names"),
+            }, this.state.apiNamesOn ? "Hide API Names" : "Show API Names"),
             !sfConn.sessionId && h("button", {
               className: "header-btn",
               onClick: () => startSalesforceLogin(this.props.sfHost).catch(e => this.setState({error: "Login failed: " + e.message})),
               title: "Log in with Salesforce OAuth"
             }, "Connect"),
-            this.userInfoModel.userFullName && h("span", {className: "user-info"},
-              this.userInfoModel.userInitials
+            h("button", {
+              className: "header-btn header-btn-icon",
+              onClick: () => this.toggleColorTheme(),
+              title: `Switch to ${(this.state.colorTheme || "dark") === "dark" ? "light" : "dark"} theme`
+            }, (this.state.colorTheme || "dark") === "dark" ? "☾" : "☀"),
+            h("span", {className: "user-info", title: this.userInfoModel.userFullName || "User"},
+              this.userInfoModel.userInitials || "R"
             )
           )
         ),
@@ -3402,7 +3487,7 @@ class App extends React.Component {
             target: "_blank",
             rel: "noopener noreferrer"
           },
-            "Developed by ©Bhajan Mandali ",
+            "Developed by Er.Bhajan Mandali © ",
             h("svg", {className: "ff-flag", width: 16, height: 11, viewBox: "0 0 18 12", "aria-label": "India"},
               h("rect", {width: 18, height: 4, fill: "#FF9933"}),
               h("rect", {y: 4, width: 18, height: 4, fill: "#FFFFFF"}),
@@ -3418,8 +3503,7 @@ class App extends React.Component {
       h("div", {className: "app-header"},
         h("div", {className: "header-left"},
           h("img", {className: "logo-chip", src: "logo-mark.png", alt: ""}),
-          h("h1", {className: "app-title"}, "Saral", h("span", {className: "app-title-accent"}, "Force")),
-          h("span", {className: "app-subtitle"}, "AI Object Builder & Org Toolkit")
+          h("h1", {className: "app-title"}, "SaralForce | AI Object Builder & Org Toolkit")
         ),
         h("div", {className: "header-right"},
           h("button", {
@@ -3428,30 +3512,32 @@ class App extends React.Component {
             title: "SOQL, Data Import/Export, Org Info"
           }, "Inspector"),
           h("button", {
-            className: "header-btn",
-            onClick: () => {
-              try { window.parent.postMessage({type: "sfoc-show-api-names"}, "*"); }
-              catch (e) { /* not embedded — nothing to toggle */ }
-            },
+            className: `header-btn${this.state.apiNamesOn ? " active" : ""}`,
+            onClick: () => this.toggleApiNames(),
             title: "Show API names on this Salesforce page (click again to hide)"
-          }, "API Names"),
+          }, this.state.apiNamesOn ? "Hide API Names" : "Show API Names"),
           !sfConn.sessionId && h("button", {
             className: "header-btn",
             onClick: () => startSalesforceLogin(this.props.sfHost).catch(e => this.setState({error: "Login failed: " + e.message})),
             title: "Log in with Salesforce OAuth"
           }, "Connect"),
           h("button", {
-            className: "header-btn",
+            className: "header-btn header-btn-new",
             onClick: () => this.newChat(),
             title: "New Chat"
           }, "\u2795 New"),
           h("button", {
-            className: "header-btn",
+            className: `header-btn${this.state.showHistory ? " active" : ""}`,
             onClick: () => this.setState({showHistory: !this.state.showHistory}),
             title: "Chat History"
           }, `\u23f3 ${this.state.chatHistory.length}`),
-          this.userInfoModel.userFullName && h("span", {className: "user-info"},
-            this.userInfoModel.userInitials
+          h("button", {
+            className: "header-btn header-btn-icon",
+            onClick: () => this.toggleColorTheme(),
+            title: "Toggle theme"
+          }, (this.state.colorTheme || "dark") === "dark" ? "☾" : "☀"),
+          h("span", {className: "user-info", title: this.userInfoModel.userFullName || "User"},
+            this.userInfoModel.userInitials || "R"
           )
         )
       ),
@@ -3495,17 +3581,17 @@ class App extends React.Component {
                   h("div", {className: "message-bubble"}, msg.text)
                 ),
                 msg.role === "assistant" && h("div", {className: "message-assistant"},
-                  h("div", {className: "message-avatar assistant-avatar"}, "AI"),
-                  h("div", {className: "message-bubble"}, msg.text)
+                  h("div", {className: "message-avatar assistant-avatar"}, this.saralAvatarLabel()),
+                  (this.renderAssistantJson(msg) || h("div", {className: "message-bubble"}, msg.text))
                 )
               )
             ),
             isGenerating && streamingText && h("div", {className: "message message-assistant"},
-              h("div", {className: "message-avatar assistant-avatar"}, "AI"),
+              h("div", {className: "message-avatar assistant-avatar"}, this.saralAvatarLabel()),
               h("div", {className: "message-bubble streaming"}, streamingText)
             ),
             isGenerating && !streamingText && h("div", {className: "message message-assistant"},
-              h("div", {className: "message-avatar assistant-avatar"}, "AI"),
+              h("div", {className: "message-avatar assistant-avatar"}, this.saralAvatarLabel()),
               h("div", {className: "message-bubble typing-indicator"},
                 h("span", {className: "dot"}),
                 h("span", {className: "dot"}),
@@ -4026,7 +4112,7 @@ class App extends React.Component {
           target: "_blank",
           rel: "noopener noreferrer"
         },
-          "Developed by ©Bhajan Mandali ",
+          "Developed by Er.Bhajan Mandali © ",
           h("svg", {className: "ff-flag", width: 16, height: 11, viewBox: "0 0 18 12", "aria-label": "India"},
             h("rect", {width: 18, height: 4, fill: "#FF9933"}),
             h("rect", {y: 4, width: 18, height: 4, fill: "#FFFFFF"}),

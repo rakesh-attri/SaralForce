@@ -508,6 +508,8 @@ body {
   width: auto;
   border-left: none;
   background: #fff;
+  color: #1e2a3d;
+  color-scheme: light;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -612,6 +614,7 @@ body {
   border-radius: 4px;
   font-family: 'Salesforce Sans', Arial, sans-serif;
   background: #fff;
+  color: #1e2a3d;
   box-sizing: border-box;
 }
 
@@ -800,6 +803,7 @@ td .plan-cell-input {
   padding: 6px 8px;
   border-bottom: 1px solid #f3f2f2;
   vertical-align: top;
+  color: #1e2a3d;
 }
 
 .fields-table tr:hover {
@@ -1060,6 +1064,8 @@ td .plan-cell-input {
   border: 1px solid #d8dde6;
   border-radius: 4px;
   background: #fff;
+  color: #1e2a3d;
+  color-scheme: light;
   padding: 6px;
 }
 
@@ -1275,6 +1281,8 @@ td .plan-cell-input {
   min-height: 0;
   overflow: auto;
   background: #f4f7fb;
+  color: #1e2a3d;
+  color-scheme: light;
   padding: 14px 18px 26px;
 }
 
@@ -1316,6 +1324,8 @@ td .plan-cell-input {
   border-radius: 10px;
   padding: 4px;
   background: #e9eef6;
+  color: #1e2a3d;
+  color-scheme: light;
   overflow-x: auto;
   flex-wrap: nowrap;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
@@ -1736,26 +1746,20 @@ td .plan-cell-input {
   font-style: italic;
   align-self: center;
 }
+/* The SOQL textarea is a transparent overlay above .soql-hl (see the shared
+   code-editor block) — it keeps the shared mono metrics so the mirror below
+   stays pixel-aligned. */
 .insp-soql {
   width: 100%;
-  min-height: 96px;
   font-family: Consolas, Monaco, "Courier New", monospace;
   font-size: 13px;
   line-height: 1.55;
   padding: 12px 14px;
-  border: 1px solid #cfd8e6;
-  border-radius: 10px;
-  resize: vertical;
-  margin-bottom: 10px;
+  border: 0;
   box-sizing: border-box;
-  background: #fbfcfe;
-  color: #16325c;
+  background: transparent;
+  color: transparent;
   tab-size: 2;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-}
-
-.insp-soql:focus {
-  background: #fff;
 }
 
 .insp-file {
@@ -1847,6 +1851,7 @@ td .plan-cell-input {
 .insp-table td {
   padding: 7px 10px;
   border-bottom: 1px solid #f1f4f9;
+  color: #1e2a3d;
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2104,6 +2109,7 @@ td .plan-cell-input {
   border: 1px solid #d8dde6;
   border-radius: 6px;
   background: #fff;
+  color: #1e2a3d;
   padding: 8px 10px;
   cursor: pointer;
 }
@@ -2447,6 +2453,7 @@ input[type="checkbox"].insp-edit-input {
   border: 1px solid #e6ebf3;
   border-radius: 10px;
   background: #fff;
+  color: #1e2a3d;
   box-shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
 }
 
@@ -2565,6 +2572,8 @@ button:focus-visible {
   width: min(880px, 96%);
   max-height: 88vh;
   background: #fff;
+  color: #1e2a3d;
+  color-scheme: light;
   border-radius: 12px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   overflow: hidden;
@@ -3166,47 +3175,117 @@ button:focus-visible {
 }
 
 /* ── SaralForce · Apex code terminal ─────────────────── */
+/* ── Shared code editor (SOQL Query Editor + Apex terminal) ─────────────
+   Both are a line-number gutter + highlighted <pre> mirror + transparent
+   textarea overlay. Every color is a CSS variable so the card flips with
+   the app theme: light palette here, dark palette further down. */
+.soql-editor-box, .apex-term {
+  --code-bg: #ffffff;
+  --code-fg: #1e2a3d;
+  --code-gutter-bg: #f4f7fb;
+  --code-gutter-fg: #8894a8;
+  --code-border: #cfd8e6;
+  --code-caret: #0176d3;
+  --code-sel: rgba(1, 118, 211, 0.28);
+  --tok-k: #c25e00;
+  --tok-k2: #a626a4;
+  --tok-t: #0451a5;
+  --tok-col: #1e3a5f;
+  --tok-s: #3f7d29;
+  --tok-n: #7c3aed;
+  --tok-op: #40475a;
+  --tok-fn: #8a6d00;
+  --tok-c: #5f7d4f;
+  --tok-al: #3b6fd4;
+  --tok-p: #8b93a1;
+  color-scheme: light;
+}
+
+html.dark .soql-editor-box, html[data-theme="dark"] .soql-editor-box,
+html.dark .apex-term, html[data-theme="dark"] .apex-term {
+  --code-bg: #1e1e2e;
+  --code-fg: #d7dae3;
+  --code-gutter-bg: #242436;
+  --code-gutter-fg: #7d8496;
+  --code-border: #343a4a;
+  --code-caret: #58a6ff;
+  --code-sel: rgba(88, 166, 255, 0.30);
+  --tok-k: #ff9d45;
+  --tok-k2: #c678dd;
+  --tok-t: #56d4f1;
+  --tok-col: #9cdcfe;
+  --tok-s: #98c379;
+  --tok-n: #d2a8ff;
+  --tok-op: #e6e6e6;
+  --tok-fn: #dcdcaa;
+  --tok-c: #6a9955;
+  --tok-al: #7aa2f7;
+  --tok-p: #9aa0a6;
+  color-scheme: dark;
+}
+
 .apex-term {
+  position: relative;
   display: flex;
   height: 200px;
   min-height: 140px;
-  border: 1px solid #cfd8e6;
+  border: 1px solid var(--code-border);
   border-radius: 10px;
   overflow: hidden;
-  background: #fff;
+  background: var(--code-bg);
+  color: var(--code-fg);
   box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
   resize: vertical;
   margin-bottom: 10px;
 }
 
-.apex-gutter {
+html.dark .apex-term, html[data-theme="dark"] .apex-term {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .45);
+}
+
+.soql-term {
+  display: flex;
+  position: relative;
+  height: 170px;
+  min-height: 130px;
+  overflow: hidden;
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.apex-term:focus-within,
+.soql-term:focus-within {
+  outline: 2px solid var(--code-caret);
+  outline-offset: -2px;
+}
+
+.apex-gutter, .soql-gutter {
   flex: 0 0 46px;
   padding: 12px 0;
-  background: #f4f7fb;
-  border-right: 1px solid #e6ebf3;
+  background: var(--code-gutter-bg);
+  border-right: 1px solid var(--code-border);
   overflow: hidden;
   font-family: Consolas, Monaco, "Courier New", monospace;
   font-size: 13px;
   line-height: 1.55;
-  color: #8894a8;
+  color: var(--code-gutter-fg);
   text-align: right;
   user-select: none;
   -webkit-user-select: none;
 }
 
-.apex-ln {
+.apex-ln, .soql-ln {
   padding-right: 10px;
   white-space: nowrap;
 }
 
-.apex-pane {
+.apex-pane, .soql-pane {
   position: relative;
   flex: 1;
   min-width: 0;
 }
 
-.apex-hl,
-.apex-input {
+.apex-hl, .soql-hl, .apex-input, .soql-pane .insp-soql {
   position: absolute;
   inset: 0;
   margin: 0;
@@ -3218,46 +3297,109 @@ button:focus-visible {
   white-space: pre;
   tab-size: 2;
   overflow: auto;
+  box-sizing: border-box;
 }
 
-.apex-hl {
-  background: #fff;
-  color: #1e2a3d;
+.apex-hl, .soql-hl {
+  background: var(--code-bg);
+  color: var(--code-fg);
   pointer-events: none;
   overflow: hidden;
 }
 
-.apex-input {
+.apex-input, .soql-pane .insp-soql {
   background: transparent;
   color: transparent;
-  caret-color: #0176d3;
+  caret-color: var(--code-caret);
   resize: none;
   outline: none;
   z-index: 1;
 }
 
-.apex-input::placeholder {
-  color: #918f8d;
+.apex-input::placeholder, .soql-pane .insp-soql::placeholder {
+  color: var(--code-gutter-fg);
 }
 
-.apex-input::selection {
-  background: rgba(1, 118, 211, .28);
+.apex-input::selection, .soql-pane .insp-soql::selection {
+  background: var(--code-sel);
 }
 
-.tok-c {
-  color: #cc6600;
+/* Semantic token palette (soqlHighlight / apexHighlight emit these). */
+.tok-k   { color: var(--tok-k); }
+.tok-k2  { color: var(--tok-k2); }
+.tok-t   { color: var(--tok-t); }
+.tok-col { color: var(--tok-col); }
+.tok-s   { color: var(--tok-s); }
+.tok-n   { color: var(--tok-n); }
+.tok-op  { color: var(--tok-op); }
+.tok-fn  { color: var(--tok-fn); }
+.tok-c   { color: var(--tok-c); }
+.tok-al  { color: var(--tok-al); }
+.tok-p   { color: var(--tok-p); }
+
+/* ── Success celebration: paper plane (default) or confetti ─────────────
+   Non-blocking (pointer-events:none), plays once per successful run.
+   cc-life (2.6s) outlasts the plane flight (2.4s) and every chip
+   (delay + 1.3s ≤ 1.9s) — the overlay unmounts on its animationend. */
+.code-celebrate {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 8px;
+  animation: cc-life 2.6s linear forwards;
 }
 
-.tok-s {
-  color: #a31515;
+@keyframes cc-life {
+  0%, 88% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
-.tok-k {
-  color: #0000cc;
+.cc-plane {
+  position: absolute;
+  top: 55%;
+  left: -10%;
+  width: 26px;
+  height: 26px;
+  animation: cc-fly 2.4s cubic-bezier(0.3, 0.7, 0.4, 1) forwards;
 }
 
-.tok-n {
-  color: #098658;
+.cc-plane::after {
+  content: "";
+  position: absolute;
+  right: 80%;
+  top: 54%;
+  width: 54px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--tok-t, #56d4f1));
+  opacity: 0.55;
+}
+
+@keyframes cc-fly {
+  0%   { left: -10%; top: 62%; transform: rotate(8deg) scale(0.85); opacity: 0; }
+  12%  { opacity: 1; }
+  55%  { top: 34%; transform: rotate(-6deg) scale(1); }
+  100% { left: 108%; top: 50%; transform: rotate(2deg) scale(0.95); opacity: 0; }
+}
+
+.cc-chip {
+  position: absolute;
+  top: 32%;
+  left: 50%;
+  width: 7px;
+  height: 11px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: cc-chip 1.3s cubic-bezier(0.2, 0.6, 0.4, 1) forwards;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+@keyframes cc-chip {
+  0%   { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+  10%  { opacity: 1; }
+  100% { transform: translate(calc((var(--i, 0) - 8) * 16px), calc(46px + var(--i, 0) * 13px)) rotate(calc(var(--i, 0) * 47deg)); opacity: 0; }
 }
 
 .apex-bar {
@@ -3351,6 +3493,7 @@ button:focus-visible {
   height: 26px;
   border-radius: 8px;
   background: #eff6ff;
+  color: #0176d3;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3672,28 +3815,21 @@ button:focus-visible {
 }
 
 .soql-editor-box {
-  background: #fff;
-  border: 1px solid #e6ebf3;
+  position: relative;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
   border-radius: 12px;
-  padding: 12px;
+  padding: 10px;
+  color: var(--code-fg);
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.05);
 }
 
-.soql-editor-box .soql-editor {
-  min-height: 150px;
-  margin-bottom: 6px;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  background: #f8fafc;
-  border-color: #e2e8f0;
-}
-
-.soql-editor-box .soql-editor:focus {
-  background: #fff;
-  border-color: #0176d3;
+html.dark .soql-editor-box, html[data-theme="dark"] .soql-editor-box {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 26px rgba(0, 0, 0, 0.3);
 }
 
 .soql-editor-box .soql-hint-row {
-  margin-bottom: 0;
+  margin: 8px 2px 0;
 }
 
 .soql-explorer-h {
@@ -3849,3 +3985,379 @@ button:focus-visible {
     flex: 1;
   }
 }
+
+/* ─── SaralForce · Glassmorphism chat theme (dark obsidian) ──────────────
+   Hand-written glass utilities (CSP-safe, no Tailwind CDN).
+   Mimics: bg-white/10 (~bg-opacity-30 family) + backdrop-blur-lg/xl + dark: variant.
+   Base canvas #0B0F19, accents cyan / icy blue / neon purple. */
+:root {
+  --sf-canvas: #0B0F19;
+  --sf-glass: rgba(255, 255, 255, 0.08);
+  --sf-glass-strong: rgba(255, 255, 255, 0.12);
+  --sf-glass-border: rgba(255, 255, 255, 0.14);
+  --sf-glass-border-soft: rgba(255, 255, 255, 0.10);
+  --sf-cyan: #38bdf8;
+  --sf-ice: #7dd3fc;
+  --sf-purple: #a78bfa;
+  --sf-text: #ffffff;
+  --sf-text-dim: #cbd5e1;
+}
+
+html.dark, html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+html.dark body, html[data-theme="dark"] body {
+  background: var(--sf-canvas);
+  color: var(--sf-text);
+}
+
+html.dark .app-container, html[data-theme="dark"] .app-container {
+  background: var(--sf-canvas);
+}
+
+/* Header: dark, slightly translucent top edge */
+html.dark .app-header, html[data-theme="dark"] .app-header {
+  background: rgba(11, 15, 25, 0.72);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 1px 12px rgba(0, 0, 0, 0.45);
+}
+
+html.dark .app-title, html[data-theme="dark"] .app-title {
+  color: #fff;
+  font-weight: 600;
+}
+
+html.dark .app-subtitle, html[data-theme="dark"] .app-subtitle {
+  color: var(--sf-text-dim);
+  opacity: 1;
+}
+
+/* Glassy pill buttons with glowing hover — Inspector, API Names, + New, history */
+html.dark .header-btn, html[data-theme="dark"] .header-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+  padding: 5px 13px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+html.dark .header-btn:hover, html[data-theme="dark"] .header-btn:hover {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.7);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+html.dark .header-btn:active, html[data-theme="dark"] .header-btn:active {
+  background: rgba(56, 189, 248, 0.35);
+  border-color: rgba(125, 211, 252, 0.9);
+  color: #fff;
+  transform: scale(0.97);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.6), inset 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+html.dark .header-btn:focus-visible, html[data-theme="dark"] .header-btn:focus-visible {
+  outline: 2px solid var(--sf-cyan);
+  outline-offset: 2px;
+}
+
+html.dark .header-btn.active, html[data-theme="dark"] .header-btn.active {
+  background: rgba(167, 139, 250, 0.28);
+  border-color: rgba(167, 139, 250, 0.8);
+  color: #fff;
+  box-shadow: 0 0 14px rgba(167, 139, 250, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+html.dark .header-btn-new, html[data-theme="dark"] .header-btn-new {
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+html.dark .header-btn-new:hover, html[data-theme="dark"] .header-btn-new:hover {
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+html.dark .header-btn-icon, html[data-theme="dark"] .header-btn-icon {
+  padding: 5px 9px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+html.dark .user-info, html[data-theme="dark"] .user-info {
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(125, 211, 252, 0.5);
+  color: #fff;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+}
+
+/* Chat canvas: futuristic dark cybernetic environment, full cover.
+   Drop addon/mascot-bg-dark.jpg (wolf in Trailblazer hoodie on tech pedestal)
+   next to this CSS — first layer uses it, watermark + gradients stay as fallback. */
+html.dark .chat-messages, html[data-theme="dark"] .chat-messages {
+  background:
+    url("mascot-bg-dark.jpg") center center / cover no-repeat,
+    url("mascot-watermark.png") center center / 340px auto no-repeat,
+    radial-gradient(760px 340px at 6% -4%, rgba(56, 189, 248, 0.22), transparent 65%),
+    radial-gradient(700px 360px at 97% 4%, rgba(167, 139, 250, 0.20), transparent 62%),
+    radial-gradient(820px 400px at 50% 108%, rgba(14, 165, 233, 0.16), transparent 65%),
+    linear-gradient(160deg, #0B0F19 0%, #0d1526 45%, #101a30 75%, #0B0F19 100%);
+  background-repeat: no-repeat, no-repeat, repeat, repeat, repeat, repeat;
+  background-position: center center, center center, 0 0, 0 0, 0 0, 0 0;
+  background-size: cover, 340px auto, auto, auto, auto, auto;
+}
+
+html.dark .chat-messages::before, html[data-theme="dark"] .chat-messages::before {
+  content: "";
+  display: block;
+  position: sticky;
+  top: 0;
+  height: 0;
+}
+
+/* System prompt bubble: wide centered frosted glass card with pointer */
+html.dark .message, html[data-theme="dark"] .message {
+  max-width: 92%;
+}
+
+html.dark .message-system, html[data-theme="dark"] .message-system {
+  align-self: center;
+  width: 100%;
+  max-width: 100%;
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border-radius: 14px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  font-size: 12.5px;
+}
+
+html.dark .message-system::after, html[data-theme="dark"] .message-system::after {
+  border-top-color: rgba(255, 255, 255, 0.16);
+}
+
+/* SaralAI persona: swirling tech-spark avatar + label */
+html.dark .assistant-avatar, html[data-theme="dark"] .assistant-avatar {
+  color: #fff;
+  background: rgba(56, 189, 248, 0.16);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+}
+
+/* Chat glass avatar only — the Users tab card has its own blue-gradient
+   avatar (.user-card .user-avatar) that must stay visible on white cards. */
+html.dark .message-user .user-avatar, html[data-theme="dark"] .message-user .user-avatar {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.saral-spark {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  filter: drop-shadow(0 0 4px rgba(125, 211, 252, 0.9)) drop-shadow(0 0 8px rgba(167, 139, 250, 0.6));
+  animation: saral-spin 6s linear infinite;
+}
+
+@keyframes saral-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Assistant glass bubble + code card floating over mascot */
+html.dark .message-assistant .message-bubble, html[data-theme="dark"] .message-assistant .message-bubble {
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+html.dark .message-user .message-bubble, html[data-theme="dark"] .message-user .message-bubble {
+  background: linear-gradient(135deg, #0284c7, #2563eb);
+  border: 1px solid rgba(125, 211, 252, 0.5);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+}
+
+.saral-code-card {
+  width: 100%;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.saral-code-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #e2e8f0;
+}
+
+.saral-code-head .spacer {
+  flex: 1;
+}
+
+.saral-code-inset {
+  background: rgba(0, 0, 0, 0.45);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 10px 12px;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.saral-code-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0;
+}
+
+.saral-code-row .k {
+  color: #7dd3fc;
+}
+
+.saral-code-row .s {
+  color: #e2e8f0;
+}
+
+.saral-code-row .p {
+  color: #94a3b8;
+}
+
+.saral-code-row .mini-copy, .saral-copy-all {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #cbd5e1;
+  border-radius: 6px;
+  font-size: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  flex-shrink: 0;
+}
+
+.saral-code-row .mini-copy:hover, .saral-copy-all:hover {
+  opacity: 1;
+  background: rgba(56, 189, 248, 0.25);
+  border-color: rgba(56, 189, 248, 0.7);
+  color: #fff;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+}
+
+.saral-copy-all {
+  margin-left: 0;
+}
+
+/* Typing dots + input area on dark */
+html.dark .typing-indicator .dot, html[data-theme="dark"] .typing-indicator .dot {
+  background: var(--sf-ice);
+  box-shadow: 0 0 6px rgba(125, 211, 252, 0.8);
+}
+
+html.dark .chat-input-area, html[data-theme="dark"] .chat-input-area {
+  background: rgba(11, 15, 25, 0.78);
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.4);
+}
+
+html.dark .chat-input, html[data-theme="dark"] .chat-input {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+html.dark .chat-input::placeholder, html[data-theme="dark"] .chat-input::placeholder {
+  color: #94a3b8;
+}
+
+html.dark .chat-messages::-webkit-scrollbar-thumb, html[data-theme="dark"] .chat-messages::-webkit-scrollbar-thumb {
+  background: rgba(125, 211, 252, 0.35);
+}
+
+html.dark .history-panel, html[data-theme="dark"] .history-panel {
+  background: rgba(11, 15, 25, 0.92);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+html.dark .history-header, html[data-theme="dark"] .history-header {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+html.dark .history-item:hover, html[data-theme="dark"] .history-item:hover {
+  background: rgba(56, 189, 248, 0.12);
+}
+
+html.dark .history-item-preview, html[data-theme="dark"] .history-item-preview {
+  color: #e2e8f0;
+}
+
+/* Fix: system message renders as wrapper .message.message-system + inner
+   .message-system — the generic glass rule hit both (double bubble in
+   screenshot). Reset the outer wrapper; inner card keeps the glass above. */
+html.dark .message.message-system, html[data-theme="dark"] .message.message-system {
+  align-self: center;
+  width: 100%;
+  max-width: 100%;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  padding: 0;
+}
+
+html.dark .message.message-system::after, html[data-theme="dark"] .message.message-system::after {
+  display: none;
+}
+
+/* ── Fields that rely on UA defaults: html.dark sets color-scheme: dark, so
+   bare filters/searches paint a black field with unreadable text. Force a
+   white field + dark text (and light-scheme widgets) in every theme. ── */
+.perm-search,
+.logs-search,
+.logs-confirm input,
+.logs-chat-row input,
+.llm-chip input[type="checkbox"],
+.insp-check input[type="checkbox"] {
+  color-scheme: light;
+  background: #fff;
+  color: #1e2a3d;
+}
+

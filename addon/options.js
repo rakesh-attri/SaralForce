@@ -1,4 +1,4 @@
-import {LLM_PROVIDERS, getProviderConfig, getSavedConfig, saveConfig} from "./llm/llm-service.js";
+import {LLM_PROVIDERS, getProviderConfig, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant} from "./llm/llm-service.js";
 
 let h = React.createElement;
 
@@ -41,6 +41,7 @@ class OptionsApp extends React.Component {
       apiKey: saved.apiKey || "",
       model: saved.model || "",
       baseUrl: saved.baseUrl || "",
+      celebrate: getCelebrateVariant(),
       showApiKey: false,
       saved: false,
       testStatus: null,
@@ -79,6 +80,12 @@ class OptionsApp extends React.Component {
 
   onBaseUrlChange(e) {
     this.setState({baseUrl: e.target.value, saved: false, testStatus: null});
+  }
+
+  onCelebrateChange(e) {
+    const celebrate = e.target.checked ? "confetti" : "plane";
+    setCelebrateVariant(celebrate);
+    this.setState({celebrate});
   }
 
   toggleShowApiKey() {
@@ -140,7 +147,7 @@ class OptionsApp extends React.Component {
   }
 
   render() {
-    const {provider, apiKey, model, baseUrl, showApiKey, saved, testStatus, testMessage} = this.state;
+    const {provider, apiKey, model, baseUrl, celebrate, showApiKey, saved, testStatus, testMessage} = this.state;
     const providerDef = this.getProviderDef();
 
     return h("div", {className: "options-container"},
@@ -240,11 +247,35 @@ class OptionsApp extends React.Component {
       ),
 
       h("div", {className: "options-section"},
+        h("h2", null, "Preferences"),
+        h("div", {className: "form-group"},
+          h("label", {className: "form-check", htmlFor: "celebrateConfetti"},
+            h("input", {
+              id: "celebrateConfetti",
+              type: "checkbox",
+              checked: celebrate === "confetti",
+              onChange: (e) => this.onCelebrateChange(e)
+            }),
+            h("span", null, "Confetti celebration")),
+          h("p", {className: "help-text"},
+            "Celebrate successful SOQL runs and Apex executions with falling confetti instead of the paper-plane fly-by. Applies to both editors and takes effect on the next run.")
+        )
+      ),
+
+      h("div", {className: "options-section"},
         h("h2", null, "About"),
         h("p", null, "SaralForce is an AI Object Builder & Org Toolkit for Salesforce. Describe the data you want to capture in plain language and it drafts a complete custom object with fields — refine it in chat, improve prompts with one click, then deploy straight to your org."),
         h("p", null, "The built-in Inspector adds a SOQL runner with AI error fixes, Apex execution, record browser, CSV export and import, user management, debug-log viewer with AI analysis, org info, and app-tab assignment. Works with OpenAI, Anthropic Claude, Google Gemini, or any OpenAI-compatible endpoint using your own API key."),
         h("p", null, "Your API key is stored locally in your browser and never shared. Org data stays between your browser and Salesforce — only the text you type reaches your chosen AI provider."),
-        h("p", {style: {fontSize: "12px", color: "#706e6b"}}, "Developed by ©Bhajan Mandali · Independent project, not affiliated with Salesforce.")
+        h("p", {style: {fontSize: "12px", color: "#706e6b"}},
+          "Developed by Er.Bhajan Mandali © · Independent project, not affiliated with Salesforce. ",
+          h("svg", {className: "ff-flag", width: 16, height: 11, viewBox: "0 0 18 12", "aria-label": "India"},
+            h("rect", {width: 18, height: 4, fill: "#FF9933"}),
+            h("rect", {y: 4, width: 18, height: 4, fill: "#FFFFFF"}),
+            h("rect", {y: 8, width: 18, height: 4, fill: "#138808"}),
+            h("circle", {cx: 9, cy: 6, r: 1.7, fill: "none", stroke: "#000080", strokeWidth: 0.6})
+          )
+        )
       )
     );
   }

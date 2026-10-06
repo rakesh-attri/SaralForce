@@ -177,3 +177,17 @@ body {
   background: #fe9339;
   color: #fff;
 }
+
+.form-group label.form-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 400;
+  color: #333;
+  cursor: pointer;
+}
+
+.form-group label.form-check input {
+  margin: 0;
+}

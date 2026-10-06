@@ -108,7 +108,7 @@
         box-shadow: -4px 0 24px rgba(0,0,0,0.2);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         transform: translateX(100%);
-        background: #fff;
+        background: #0B0F19;
       `;
 
       const header = document.createElement("div");
@@ -117,7 +117,8 @@
         align-items: center;
         justify-content: space-between;
         padding: 8px 12px;
-        background: #032d60;
+        background: rgba(11, 15, 25, 0.95);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.10);
         color: #fff;
         font-family: 'Salesforce Sans', Arial, sans-serif;
         font-size: 13px;
@@ -179,6 +180,9 @@
 
       const iframe = document.createElement("iframe");
       iframe.id = "sf-object-creator-iframe";
+      // Cross-origin embed: without an explicit allowlist the panel's
+      // clipboard writes are blocked by Permissions Policy (Copy Id etc.).
+      iframe.setAttribute("allow", "clipboard-read; clipboard-write");
       iframe.style.cssText = `
         width: 100%;
         height: calc(100vh - 40px);
@@ -541,12 +545,16 @@
 
   // The panel iframe (and the app when opened standalone) asks us to toggle.
   window.addEventListener("message", (event) => {
-    if (!event.data || event.data.type !== "sfoc-show-api-names") return;
+    if (!event.data || !event.data.type) return;
     const ifr = document.getElementById("sf-object-creator-iframe");
     const fromPanel = ifr && event.source === ifr.contentWindow;
     const fromSelf = event.source === window;
     if (!fromPanel && !fromSelf) return;
-    toggleApiNames();
+    if (event.data.type === "sfoc-show-api-names") {
+      toggleApiNames();
+    } else if (event.data.type === "sfoc-close-sidebar") {
+      closeSidebar();
+    }
   });
 
   if (document.readyState === "loading") {
