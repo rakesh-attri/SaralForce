@@ -552,6 +552,8 @@
     if (!fromPanel && !fromSelf) return;
     if (event.data.type === "sfoc-show-api-names") {
       toggleApiNames();
+    } else if (event.data.type === "sfoc-query-api-names") {
+      try { event.source.postMessage({type: "sfoc-api-names-state", on: apiNamesActive}, "*"); } catch (e) { /* ignore */ }
     } else if (event.data.type === "sfoc-close-sidebar") {
       closeSidebar();
     }

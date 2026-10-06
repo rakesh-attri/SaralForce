@@ -546,6 +546,7 @@ function SoqlTab() {
   const [history, setHistory] = React.useState(() => ffLoadJson("ff_soql_history", []));
   const [saved, setSaved] = React.useState(() => ffLoadJson("ff_soql_saved", []));
   const [saveLabel, setSaveLabel] = React.useState("");
+  const [resultFilter, setResultFilter] = React.useState("");
   const taRef = React.useRef(null);
   const hlRef = React.useRef(null);
   const gutterRef = React.useRef(null);
@@ -607,6 +608,7 @@ function SoqlTab() {
       const colSet = new Set();
       flat.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
       setResult({...r, rows: flat, columns: [...colSet]});
+      setResultFilter("");
       setCeleb(c => c + 1);
       setHistory(prev => {
         const next = [{q, ts: Date.now()}, ...prev.filter(h => h.q !== q)].slice(0, 20);
@@ -715,6 +717,9 @@ function SoqlTab() {
   };
 
   const trailingFrom = /\bfrom\s+([a-zA-Z0-9_]*)$/i.exec(query);
+  const caretPos = taRef.current && taRef.current.selectionStart != null
+    ? taRef.current.selectionStart : query.length;
+  const wordBeforeCaret = (/\w+$/.exec(query.slice(0, caretPos)) || [""])[0].toLowerCase();
   const objChips = objects
     .filter(o => {
       const f = (trailingFrom ? trailingFrom[1] : objFilter).toLowerCase();
@@ -741,6 +746,24 @@ function SoqlTab() {
     insertAtCursor(` ${name}`);
   };
 
+  const insertField = (name) => {
+    const ta = taRef.current;
+    const caret = ta && ta.selectionStart != null ? ta.selectionStart : query.length;
+    const before = query.slice(0, caret);
+    const quotes = (before.match(/'/g) || []).length;
+    const m = quotes % 2 === 0 ? /(\w+)$/.exec(before) : null;
+    if (!m) { insertAtCursor(name); return; }
+    const start = caret - m[1].length;
+    const suffix = caret === query.length ? " " : "";
+    const next = query.slice(0, start) + name + suffix + query.slice(caret);
+    setQuery(next);
+    const pos = start + name.length + suffix.length;
+    requestAnimationFrame(() => {
+      if (!ta) return;
+      try { ta.focus(); ta.setSelectionRange(pos, pos); } catch (e) { /* ignore */ }
+    });
+  };
+
   // Deterministic pastel tone per field/object name (colourful pills, image-style)
   const pillTone = (name) => {
     let hv = 0;
@@ -748,6 +771,12 @@ function SoqlTab() {
     for (let i = 0; i < s.length; i++) hv = (hv * 31 + s.charCodeAt(i)) >>> 0;
     return hv % 8;
   };
+
+  const rf = resultFilter.trim().toLowerCase();
+  const visibleRows = !result ? []
+    : !rf ? result.rows
+    : result.rows.filter(r => result.columns.some(c =>
+        String(r[c] == null ? "" : r[c]).toLowerCase().includes(rf)));
 
   return h("div", {className: "insp-panel"},
     h("div", {className: "soql-layout"},
@@ -945,17 +974,27 @@ function SoqlTab() {
         ),
         h("div", {className: "insp-chips soql-fields"},
           (fromFields
-            ? fromFields
-                .filter(f => !objFilter ||
+            ? (() => {
+                let list = fromFields.filter(f => !objFilter ||
                   f.name.toLowerCase().includes(objFilter.toLowerCase()) ||
-                  (f.label || "").toLowerCase().includes(objFilter.toLowerCase()))
-                .slice(0, 60)
-                .map(f => h("button", {
+                  (f.label || "").toLowerCase().includes(objFilter.toLowerCase()));
+                if (wordBeforeCaret) {
+                  const w = wordBeforeCaret;
+                  const rank = f => {
+                    const n = f.name.toLowerCase();
+                    if (n.startsWith(w)) return 0;
+                    if ((f.label || "").toLowerCase().startsWith(w) || n.includes(w)) return 1;
+                    return 2;
+                  };
+                  list = list.slice().sort((a, b) => rank(a) - rank(b));
+                }
+                return list.slice(0, 60).map(f => h("button", {
                   key: f.name,
                   className: "insp-chip t" + pillTone(f.name),
                   title: `${f.label} · ${f.type} — click to insert`,
-                  onClick: () => insertAtCursor(f.name)
-                }, f.name))
+                  onClick: () => insertField(f.name)
+                }, f.name));
+              })()
             : objChips.map(o => h("button", {
                 key: o.name,
                 className: "insp-chip t" + pillTone(o.name),
@@ -970,18 +1009,39 @@ function SoqlTab() {
           }, "← objects")
         ),
 
-        result && h("div", {className: "insp-meta"},
-          `${result.totalSize} row(s) · pages OK · query ends LIMIT ${/\blimit\s+(\d+)/i.exec(result.query)?.[1] || "—"}`
+        result && h("div", {className: "soql-results-h"},
+          h("div", {className: "insp-meta"},
+            rf
+              ? `showing ${visibleRows.length} of ${result.rows.length} row(s)`
+              : `${result.totalSize} row(s) · pages OK · query ends LIMIT ${/\blimit\s+(\d+)/i.exec(result.query)?.[1] || "—"}`
+          ),
+          h("div", {className: "soql-search"},
+            h("svg", {
+              className: "soql-search-ico",
+              width: 14, height: 14, viewBox: "0 0 24 24",
+              fill: "currentColor", "aria-hidden": "true"
+            }, h("path", {
+              d: "M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"
+            })),
+            h("input", {
+              className: "soql-search-input",
+              value: resultFilter,
+              placeholder: "search results…",
+              onChange: e => setResultFilter(e.target.value)
+            })
+          )
         ),
         result && h("div", {className: "soql-id-hint"},
           "Click on any Id to Show the all data for record"),
-        result && h(ResultTable, {
-          columns: result.columns,
-          rows: result.rows,
-          maxRows: 300,
-          onRowClick: openSoqlDetail,
-          rowHint: "Click to show all data"
-        }),
+        result && (rf && !visibleRows.length
+          ? h("div", {className: "insp-empty"}, "No matching rows.")
+          : h(ResultTable, {
+              columns: result.columns,
+              rows: visibleRows,
+              maxRows: 300,
+              onRowClick: openSoqlDetail,
+              rowHint: "Click to show all data"
+            })),
         detailHint && h("div", {className: "insp-meta"}, detailHint),
         (soqlDetailLoading || soqlDetail) && h(RecordDetailPanel, {
           detail: soqlDetail,

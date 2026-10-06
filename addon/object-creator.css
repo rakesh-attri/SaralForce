@@ -3870,6 +3870,19 @@ html.dark .soql-editor-box, html[data-theme="dark"] .soql-editor-box {
   box-shadow: 0 0 0 3px rgba(1, 118, 211, 0.18);
 }
 
+.soql-results-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.soql-results-h .insp-meta {
+  margin-bottom: 0;
+}
+
 .soql-fields {
   max-height: 170px;
 }

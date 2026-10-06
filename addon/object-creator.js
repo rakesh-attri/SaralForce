@@ -619,6 +619,7 @@ class App extends React.Component {
 
   componentDidMount() {
     this.applyColorTheme(this.state.colorTheme || "dark");
+    try { window.parent.postMessage({type: "sfoc-query-api-names"}, "*"); } catch (e) { /* not embedded */ }
     if (!hasValidConfig()) {
       this.addSystemMessage("Welcome! Before we begin, please configure your LLM provider in the Options page.");
     } else if (this.state.messages.length === 0) {
@@ -4152,6 +4153,9 @@ if (!sfHost) {
           window.__sfocApp._saveState();
           saveInspectorState(sfHost, window.__sfocApp.state);
         }
+      }
+      if (e.data?.type === "sfoc-api-names-state" && window.__sfocApp) {
+        window.__sfocApp.setState({apiNamesOn: !!e.data.on});
       }
     });
 
