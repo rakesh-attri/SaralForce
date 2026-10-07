@@ -275,7 +275,13 @@ class OptionsApp extends React.Component {
             h("rect", {y: 8, width: 18, height: 4, fill: "#138808"}),
             h("circle", {cx: 9, cy: 6, r: 1.7, fill: "none", stroke: "#000080", strokeWidth: 0.6})
           )
-        )
+        ),
+        h("p", {style: {fontSize: "12px"}},
+          h("a", {
+            href: "https://rakesh-attri.github.io/SaralForce/privacy.html",
+            target: "_blank",
+            rel: "noopener noreferrer"
+          }, "Privacy Policy"))
       )
     );
   }

@@ -720,6 +720,10 @@ function SoqlTab() {
   const caretPos = taRef.current && taRef.current.selectionStart != null
     ? taRef.current.selectionStart : query.length;
   const wordBeforeCaret = (/\w+$/.exec(query.slice(0, caretPos)) || [""])[0].toLowerCase();
+  const queryTokens = new Set(
+    (String(query || "").replace(/'[^']*'/g, " ").match(/[A-Za-z0-9_]+/g) || [])
+      .map(t => t.toLowerCase())
+  );
   const objChips = objects
     .filter(o => {
       const f = (trailingFrom ? trailingFrom[1] : objFilter).toLowerCase();
@@ -978,16 +982,18 @@ function SoqlTab() {
                 let list = fromFields.filter(f => !objFilter ||
                   f.name.toLowerCase().includes(objFilter.toLowerCase()) ||
                   (f.label || "").toLowerCase().includes(objFilter.toLowerCase()));
-                if (wordBeforeCaret) {
-                  const w = wordBeforeCaret;
-                  const rank = f => {
-                    const n = f.name.toLowerCase();
-                    if (n.startsWith(w)) return 0;
-                    if ((f.label || "").toLowerCase().startsWith(w) || n.includes(w)) return 1;
-                    return 2;
-                  };
-                  list = list.slice().sort((a, b) => rank(a) - rank(b));
-                }
+                const w = wordBeforeCaret;
+                const rank = f => {
+                  const n = f.name.toLowerCase();
+                  const used = queryTokens.has(n);
+                  const typed = !!w && n.startsWith(w);
+                  if (used && typed) return 0;
+                  if (typed) return 1;
+                  if (used) return 2;
+                  if (w && ((f.label || "").toLowerCase().startsWith(w) || n.includes(w))) return 3;
+                  return 4;
+                };
+                list = list.slice().sort((a, b) => rank(a) - rank(b));
                 return list.slice(0, 60).map(f => h("button", {
                   key: f.name,
                   className: "insp-chip t" + pillTone(f.name),
@@ -1690,6 +1696,9 @@ function OrgTab() {
       // Setup changes (SetupAuditTrail) — newest 200, search + copy.
       h(SetupAuditCard, {info}),
 
+      // Recent async Apex work (AsyncApexJob) — newest 20, status badges.
+      h(ApexJobsCard, null),
+
       // Logins (LoginHistory) — newest 200, status badges + copy.
       h(LoginHistoryCard, {info}),
 
@@ -1943,6 +1952,123 @@ function SetupAuditCard({info}) {
                  ["When", fmtDateTime(detail.CreatedDate)],
                  ["Changed by", nm(detail)],
                  ["Record Id", detail.Id]].map(([k, v]) =>
+                  h("tr", {key: k},
+                    h("td", null, k),
+                    h("td", null, v == null || v === "" ? "(Blank)" : String(v))))
+              )
+            )
+          )
+        ),
+        h("div", {className: "insp-toolbar"},
+          h("button", {className: "btn btn-secondary btn-sm",
+            onClick: () => copyLine(lineOf(detail))},
+            copied ? "\u2713 copied" : "Copy row"),
+          h("span", {className: "insp-meta"}, "Esc or click outside to close")
+        )
+      )
+    )
+  );
+}
+
+// Recent async Apex work — AsyncApexJob, newest 20: class, status badge,
+// progress and error count. Row click opens a detail popup (Esc / overlay /
+// × close) mirroring the Salesforce Apex Jobs page columns.
+function ApexJobsCard() {
+  const st = (r) => String(r.Status || "");
+  const cls = (r) => (r.ApexClass && r.ApexClass.Name) || r.ApexClassId || "(class)";
+  const failed = (r) => /^(Failed|Aborted)/i.test(st(r));
+  const active = (r) => /^(Processing|Preparing|Queued)/i.test(st(r));
+  const prog = (r) => r.TotalJobItems != null && r.TotalJobItems > 0
+    ? `${fmtNum(r.JobItemsProcessed || 0)}/${fmtNum(r.TotalJobItems)} items`
+    : "";
+  const [detail, setDetail] = React.useState(null);
+  const [copied, setCopied] = React.useState(false);
+  const lineOf = (r) => [cls(r), st(r) || "?", r.JobType, prog(r),
+    r.CreatedDate && fmtDateTime(r.CreatedDate), r.MethodName,
+    (r.NumberOfErrors || 0) > 0 && `${r.NumberOfErrors} error(s)`,
+    r.ExtendedStatus].filter(x => x != null && x !== "" && x !== false).join(" | ");
+  const copyLine = (text) => {
+    try { safeCopyText(text); } catch (e) { /* ignore */ }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+  React.useEffect(() => {
+    if (!detail) return;
+    const onKey = (e) => { if (e.key === "Escape") setDetail(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detail]);
+  return h(React.Fragment, null,
+    h(OrgLogCard, {
+      icon: "⚡",
+      title: "Apex Jobs",
+      soql: "SELECT Id, ApexClass.Name, JobType, Status, MethodName, TotalJobItems, " +
+        "JobItemsProcessed, NumberOfErrors, CreatedDate, CompletedDate, ExtendedStatus " +
+        "FROM AsyncApexJob ORDER BY CreatedDate DESC LIMIT 20",
+      emptyText: "No recent Apex jobs.",
+      placeholder: (n) => `Filter ${fmtNum(n)} apex jobs\u2026`,
+      match: (r, needle) =>
+        [cls(r), r.JobType, r.Status, r.MethodName, r.ExtendedStatus]
+          .join(" ").toLowerCase().includes(needle),
+      stats: (rows) => [
+        ["Total", fmtNum(rows.length)],
+        ["Failed", fmtNum(rows.filter(failed).length)],
+        ["Active", fmtNum(rows.filter(active).length)]
+      ],
+      row: (r) => {
+        const key = r.Id || (r.CreatedDate + "-" + cls(r));
+        const bad = failed(r);
+        const done = /^Completed/i.test(st(r));
+        const kind = bad ? "err" : done ? "ok"
+          : /^(Processing|Preparing)/i.test(st(r)) ? "warn"
+          : st(r) ? "info" : "off";
+        const line = [cls(r), st(r) || "?", r.JobType, prog(r), ffAgo(r.CreatedDate),
+          r.MethodName, (r.NumberOfErrors || 0) > 0 && `${r.NumberOfErrors} error(s)`,
+          r.ExtendedStatus].filter(x => x != null && x !== "" && x !== false).join(" | ");
+        return h("div", {
+          key,
+          className: "perm-row",
+          title: "Click to view details: " + line,
+          onClick: () => { setCopied(false); setDetail(r); }
+        },
+          h("span", {className: "perm-l"}, cls(r)),
+          h(FFBadge, {kind}, st(r) || "?"),
+          h("span", {className: "perm-n"},
+            [ffAgo(r.CreatedDate), r.JobType, prog(r),
+             (r.NumberOfErrors || 0) > 0 && `${r.NumberOfErrors} error(s)`]
+              .filter(x => x != null && x !== "" && x !== false).join(" · "))
+        );
+      }
+    }),
+    detail && h("div", {
+        className: "ff-modal-overlay",
+        onMouseDown: (e) => { if (e.target === e.currentTarget) setDetail(null); }
+      },
+      h("div", {className: "ff-modal", role: "dialog", "aria-modal": "true"},
+        h("div", {className: "ff-modal-head"},
+          h("div", {className: "ff-modal-title"}, "Apex job details",
+            h("span", {className: "ff-modal-sub"},
+              ` - ${cls(detail)} / ${st(detail) || "?"}`)),
+          h("button", {className: "ff-modal-x", title: "Close (Esc)",
+            onClick: () => setDetail(null)}, "\u00d7")
+        ),
+        h("div", {className: "ff-modal-body"},
+          h("div", {className: "insp-table-wrap"},
+            h("table", {className: "insp-table"},
+              h("thead", null,
+                h("tr", null, h("th", null, "Field"), h("th", null, "Value"))),
+              h("tbody", null,
+                [["Apex Class", cls(detail)],
+                 ["Job Type", detail.JobType],
+                 ["Status", detail.Status],
+                 ["Status Detail", detail.ExtendedStatus],
+                 ["Method", detail.MethodName],
+                 ["Total Batches", detail.TotalJobItems],
+                 ["Batches Processed", detail.JobItemsProcessed],
+                 ["Failures", detail.NumberOfErrors],
+                 ["Submitted Date", detail.CreatedDate && fmtDateTime(detail.CreatedDate)],
+                 ["Completion Date", detail.CompletedDate && fmtDateTime(detail.CompletedDate)],
+                 ["Job Id", detail.Id]].map(([k, v]) =>
                   h("tr", {key: k},
                     h("td", null, k),
                     h("td", null, v == null || v === "" ? "(Blank)" : String(v))))
@@ -2260,12 +2386,14 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
   const [saving, setSaving] = React.useState(false);
   const [saveMsg, setSaveMsg] = React.useState(null);
   const [saveErr, setSaveErr] = React.useState(null);
+  const [rowFilter, setRowFilter] = React.useState("");
   const recordKey = detail ? `${detail.obj}/${detail.id}` : "";
   React.useEffect(() => {
     setEditingApi(null);
     setDrafts({});
     setSaveMsg(null);
     setSaveErr(null);
+    setRowFilter("");
   }, [recordKey]);
   // Esc closes the modal (editor Esc is handled inside the input and
   // stops propagation, so it only cancels the cell edit).
@@ -2278,6 +2406,15 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
   const changed = detail
     ? detail.rows.filter(r => r.editable && drafts[r.api] !== undefined && draftDiffers(r, drafts[r.api]))
     : [];
+  const rf = rowFilter.trim().toLowerCase();
+  const shownRows = !detail ? []
+    : !rf ? detail.rows
+    : detail.rows.filter(r => {
+        const val = drafts[r.api] !== undefined
+          ? String(drafts[r.api])
+          : (r.value == null ? "" : String(r.value));
+        return [r.api, r.label, r.type, val].join(" ").toLowerCase().includes(rf);
+      });
   const startEdit = (row) => {
     if (!row.editable || !canEdit) return;
     setSaveMsg(null);
@@ -2381,7 +2518,8 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
       h("div", {className: "ff-modal-head"},
         h("div", {className: "ff-modal-title"}, "Show all data",
           detail && h("span", {className: "ff-modal-sub"},
-            ` - ${detail.obj} / ${detail.id} (${detail.rows.length} fields)`)),
+            rf ? ` - ${detail.obj} / ${detail.id} (${shownRows.length} of ${detail.rows.length} fields)`
+               : ` - ${detail.obj} / ${detail.id} (${detail.rows.length} fields)`)),
         h("button", {className: "ff-modal-x", title: "Close (Esc)", onClick: onBack}, "\u00d7")
       ),
       h("div", {className: "insp-toolbar"},
@@ -2391,7 +2529,22 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
         onClick: (e) => openRecordInSf(detail.id, e)
         }, "Open in Salesforce ↗"),
       detail && h("span", {className: "insp-meta"},
-        "Click an editable value to change it - Esc cancels the current edit")
+        "Click an editable value to change it - Esc cancels the current edit"),
+      h("div", {className: "soql-search"},
+        h("svg", {
+          className: "soql-search-ico",
+          width: 14, height: 14, viewBox: "0 0 24 24",
+          fill: "currentColor", "aria-hidden": "true"
+        }, h("path", {
+          d: "M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"
+        })),
+        h("input", {
+          className: "soql-search-input",
+          value: rowFilter,
+          placeholder: "search fields…",
+          onChange: e => setRowFilter(e.target.value)
+        })
+      )
     ),
     loading && h("div", {className: "insp-meta"}, "Loading full record…"),
     detail && h("div", {className: "ff-modal-body"},
@@ -2406,7 +2559,7 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
           )
         ),
         h("tbody", null,
-          detail.rows.map(r => {
+          shownRows.map(r => {
             const isEditing = editingApi === r.api;
             const hasDraft = drafts[r.api] !== undefined && draftDiffers(r, drafts[r.api]);
             const canStart = r.editable && canEdit;
@@ -2429,6 +2582,8 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
       )
     ),
     ),
+    detail && rf && shownRows.length === 0 &&
+      h("div", {className: "insp-empty"}, "No matching fields."),
     (changed.length > 0 || saveMsg || saveErr) && h("div", {className: "insp-edit-bar"},
       changed.length > 0 && h("span", {className: "insp-meta"},
         `${changed.length} field${changed.length === 1 ? "" : "s"} changed`),
@@ -3646,7 +3801,7 @@ function UsersTab() {
     if (!term) { setError("Type a name, username, email or alias"); return; }
     setLoading(true);
     try {
-      const soql = `SELECT Id, Name, Username, Email, Alias, IsActive, ProfileId, LanguageLocaleKey ` +
+      const soql = `SELECT Id, Name, Username, Email, Alias, IsActive, ProfileId, UserRoleId, LanguageLocaleKey ` +
         `FROM User WHERE Name LIKE '%${term}%' OR Username LIKE '%${term}%' ` +
         `OR Email LIKE '%${term}%' OR Alias LIKE '%${term}%' ORDER BY Name LIMIT 50`;
       const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
@@ -3659,6 +3814,7 @@ function UsersTab() {
         Alias: r.Alias,
         Active: r.IsActive ? "true" : "false",
         ProfileId: r.ProfileId,
+        RoleId: r.UserRoleId,
         Language: r.LanguageLocaleKey
       }));
       setUsers(flat);
@@ -3682,21 +3838,26 @@ function UsersTab() {
     setCloneResult(null);
     setDetailLoading(true);
     try {
-      const [rec, prof] = await Promise.all([
+      const [rec, prof, roleQ] = await Promise.all([
         sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/${encodeURIComponent(row.Id)}`,
           {useCache: false}).catch(() => null),
         sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
           encodeURIComponent(`SELECT Name FROM Profile WHERE Id = '${row.ProfileId}'`),
-          {useCache: false}).catch(() => null)
+          {useCache: false}).catch(() => null),
+        row.RoleId ? sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent(`SELECT Name FROM UserRole WHERE Id = '${row.RoleId}'`),
+          {useCache: false}).catch(() => null) : Promise.resolve(null)
       ]);
       setSrcRec(rec);
       setDetail({
         profile: prof && prof.records && prof.records[0] ? prof.records[0].Name : "unknown",
+        role: roleQ && roleQ.records && roleQ.records[0]
+          ? roleQ.records[0].Name : (row.RoleId ? "unknown" : "—"),
         lastLogin: rec && rec.LastLoginDate ? rec.LastLoginDate : null,
         created: rec && rec.CreatedDate ? rec.CreatedDate : null
       });
     } catch (e) {
-      setDetail({profile: "unknown", lastLogin: null, created: null});
+      setDetail({profile: "unknown", role: "—", lastLogin: null, created: null});
     } finally {
       setDetailLoading(false);
     }
@@ -4010,6 +4171,8 @@ function UsersTab() {
       h("div", {className: "user-chips"},
         h(FFBadge, {kind: "info"},
           detailLoading ? "Loading profile…" : (detail ? detail.profile : "Profile")),
+        h(FFBadge, {kind: "info"},
+          detailLoading ? "Loading role…" : (detail ? (detail.role || "No role") : "Role")),
         sel.Language && h(FFBadge, {key: "lang"}, sel.Language)
       ),
       h("div", null,
@@ -5796,7 +5959,7 @@ function LogsTab() {
             "Select a log on the left → ⚡ Analyze, or ask a question about it."),
           selected && h("div", null,
             h("div", {className: "logs-ai-title"},
-              "🤖 AI · ",
+              "🤖 SaralAI · ",
               h("span", {className: "logs-ai-id"}, `Log ${selected.Id}`)
             ),
             h("div", {className: "logs-ai-section"},

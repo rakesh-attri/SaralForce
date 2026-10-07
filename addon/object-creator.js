@@ -620,12 +620,26 @@ class App extends React.Component {
   componentDidMount() {
     this.applyColorTheme(this.state.colorTheme || "dark");
     try { window.parent.postMessage({type: "sfoc-query-api-names"}, "*"); } catch (e) { /* not embedded */ }
-    if (!hasValidConfig()) {
-      this.addSystemMessage("Welcome! Before we begin, please configure your LLM provider in the Options page.");
+    const isWelcome = (m) => m && m.role === "system" &&
+      /configure your LLM provider/i.test(m.text || "");
+    if (this.state.messages.filter(isWelcome).length > 1) {
+      let kept = false;
+      this.setState(prev => ({
+        messages: prev.messages.filter(m => {
+          if (!isWelcome(m)) return true;
+          if (kept) return false;
+          kept = true;
+          return true;
+        })
+      }));
     } else if (this.state.messages.length === 0) {
-      const config = getSavedConfig();
-      const providerDef = getProviderConfig(config.provider);
-      this.addSystemMessage(`Connected to ${providerDef.name} (${config.model}). Describe the Salesforce object you want to create, and I'll design it for you.`);
+      if (!hasValidConfig()) {
+        this.addSystemMessage("Welcome! Before we begin, please configure your LLM provider in the Options page.");
+      } else {
+        const config = getSavedConfig();
+        const providerDef = getProviderConfig(config.provider);
+        this.addSystemMessage(`Connected to ${providerDef.name} (${config.model}). Describe the Salesforce object you want to create, and I'll design it for you.`);
+      }
     }
     // No beforeunload save on purpose: the snapshot must die with a refresh
     // of the host page; `sfoc-save-state` (sidebar minimize) is the only
@@ -633,9 +647,15 @@ class App extends React.Component {
     if (this.state.currentProposal) {
       this.loadProfiles().catch(e => console.warn("[SaralForce] mount loadProfiles:", e.message));
     }
+    this._onStorage = (e) => {
+      if (e && e.key !== "llmConfig") return;
+      this.setState({llmConfig: getSavedConfig()});
+    };
+    window.addEventListener("storage", this._onStorage);
   }
 
   componentWillUnmount() {
+    window.removeEventListener("storage", this._onStorage);
     saveInspectorState(this.props.sfHost, this.state);
     this._saveState();
   }
