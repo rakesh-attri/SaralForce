@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SaralForce Privacy Policy</title>
+<!--
+  SaralForce privacy policy.
+  Self-contained (inline CSS, zero external assets) so it can be hosted as-is.
+
+  HOSTING (same GitHub Pages site as addon/goodbye.html):
+    Repo → Settings → Pages → "Deploy from a branch" → Branch: main, Folder: /
+    Then this file is served at https://<user>.github.io/<repo>/privacy.html
+    Paste that URL into the Edge Add-ons / Chrome Web Store listing.
+-->
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Salesforce Sans', Arial, sans-serif;
+    background: #0b0f19;
+    color: #e2e8f0;
+    line-height: 1.65;
+    padding: 40px 20px 80px;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 28px; margin-bottom: 6px; color: #fff; }
+  .eff { color: #94a3b8; font-size: 13px; margin-bottom: 28px; }
+  h2 { font-size: 17px; margin: 26px 0 8px; color: #7dd3fc; }
+  p, li { font-size: 14px; color: #cbd5e1; }
+  ul { margin: 8px 0 8px 22px; }
+  li { margin-bottom: 4px; }
+  a { color: #7dd3fc; }
+  .box {
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 14px 18px;
+    margin-top: 26px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>SaralForce Privacy Policy</h1>
+  <div class="eff">Effective: 7 October 2026</div>
+
+  <p>SaralForce is a browser extension for Salesforce administrators and developers
+  (object builder, SOQL runner, Apex tools, debug logs, org info, optional AI help).
+  It runs entirely in your browser. There are no accounts, no analytics, no tracking,
+  and we do not sell or share your data.</p>
+
+  <h2>Salesforce access</h2>
+  <p>To talk to your org, the extension reads your Salesforce session cookie and uses it
+  <strong>only</strong> to call your own org's Salesforce APIs (queries, metadata,
+  tooling calls) — the same way established Salesforce admin extensions work. Your
+  session is never sent anywhere except your Salesforce org.</p>
+
+  <h2>AI features (optional)</h2>
+  <p>AI help (log analysis, SOQL fixes, object design, chat) runs <strong>only when you
+  click it</strong>. When you do, the content you submit — for example a debug log, a
+  query, or an error message — is sent to the AI provider <strong>you</strong> configure
+  (OpenAI, Anthropic, Google, or your own compatible endpoint), authenticated with the
+  API key <strong>you</strong> enter. Nothing is sent in the background.</p>
+
+  <h2>What is stored, and where</h2>
+  <ul>
+    <li>Your AI provider settings and API keys: in your browser's local storage, on your device only. They leave your machine solely as credentials to your chosen AI provider.</li>
+    <li>Salesforce session details, UI preferences and history: in browser local/session storage, on your device only.</li>
+    <li>Nothing is synced, uploaded, or transmitted to us — there is no SaralForce server.</li>
+  </ul>
+
+  <h2>What we do NOT do</h2>
+  <ul>
+    <li>No analytics, crash reporting, advertising or tracking of any kind.</li>
+    <li>No sale, rental or sharing of your data with anyone.</li>
+    <li>No background data collection — network calls happen only to your Salesforce org or your chosen AI provider, in response to your actions.</li>
+  </ul>
+
+  <h2>Third parties</h2>
+  <p>If you enable AI features, the provider you select (OpenAI, Anthropic, Google, or
+  your own endpoint) receives the content you submit, governed by that provider's own
+  privacy policy. The uninstall farewell page is a static page hosted on GitHub Pages,
+  which applies its own standard web-server logging.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the updated date above will be revised with the extension update.</p>
+
+  <div class="box">
+    <h2 style="margin-top:0">Contact</h2>
+    <p>Questions about this policy: please open an issue at
+    <a href="https://github.com/rakesh-attri/SaralForce/issues">github.com/rakesh-attri/SaralForce/issues</a>.</p>
+  </div>
+</main>
+</body>
+</html>
