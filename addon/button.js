@@ -172,9 +172,43 @@
       settingsBtn.addEventListener("mouseenter", () => settingsBtn.style.opacity = "1");
       settingsBtn.addEventListener("mouseleave", () => settingsBtn.style.opacity = "0.85");
 
+      const loadTimer = document.createElement("span");
+      loadTimer.style.cssText = `
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 400;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        padding: 0 6px;
+        cursor: default;
+      `;
+      const paintLoadTimer = () => {
+        let ms = null;
+        try {
+          const nav = performance && performance.getEntriesByType &&
+            performance.getEntriesByType("navigation")[0];
+          if (nav && nav.loadEventEnd > 0) ms = Math.max(0, Math.round(nav.loadEventEnd - nav.startTime));
+        } catch (e) { /* timing API unavailable — stays blank */ }
+        if (ms == null) {
+          loadTimer.textContent = "⏱ …";
+          loadTimer.title = "Page load time (page still loading…)";
+        } else {
+          const s = Math.floor(ms / 1000);
+          loadTimer.textContent = `⏱ ${s}s ${ms - s * 1000}ms`;
+          loadTimer.title = `Page load: ${ms} ms (last full load)`;
+        }
+      };
+      paintLoadTimer();
+      try {
+        if (document.readyState !== "complete") {
+          window.addEventListener("load", paintLoadTimer, {once: true});
+        }
+      } catch (e) { /* ignore */ }
+
       const headerActions = document.createElement("span");
       headerActions.style.cssText = "display:flex;align-items:center;gap:2px;";
       headerActions.appendChild(settingsBtn);
+      headerActions.appendChild(loadTimer);
       headerActions.appendChild(closeBtn);
       header.appendChild(headerActions);
 
