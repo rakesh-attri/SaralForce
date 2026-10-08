@@ -36,12 +36,13 @@
     btn.id = "sf-object-creator-btn";
     btn.style.cssText = `
       position: fixed;
-      top: 40px;
-      right: 4px;
+      top: calc(50% - 1.5in);
+      right: 10px;
+      transform: translateY(-50%);
       z-index: 2147483647;
-      width: 32px;
-      height: 32px;
-      border-radius: 6px;
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
       background: #032d60;
       color: #fff;
       display: flex;
@@ -55,19 +56,19 @@
       font-family: 'Salesforce Sans', Arial, sans-serif;
       opacity: 0.6;
     `;
-    btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="sfbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e293b"/></linearGradient><linearGradient id="sfbr" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2563eb"/></linearGradient></defs><rect width="120" height="120" rx="26" fill="url(#sfbg)"/><g transform="translate(14.5,21) scale(1.18)"><path d="M35 12 C24 12 15 20 13 31 C8 32 4 37 4 43 C4 49 9 54 15 54 L62 54 C68 54 73 49 73 43 C73 38 70 33 65 31 C63 20 54 12 43 12 C40 12 37 13 35 12 Z" fill="url(#sfbr)" opacity="0.15"/><path d="M33 10 C22.5 10 14 18.5 14 29 C9 30 5 34.5 5 40 C5 45.5 9.5 50 15 50 L58 50 C63.5 50 68 45.5 68 40 C68 35 64 31 59 30 C57 19.5 48.5 10 38 10 C35.5 10 34.2 10.5 33 10 Z" fill="none" stroke="url(#sfbr)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 31 L20 37 L26 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M47 31 L53 37 L47 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="41" y1="28" x2="32" y2="46" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/></g></svg>`;
+    btn.innerHTML = `<svg width="22" height="22" viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="sfbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e293b"/></linearGradient><linearGradient id="sfbr" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2563eb"/></linearGradient></defs><rect width="120" height="120" rx="26" fill="url(#sfbg)"/><g transform="translate(14.5,21) scale(1.18)"><path d="M35 12 C24 12 15 20 13 31 C8 32 4 37 4 43 C4 49 9 54 15 54 L62 54 C68 54 73 49 73 43 C73 38 70 33 65 31 C63 20 54 12 43 12 C40 12 37 13 35 12 Z" fill="url(#sfbr)" opacity="0.15"/><path d="M33 10 C22.5 10 14 18.5 14 29 C9 30 5 34.5 5 40 C5 45.5 9.5 50 15 50 L58 50 C63.5 50 68 45.5 68 40 C68 35 64 31 59 30 C57 19.5 48.5 10 38 10 C35.5 10 34.2 10.5 33 10 Z" fill="none" stroke="url(#sfbr)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 31 L20 37 L26 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M47 31 L53 37 L47 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="41" y1="28" x2="32" y2="46" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/></g></svg>`;
     btn.title = "SaralForce";
 
     btn.addEventListener("mouseenter", () => {
       btn.style.opacity = "1";
-      btn.style.transform = "scale(1.05)";
+      btn.style.transform = "translateY(-50%) scale(1.05)";
     });
 
     btn.addEventListener("mouseleave", () => {
       if (!sidebarOpen) {
         btn.style.opacity = "0.6";
       }
-      btn.style.transform = "scale(1)";
+      btn.style.transform = "translateY(-50%) scale(1)";
     });
 
     btn.addEventListener("click", (e) => {
@@ -210,7 +211,51 @@
       headerActions.appendChild(settingsBtn);
       headerActions.appendChild(loadTimer);
       headerActions.appendChild(closeBtn);
+
+      const userChip = document.createElement("button");
+      userChip.title = "Signed-in Salesforce user — click for details";
+      userChip.style.cssText = [
+        "display:flex", "align-items:center", "gap:8px",
+        "background:#dcf5e3", "color:#14532d",
+        "border:1px solid #b7e4c7", "border-radius:999px",
+        "padding:3px 6px 3px 12px", "font-size:12px", "font-weight:600",
+        "font-family:'Salesforce Sans',Arial,sans-serif",
+        "cursor:pointer", "max-width:340px", "margin:0 8px"
+      ].join(";");
+      const userChipLabel = document.createElement("span");
+      userChipLabel.textContent = "…";
+      userChipLabel.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      const userAvatar = document.createElement("span");
+      userAvatar.textContent = "?";
+      userAvatar.style.cssText = [
+        "display:inline-flex", "align-items:center", "justify-content:center",
+        "width:24px", "height:24px", "border-radius:50%",
+        "background:#6d28d9", "color:#fff", "font-size:11px", "font-weight:700",
+        "flex:0 0 auto"
+      ].join(";");
+      userChip.appendChild(userChipLabel);
+      userChip.appendChild(userAvatar);
+      userChip.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (userPopup) { closeUserPopup(); return; }
+        if (!userInfoCache) {
+          fetchUserCard(session.key).then((info) => {
+            userInfoCache = info;
+            paintUserChip(info, userChipLabel, userAvatar, userChip);
+            openUserPopup();
+          }).catch(() => openUserPopup());
+          return;
+        }
+        openUserPopup();
+      });
       header.appendChild(headerActions);
+      header.insertBefore(userChip, headerActions);
+      userChipEl = userChip;
+
+      fetchUserCard(session.key).then((info) => {
+        userInfoCache = info;
+        paintUserChip(info, userChipLabel, userAvatar, userChip);
+      }).catch(() => { userChip.style.display = "none"; });
 
       const iframe = document.createElement("iframe");
       iframe.id = "sf-object-creator-iframe";
@@ -252,6 +297,9 @@
 
   function closeSidebar() {
     if (!sidebarContainer) return;
+    closeUserPopup();
+    userInfoCache = null;
+    userChipEl = null;
     // Ask iframe to save state before we destroy it
     const iframe = document.getElementById("sf-object-creator-iframe");
     if (iframe?.contentWindow) {
@@ -264,6 +312,117 @@
     }, 300);
     sidebarOpen = false;
     document.getElementById("sf-object-creator-btn")?.style.setProperty("opacity", "0.6");
+  }
+
+  // ─── Signed-in user chip + profile popup (sidebar header) ──────────
+  // Shows "OrgName: Welcome Full Name" with an avatar; click opens a card
+  // with username, user/org ids, instance URL and Prod/Sandbox tag.
+  let userPopup = null;
+  let userChipEl = null;
+  let userInfoCache = null;
+
+  function closeUserPopup() {
+    if (userPopup) userPopup.remove();
+    userPopup = null;
+    document.removeEventListener("mousedown", outsideUserPopup);
+  }
+
+  function outsideUserPopup(e) {
+    if (userPopup && !userPopup.contains(e.target) &&
+        (!userChipEl || !userChipEl.contains(e.target))) closeUserPopup();
+  }
+
+  function userInitials(name) {
+    const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    return (parts[0][0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+  }
+
+  function paintUserChip(info, labelEl, avatarEl, chipEl) {
+    const name = info && info.name && info.name !== "—" ? info.name : "";
+    const org = info && info.orgName ? info.orgName : "";
+    if (!name && !org) {
+      chipEl.style.display = "none";
+      return;
+    }
+    labelEl.textContent = org && name ? `${org}: Welcome ${name}` : (org || `Welcome ${name}`);
+    avatarEl.textContent = name ? userInitials(name) : "?";
+  }
+
+  function fetchUserCard(token) {
+    const base = location.origin;
+    const headers = {Accept: "application/json"};
+    if (token) headers.Authorization = "Bearer " + token;
+    const getJson = (url) => fetch(url, {headers}).then(async (res) => {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        try { return await res.json(); } catch (e) { return null; }
+      });
+    const ui = getJson(base + "/services/oauth2/userinfo").catch(() => null);
+    const orgQ = getJson(base + "/services/data/v67.0/query?q=" +
+      encodeURIComponent("SELECT Id,Name,IsSandbox,InstanceName FROM Organization")).catch(() => null);
+    return Promise.all([ui, orgQ]).then(([u, o]) => {
+      const org = (o && o.records && o.records[0]) || {};
+      return {
+        name: (u && (u.name || u.nickname || u.preferred_username)) || "—",
+        username: (u && u.preferred_username) || "",
+        userId: (u && u.user_id) || "",
+        orgName: org.Name || "",
+        orgId: org.Id || (u && u.organization_id) || "",
+        sandbox: org.IsSandbox === true,
+        instanceUrl: base
+      };
+    });
+  }
+
+  function openUserPopup() {
+    closeUserPopup();
+    const info = userInfoCache;
+    userPopup = document.createElement("div");
+    userPopup.style.cssText = [
+      "position:absolute", "top:46px", "right:12px", "width:300px",
+      "background:#fff", "color:#0f172a", "border-radius:12px",
+      "box-shadow:0 12px 32px rgba(2,16,44,.35)", "border:1px solid #e2e8f0",
+      "font-family:'Salesforce Sans',Arial,sans-serif", "font-size:12px",
+      "z-index:10", "padding:14px 16px", "line-height:1.5"
+    ].join(";");
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:flex-start;justify-content:space-between;gap:8px;";
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:14px;font-weight:700;";
+    title.textContent = info ? info.name : "Loading…";
+    const x = document.createElement("button");
+    x.textContent = "×";
+    x.title = "Close";
+    x.style.cssText = "background:none;border:none;font-size:18px;line-height:1;cursor:pointer;color:#64748b;padding:0 2px;";
+    x.addEventListener("click", (e) => { e.stopPropagation(); closeUserPopup(); });
+    head.appendChild(title);
+    head.appendChild(x);
+    userPopup.appendChild(head);
+    const addRow = (label, value, bold) => {
+      const row = document.createElement("div");
+      if (bold) row.style.fontWeight = "700";
+      else if (label) {
+        const k = document.createElement("span");
+        k.style.color = "#64748b";
+        k.textContent = label + ": ";
+        row.appendChild(k);
+      }
+      const v = document.createElement("span");
+      v.textContent = value == null || value === "" ? "—" : String(value);
+      row.appendChild(v);
+      userPopup.appendChild(row);
+    };
+    if (!info) {
+      addRow("", "Could not load user info.");
+    } else {
+      addRow("", info.username);
+      addRow("User ID", info.userId);
+      addRow("", `${info.orgName || "Org"} (${info.sandbox ? "Sandbox" : "Prod"})`, true);
+      addRow("", info.instanceUrl);
+      addRow("Org ID", info.orgId);
+    }
+    if (sidebarContainer) sidebarContainer.appendChild(userPopup);
+    document.addEventListener("mousedown", outsideUserPopup);
   }
 
   // ─── API Names overlay: show field API names on the Salesforce page ──
