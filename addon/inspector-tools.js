@@ -3853,6 +3853,62 @@ async function usersEnsureDebugLevel() {
   return created.id;
 }
 
+// Multi-select dropdown with search (clone-user assignment picker):
+// button shows "Label (n/m selected)", panel lists checkboxes + All/Clear.
+function MultiCheckDropdown({label, items, selected, onChange, emptyText}) {
+  const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState("");
+  const sel = new Set(selected || []);
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? items.filter(it => it.name.toLowerCase().includes(needle)) : items;
+  const toggle = (id) => {
+    const next = new Set(sel);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    onChange([...next]);
+  };
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (e.target.closest && e.target.closest(".ff-multi")) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  return h("div", {className: "ff-multi"},
+    h("button", {
+      type: "button",
+      className: "btn btn-secondary btn-sm",
+      disabled: !items.length,
+      title: items.length ? `Pick ${label.toLowerCase()} to copy` : `No ${label.toLowerCase()} assigned`,
+      onClick: () => setOpen(o => !o),
+      "aria-expanded": open
+    }, `${label} (${sel.size}/${items.length} selected ▾)`),
+    open && h("div", {className: "ff-multi-panel"},
+      h("div", {className: "ff-multi-tools"},
+        h("input", {
+          className: "ff-multi-search",
+          placeholder: "Filter…",
+          value: q,
+          onChange: e => setQ(e.target.value),
+          onClick: e => e.stopPropagation()
+        }),
+        h("button", {type: "button", className: "field-action-btn",
+          onClick: () => onChange(items.map(it => it.id))}, "All"),
+        h("button", {type: "button", className: "field-action-btn",
+          onClick: () => onChange([])}, "Clear")
+      ),
+      h("div", {className: "ff-multi-list"},
+        shown.map(it => h("label", {key: it.id, className: "ff-multi-row", title: it.id},
+          h("input", {type: "checkbox", checked: sel.has(it.id), onChange: () => toggle(it.id)}),
+          h("span", null, it.name)
+        )),
+        shown.length === 0 && h("div", {className: "insp-empty"}, emptyText || "No matches")
+      )
+    )
+  );
+}
+
 function UsersTab() {
   const [q, setQ] = ffUseSession("users", "q", "");
   const [users, setUsers] = ffUseSession("users", "users", []);
@@ -3874,6 +3930,8 @@ function UsersTab() {
   const [cf, setCf] = React.useState(null);
   const [cloning, setCloning] = React.useState(false);
   const [cloneResult, setCloneResult] = React.useState(null);
+  const [sites, setSites] = React.useState([]);
+  const [expSite, setExpSite] = React.useState("");
 
   const search = async () => {
     setError(null);
@@ -3883,7 +3941,7 @@ function UsersTab() {
     if (!term) { setError("Type a name, username, email or alias"); return; }
     setLoading(true);
     try {
-      const soql = `SELECT Id, Name, Username, Email, Alias, IsActive, ProfileId, UserRoleId, LanguageLocaleKey ` +
+      const soql = `SELECT Id, Name, Username, Email, Alias, IsActive, ProfileId, UserRoleId, UserType, LanguageLocaleKey ` +
         `FROM User WHERE Name LIKE '%${term}%' OR Username LIKE '%${term}%' ` +
         `OR Email LIKE '%${term}%' OR Alias LIKE '%${term}%' ORDER BY Name LIMIT 50`;
       const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
@@ -3897,6 +3955,7 @@ function UsersTab() {
         Active: r.IsActive ? "true" : "false",
         ProfileId: r.ProfileId,
         RoleId: r.UserRoleId,
+        UserType: r.UserType || "Standard",
         Language: r.LanguageLocaleKey
       }));
       setUsers(flat);
@@ -3945,6 +4004,26 @@ function UsersTab() {
     }
   };
 
+  const isCommunityUser = (u) => !!u && ffTruthy(u.Active) && !!u.UserType && u.UserType !== "Standard";
+
+  React.useEffect(() => {
+    if (!isCommunityUser(sel)) { setSites([]); setExpSite(""); return; }
+    let cancelled = false;
+    setSites([]);
+    setExpSite("");
+    sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+      encodeURIComponent("SELECT Id, Name, UrlPathPrefix, Status FROM Network WHERE Status = 'Live' ORDER BY Name"),
+      {useCache: false})
+      .then(res => {
+        if (cancelled) return;
+        const list = res.records || [];
+        setSites(list);
+        setExpSite(list.length ? list[0].Id : "");
+      })
+      .catch(() => { if (!cancelled) { setSites([]); setExpSite(""); } });
+    return () => { cancelled = true; };
+  }, [sel]);
+
   const loginAs = async (incognito) => {
     if (!sel) return;
     setActionMsg(null);
@@ -3956,6 +4035,27 @@ function UsersTab() {
         `?oid=${orgId}&suorgadminid=${sel.Id}&retURL=%2F&targetURL=%2Flightning%2Fpage%2Fhome`;
       window.open(url, "_blank");
       setActionMsg(`Login-as link opened for ${sel.Username} (requires "Log in as another user" permission).`);
+    } catch (e) {
+      setActionErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loginToExpSite = async () => {
+    if (!sel || !expSite) return;
+    setActionMsg(null);
+    setActionErr(null);
+    setBusy("expLogin");
+    try {
+      const orgId = await ffGetOrgId();
+      const site = sites.find(s => s.Id === expSite) || sites[0];
+      const prefix = site && site.UrlPathPrefix ? `/${site.UrlPathPrefix}` : "";
+      const home = `${prefix}/s/`;
+      const url = `https://${sfConn.instanceHostname}/servlet/servlet.su` +
+        `?oid=${orgId}&suorgadminid=${sel.Id}&retURL=${encodeURIComponent(home)}&targetURL=${encodeURIComponent(home)}`;
+      window.open(url, "_blank");
+      setActionMsg(`Experience login opened for ${sel.Username} on ${site ? site.Name : "site"} (requires login-as permission).`);
     } catch (e) {
       setActionErr(e.message);
     } finally {
@@ -4072,8 +4172,8 @@ function UsersTab() {
         password: "",
         profileId: rec.ProfileId || sel.ProfileId || "",
         roleId: rec.UserRoleId || "",
-        copyPS: true,
-        copyGroups: true,
+        psIds: [...ps, ...psg].map(p => p.id),
+        grpIds: groups.map(g => g.id),
         active: true,
         locale: {
           TimeZoneSidKey: rec.TimeZoneSidKey || "Asia/Kolkata",
@@ -4145,10 +4245,12 @@ function UsersTab() {
           failures.push(`password: ${e.message}`);
         }
       }
-      // 3. Copy permission sets + permission set groups.
+      // 3. Copy selected permission sets + permission set groups.
       let psOk = 0;
-      if (cf.copyPS && srcPerms) {
-        for (const p of [...srcPerms.ps, ...srcPerms.psg]) {
+      const wantPs = new Set(cf.psIds || []);
+      const psList = srcPerms ? [...srcPerms.ps, ...srcPerms.psg].filter(p => wantPs.has(p.id)) : [];
+      if (srcPerms) {
+        for (const p of psList) {
           try {
             await sfConn.rest(`/services/data/v${apiVersion}/sobjects/PermissionSetAssignment`, {
               method: "POST",
@@ -4161,10 +4263,12 @@ function UsersTab() {
           }
         }
       }
-      // 4. Copy public group / queue memberships.
+      // 4. Copy selected public group / queue memberships.
       let grpOk = 0;
-      if (cf.copyGroups && srcPerms) {
-        for (const g of srcPerms.groups) {
+      const wantGrp = new Set(cf.grpIds || []);
+      const grpList = srcPerms ? srcPerms.groups.filter(g => wantGrp.has(g.id)) : [];
+      if (srcPerms) {
+        for (const g of grpList) {
           try {
             await sfConn.rest(`/services/data/v${apiVersion}/sobjects/GroupMember`, {
               method: "POST",
@@ -4177,8 +4281,8 @@ function UsersTab() {
           }
         }
       }
-      const totalPs = cf.copyPS && srcPerms ? srcPerms.ps.length + srcPerms.psg.length : 0;
-      const totalGrp = cf.copyGroups && srcPerms ? srcPerms.groups.length : 0;
+      const totalPs = psList.length;
+      const totalGrp = grpList.length;
       setCloneResult({
         ok: failures.length === 0,
         newId,
@@ -4278,6 +4382,21 @@ function UsersTab() {
           disabled: busy === "login",
           onClick: () => loginAs(false)
         }, busy === "login" ? "Opening…" : "Login As"),
+        isCommunityUser(sel) && h("button", {
+          className: "btn btn-secondary btn-sm",
+          disabled: busy === "expLogin" || !sites.length,
+          title: !sites.length
+            ? "No live Experience sites found in this org"
+            : `Log in to the Experience site as ${sel.Username} (community user must be active)`,
+          onClick: loginToExpSite
+        }, busy === "expLogin" ? "Opening…" : "Login to Exp Site"),
+        isCommunityUser(sel) && sites.length > 1 && h("label", {className: "insp-field", title: "Choose the Experience site"},
+          h("span", null, "Site"),
+          h("select", {
+            value: expSite,
+            onChange: e => setExpSite(e.target.value)
+          }, sites.map(s => h("option", {key: s.Id, value: s.Id}, s.Name)))
+        ),
         h("button", {
           className: "btn btn-secondary btn-sm",
           disabled: busy === "logs",
@@ -4385,24 +4504,18 @@ function UsersTab() {
           )
         ),
         h("div", {className: "insp-toolbar insp-toolbar-wrap", style: {marginTop: "8px"}},
-          h("label", {className: "insp-check"},
-            h("input", {
-              type: "checkbox",
-              checked: cf.copyPS,
-              onChange: e => setCf({...cf, copyPS: e.target.checked})
-            }),
-            h("span", null,
-              `Copy permission sets${srcPerms ? ` (${srcPerms.ps.length + srcPerms.psg.length})` : ""}`)
-          ),
-          h("label", {className: "insp-check"},
-            h("input", {
-              type: "checkbox",
-              checked: cf.copyGroups,
-              onChange: e => setCf({...cf, copyGroups: e.target.checked})
-            }),
-            h("span", null,
-              `Copy public groups${srcPerms ? ` (${srcPerms.groups.length})` : ""}`)
-          ),
+          srcPerms && h(MultiCheckDropdown, {
+            label: "Permission sets",
+            items: [...srcPerms.ps, ...srcPerms.psg],
+            selected: cf.psIds,
+            onChange: (psIds) => setCf({...cf, psIds})
+          }),
+          srcPerms && h(MultiCheckDropdown, {
+            label: "Public groups",
+            items: srcPerms.groups,
+            selected: cf.grpIds,
+            onChange: (grpIds) => setCf({...cf, grpIds})
+          }),
           h("label", {className: "insp-check"},
             h("input", {
               type: "checkbox",

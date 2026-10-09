@@ -3668,6 +3668,73 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   border-top: 1px solid #eef2f8;
 }
 
+.ff-multi {
+  position: relative;
+  display: inline-block;
+}
+
+.ff-multi-panel {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 280px;
+  max-width: 80vw;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(2, 16, 44, 0.18);
+  padding: 8px;
+}
+
+.ff-multi-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.ff-multi-search {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  font-family: 'Salesforce Sans', Arial, sans-serif;
+}
+
+.ff-multi-search:focus {
+  outline: none;
+  border-color: #0176d3;
+}
+
+.ff-multi-list {
+  max-height: 200px;
+  overflow: auto;
+  border-top: 1px solid #eef2f8;
+}
+
+.ff-multi-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 4px;
+  font-size: 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #f2f5fa;
+}
+
+.ff-multi-row:hover {
+  background: #f6faff;
+}
+
+.ff-multi-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .perm-row {
   display: flex;
   align-items: center;
