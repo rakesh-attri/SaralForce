@@ -2,6 +2,7 @@
 // (https://github.com/tprouvot/Salesforce-Inspector-reloaded)
 // MIT License, Copyright (c) 2023 Thomas Prouvot. See LICENSE.
 let sfHost;
+let inspectorTabId = null;
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Cross-origin LLM call proxied through the service worker so it always
@@ -62,6 +63,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const url = chrome.runtime.getURL("options.html" + (request.host ? `?host=${encodeURIComponent(request.host)}` : ""));
     chrome.tabs.create({url});
     sendResponse({ok: true, url});
+    return true;
+  } else if (request.message == "openInspectorTab") {
+    const openerTabId = sender.tab && sender.tab.id != null ? sender.tab.id : null;
+    const openFresh = () => {
+      let url = chrome.runtime.getURL("object-creator.html" + (request.host ? `?host=${encodeURIComponent(request.host)}` : ""));
+      url += (url.includes("?") ? "&" : "?") + "view=inspector";
+      if (openerTabId != null) url += `&fromTab=${openerTabId}`;
+      const props = {url, active: true};
+      if (openerTabId != null) props.openerTabId = openerTabId;
+      chrome.tabs.create(props, (tab) => {
+        if (tab && tab.id != null) inspectorTabId = tab.id;
+        sendResponse({ok: true});
+      });
+    };
+    if (inspectorTabId != null) {
+      chrome.tabs.get(inspectorTabId, () => {
+        if (!chrome.runtime.lastError) {
+          chrome.tabs.update(inspectorTabId, {active: true});
+          sendResponse({ok: true, reused: true});
+        } else {
+          inspectorTabId = null;
+          openFresh();
+        }
+      });
+    } else {
+      openFresh();
+    }
     return true;
   } else if (request.message == "reloadPage") {
     chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {

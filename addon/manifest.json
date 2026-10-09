@@ -1,8 +1,8 @@
 {
   "name": "SaralForce",
   "description": "AI-powered Salesforce toolkit: SOQL runner, custom objects, CSV import/export and org info. OpenAI, Claude, Gemini.",
-  "version": "1.4.11",
-  "version_name": "1.4.11",
+  "version": "1.4.12",
+  "version_name": "1.4.12",
   "icons": {
     "16": "icon16.png",
     "32": "icon32.png",

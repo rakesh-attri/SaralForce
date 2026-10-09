@@ -2336,7 +2336,7 @@ function normalizePicklistValues(picklistValues) {
 async function fetchFullRecord(obj, id) {
   return sfConn.rest(
     `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`,
-    {useCache: false});
+    {useCache: true});
 }
 
 // Render an ISO instant for a datetime-local input (browser-local wall time).
@@ -2622,7 +2622,64 @@ function RecordsTab() {
   const [error, setError] = React.useState(null);
   const [detail, setDetail] = ffUseSession("records", "detail", null);
   const [detailLoading, setDetailLoading] = React.useState(false);
+  const [openRec, setOpenRec] = React.useState(null);
+  const [pageLoading, setPageLoading] = React.useState(false);
 
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      if (e.data && e.data.type === "sfoc-open-record") setOpenRec(e.data.rec || null);
+    };
+    window.addEventListener("message", onMsg);
+    try { window.parent.postMessage({type: "sfoc-query-open-record"}, "*"); } catch (err) { /* standalone */ }
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  // "Show All Data" for the current page record: describe + full record,
+  // painted through the same detail panel (search + save included).
+  // The open record is re-queried on EVERY click — Lightning SPA navigation
+  // doesn't remount the tab, so a mount-time snapshot would go stale when
+  // the user moves from one record to another.
+  const queryOpenRec = () => new Promise((resolve) => {
+    let done = false;
+    const onMsg = (e) => {
+      if (e.data && e.data.type === "sfoc-open-record") {
+        done = true;
+        window.removeEventListener("message", onMsg);
+        resolve(e.data.rec || null);
+      }
+    };
+    window.addEventListener("message", onMsg);
+    try {
+      window.parent.postMessage({type: "sfoc-query-open-record"}, "*");
+    } catch (err) {
+      window.removeEventListener("message", onMsg);
+      resolve(null);
+    }
+    setTimeout(() => {
+      if (!done) {
+        window.removeEventListener("message", onMsg);
+        resolve(null);
+      }
+    }, 1500);
+  });
+
+  const openPageRecord = async () => {
+    setPageLoading(true);
+    setError(null);
+    try {
+      const fresh = await queryOpenRec();
+      const rec = fresh && fresh.obj && fresh.id ? fresh : openRec;
+      setOpenRec(rec);
+      if (!rec || !rec.obj || !rec.id) return;
+      const d = await ffDescribeObject(rec.obj);
+      const full = await fetchFullRecord(rec.obj, rec.id);
+      setDetail({id: rec.id, obj: rec.obj, rows: buildDetailRows(full, d.fields || [])});
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setPageLoading(false);
+    }
+  };
   const loadObjects = async () => {
     setObjLoading(true);
     setError(null);
@@ -2779,6 +2836,31 @@ function RecordsTab() {
   };
 
   return h("div", {className: "insp-panel"},
+    window.parent !== window && h("div", {className: "records-page-rec"},
+      h("button", {
+        className: "records-showall-btn",
+        disabled: !openRec || !openRec.obj || pageLoading,
+        title: openRec && openRec.obj
+          ? `Show all data for this page's ${openRec.obj} record`
+          : "Open a Salesforce record page, then reopen this tab",
+        onClick: openPageRecord
+      },
+        h("svg", {
+          className: "records-showall-ico",
+          width: 15, height: 15, viewBox: "0 0 24 24",
+          fill: "none", stroke: "currentColor", strokeWidth: 2.2,
+          "aria-hidden": "true"
+        },
+          h("rect", {x: 3.5, y: 3.5, width: 7, height: 7, rx: 1.5}),
+          h("rect", {x: 13.5, y: 3.5, width: 7, height: 7, rx: 1.5}),
+          h("rect", {x: 3.5, y: 13.5, width: 7, height: 7, rx: 1.5}),
+          h("rect", {x: 13.5, y: 13.5, width: 7, height: 7, rx: 1.5})),
+        h("span", null, pageLoading ? "Loading…" : "Show All Data")),
+      h("div", {className: "insp-meta"},
+        openRec && openRec.obj
+          ? `Current page: ${openRec.obj} · ${String(openRec.id).slice(0, 6)}…`
+          : "No record page detected")
+    ),
     h("p", {className: "app-section-hint"},
       "Pick an object to see all of its records. Tick fields, run, then Load more to page through everything."
     ),
@@ -4521,18 +4603,35 @@ function ApexTab() {
     setLogLoading(true);
     setLogNote(null);
     try {
-      // Log writes lag execution by a beat — try twice before giving up.
-      await new Promise(r => setTimeout(r, 1500));
-      let body = await apexLatestLog(sinceIso);
-      if (body == null) {
-        await new Promise(r => setTimeout(r, 2500));
-        body = await apexLatestLog(sinceIso);
+      // Log rows AND their bodies land asynchronously — a fast fetch catches
+      // a partially-flushed body (events missing). Poll until the body stops
+      // growing (stable twice) or rounds run out, keeping the longest body
+      // seen so a partial log still displays on timeout.
+      let best = null;
+      let lastErr = null;
+      let stable = 0;
+      let lastLen = -1;
+      for (let i = 0; i < 8 && stable < 2; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        let body = null;
+        try {
+          body = await apexLatestLog(sinceIso);
+        } catch (e) { lastErr = e; }
+        if (body != null) {
+          if (best == null || body.length > best.length) best = body;
+          if (body.length === lastLen) stable++;
+          else { stable = 0; lastLen = body.length; }
+          if (/EXECUTION_FINISHED/.test(body) && stable >= 1) break;
+        }
       }
-      if (body == null) {
+      if (best == null) {
         setLog(null);
-        setLogNote("No fresh debug log found — check Setup → Debug Logs, or tick Open Log and run again.");
+        setLogNote(lastErr
+          ? "Could not fetch debug log: " + lastErr.message
+          : "No fresh debug log found — check Setup → Debug Logs, or tick Open Log and run again.");
       } else {
-        setLog(body.slice(0, 30000));
+        setLog(best.slice(0, 30000));
+        if (stable < 2) setLogNote("Log may still be writing — hit Refresh log in a few seconds for the remainder.");
       }
     } catch (e) {
       setLog(null);

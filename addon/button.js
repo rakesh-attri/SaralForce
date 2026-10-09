@@ -96,6 +96,7 @@
         alert("No active Salesforce session. Please log in first.");
         return;
       }
+      lastSessionKey = session.key;
 
       sidebarContainer = document.createElement("div");
       sidebarContainer.id = "sf-object-creator-sidebar-host";
@@ -212,49 +213,27 @@
       headerActions.appendChild(loadTimer);
       headerActions.appendChild(closeBtn);
 
-      const userChip = document.createElement("button");
-      userChip.title = "Signed-in Salesforce user — click for details";
+      const userChip = document.createElement("span");
       userChip.style.cssText = [
         "display:flex", "align-items:center", "gap:8px",
         "background:#dcf5e3", "color:#14532d",
         "border:1px solid #b7e4c7", "border-radius:999px",
-        "padding:3px 6px 3px 12px", "font-size:12px", "font-weight:600",
+        "padding:3px 12px", "font-size:12px", "font-weight:600",
         "font-family:'Salesforce Sans',Arial,sans-serif",
-        "cursor:pointer", "max-width:340px", "margin:0 8px"
+        "max-width:340px", "margin:0 8px"
       ].join(";");
       const userChipLabel = document.createElement("span");
       userChipLabel.textContent = "…";
       userChipLabel.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-      const userAvatar = document.createElement("span");
-      userAvatar.textContent = "?";
-      userAvatar.style.cssText = [
-        "display:inline-flex", "align-items:center", "justify-content:center",
-        "width:24px", "height:24px", "border-radius:50%",
-        "background:#6d28d9", "color:#fff", "font-size:11px", "font-weight:700",
-        "flex:0 0 auto"
-      ].join(";");
       userChip.appendChild(userChipLabel);
-      userChip.appendChild(userAvatar);
-      userChip.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (userPopup) { closeUserPopup(); return; }
-        if (!userInfoCache) {
-          fetchUserCard(session.key).then((info) => {
-            userInfoCache = info;
-            paintUserChip(info, userChipLabel, userAvatar, userChip);
-            openUserPopup();
-          }).catch(() => openUserPopup());
-          return;
-        }
-        openUserPopup();
-      });
       header.appendChild(headerActions);
       header.insertBefore(userChip, headerActions);
       userChipEl = userChip;
+      userChipLabelEl = userChipLabel;
 
       fetchUserCard(session.key).then((info) => {
         userInfoCache = info;
-        paintUserChip(info, userChipLabel, userAvatar, userChip);
+        paintUserChip(info, userChipLabel, userChip);
       }).catch(() => { userChip.style.display = "none"; });
 
       const iframe = document.createElement("iframe");
@@ -300,6 +279,7 @@
     closeUserPopup();
     userInfoCache = null;
     userChipEl = null;
+    userChipLabelEl = null;
     // Ask iframe to save state before we destroy it
     const iframe = document.getElementById("sf-object-creator-iframe");
     if (iframe?.contentWindow) {
@@ -319,7 +299,9 @@
   // with username, user/org ids, instance URL and Prod/Sandbox tag.
   let userPopup = null;
   let userChipEl = null;
+  let userChipLabelEl = null;
   let userInfoCache = null;
+  let lastSessionKey = null;
 
   function closeUserPopup() {
     if (userPopup) userPopup.remove();
@@ -332,21 +314,50 @@
         (!userChipEl || !userChipEl.contains(e.target))) closeUserPopup();
   }
 
-  function userInitials(name) {
-    const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-    if (!parts.length) return "?";
-    return (parts[0][0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+  function mergeUserInfo(old, incoming) {
+    if (!incoming) return old;
+    if (!old) return incoming;
+    const out = {...old};
+    for (const k of Object.keys(incoming)) {
+      const v = incoming[k];
+      if (k === "sandbox") {
+        if (typeof out.sandbox !== "boolean" && typeof v === "boolean") out.sandbox = v;
+        continue;
+      }
+      if ((v === "" || v == null || v === "—") ||
+          (out[k] !== "" && out[k] != null && out[k] !== "—")) continue;
+      out[k] = v;
+    }
+    return out;
   }
 
-  function paintUserChip(info, labelEl, avatarEl, chipEl) {
+  function toggleUserCard() {
+    if (userPopup) { closeUserPopup(); return; }
+    if (!userInfoCache) {
+      fetchUserCard(lastSessionKey).then((info) => {
+        userInfoCache = info;
+        if (userChipEl && userChipLabelEl) paintUserChip(userInfoCache, userChipLabelEl, userChipEl);
+        openUserPopup();
+      }).catch(() => openUserPopup());
+      return;
+    }
+    openUserPopup();
+  }
+
+  function paintUserChip(info, labelEl, chipEl) {
     const name = info && info.name && info.name !== "—" ? info.name : "";
     const org = info && info.orgName ? info.orgName : "";
     if (!name && !org) {
       chipEl.style.display = "none";
       return;
     }
-    labelEl.textContent = org && name ? `${org}: Welcome ${name}` : (org || `Welcome ${name}`);
-    avatarEl.textContent = name ? userInitials(name) : "?";
+    chipEl.style.display = "";
+    const tag = info && typeof info.sandbox === "boolean" ? (info.sandbox ? "Sandbox" : "Prod") : "";
+    if (org && name) {
+      labelEl.textContent = tag ? `${org} (${tag}) : Welcome ${name}` : `${org} : Welcome ${name}`;
+    } else {
+      labelEl.textContent = tag && org ? `${org} (${tag})` : (org || `Welcome ${name}`);
+    }
   }
 
   function fetchUserCard(token) {
@@ -747,6 +758,15 @@
       toggleApiNames();
     } else if (event.data.type === "sfoc-query-api-names") {
       try { event.source.postMessage({type: "sfoc-api-names-state", on: apiNamesActive}, "*"); } catch (e) { /* ignore */ }
+    } else if (event.data.type === "sfoc-query-open-record") {
+      try { event.source.postMessage({type: "sfoc-open-record", rec: getRecordInfo()}, "*"); } catch (e) { /* ignore */ }
+    } else if (event.data.type === "sfoc-user-card") {
+      userInfoCache = mergeUserInfo(userInfoCache, event.data.info || null);
+      if (userChipEl && userChipLabelEl) {
+        paintUserChip(userInfoCache, userChipLabelEl, userChipEl);
+      }
+    } else if (event.data.type === "sfoc-show-user-card") {
+      toggleUserCard();
     } else if (event.data.type === "sfoc-close-sidebar") {
       closeSidebar();
     }

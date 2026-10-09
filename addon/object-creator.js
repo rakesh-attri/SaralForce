@@ -6,6 +6,10 @@ import {InspectorPanel, ffApplyRestore, ffTakeSnapshot} from "./inspector-tools.
 
 let h = React.createElement;
 
+function openInspectorInNewTab() {
+  try { return localStorage.getItem("sfoc_open_inspector_tab") === "true"; } catch (e) { return false; }
+}
+
 function escXml(str) {
   if (!str) return "";
   return String(str)
@@ -470,7 +474,7 @@ class App extends React.Component {
     ffApplyRestore(inspectorSaved && inspectorSaved.ff);
     this.state = {
       llmConfig: getSavedConfig(),
-      uiMode: inspectorSaved?.uiMode || "builder",
+      uiMode: urlParams.get("view") === "inspector" ? "inspector" : (inspectorSaved?.uiMode || "builder"),
       messages: saved?.messages || [],
       currentProposal: saved?.currentProposal || null,
       isGenerating: false,
@@ -506,6 +510,10 @@ class App extends React.Component {
     };
     this._appsLoading = false;
     this.spinnerCount = 0;
+    this.fromTabId = (() => {
+      const v = parseInt(urlParams.get("fromTab"), 10);
+      return Number.isInteger(v) ? v : null;
+    })();
     this.spinFor = createSpinForMethod(this);
     this.userInfoModel = new UserInfoModel(this.spinFor.bind(this));
     this.messagesEndRef = React.createRef();
@@ -641,6 +649,7 @@ class App extends React.Component {
         this.addSystemMessage(`Connected to ${providerDef.name} (${config.model}). Describe the Salesforce object you want to create, and I'll design it for you.`);
       }
     }
+    this.sendUserCard();
     // No beforeunload save on purpose: the snapshot must die with a refresh
     // of the host page; `sfoc-save-state` (sidebar minimize) is the only
     // write path besides this.
@@ -664,7 +673,46 @@ class App extends React.Component {
     persistState(this.props.sfHost, this.state);
   }
 
+  async sendUserCard() {
+    if (this._userCardSent || !sfConn.sessionId) return;
+    this._userCardSent = true;
+    try {
+      let me = null;
+      try {
+        me = await sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/me`);
+      } catch (e) { /* fall through to userinfo */ }
+      if (!me || (!me.Id && !me.user_id)) {
+        try {
+          const r = await fetch("https://" + sfConn.instanceHostname + "/services/oauth2/userinfo", {
+            headers: {Authorization: "Bearer " + sfConn.sessionId}
+          });
+          if (r.ok) me = await r.json();
+        } catch (e) { /* ignore */ }
+      }
+      let org = {};
+      try {
+        const o = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent("SELECT Id,Name,IsSandbox,InstanceName FROM Organization LIMIT 1"),
+          {useCache: false});
+        org = (o.records && o.records[0]) || {};
+      } catch (e) { /* ignore */ }
+      const info = {
+        name: (me && (me.Name || me.name || me.nickname || me.preferred_username)) || "—",
+        username: (me && (me.Username || me.preferred_username)) || "",
+        userId: (me && (me.Id || me.user_id)) || "",
+        orgName: org.Name || "",
+        orgId: org.Id || (me && me.organization_id) || "",
+        sandbox: org.IsSandbox === true,
+        instanceUrl: "https://" + (sfConn.instanceHostname || "")
+      };
+      try { window.parent.postMessage({type: "sfoc-user-card", info}, "*"); } catch (e) { /* not embedded */ }
+    } catch (e) {
+      this._userCardSent = false;
+    }
+  }
+
   componentDidUpdate(prevProps, prevState) {
+    this.sendUserCard();
     if (this.messagesEndRef.current) {
       this.messagesEndRef.current.scrollIntoView({behavior: "smooth"});
     }
@@ -748,6 +796,40 @@ class App extends React.Component {
         this.addSystemMessage(`Connected to ${providerDef.name} (${config.model}). Describe the Salesforce object you want to create.`);
       }
     });
+  }
+
+  showUserCard() {
+    try { window.parent.postMessage({type: "sfoc-show-user-card"}, "*"); } catch (e) { /* not embedded */ }
+  }
+
+  openInspector() {
+    if (openInspectorInNewTab()) {
+      try {
+        chrome.runtime.sendMessage({message: "openInspectorTab", host: this.props.sfHost || ""});
+      } catch (e) {
+        this.setState({uiMode: "inspector"});
+      }
+      return;
+    }
+    this.setState({uiMode: "inspector"});
+  }
+
+  goBackFromInspector() {
+    const fromTab = this.fromTabId;
+    if (fromTab == null) { this.setState({uiMode: "builder"}); return; }
+    try {
+      chrome.tabs.get(fromTab, () => {
+        if (chrome.runtime.lastError) {
+          chrome.tabs.getCurrent((me) => {
+            if (me && me.id != null) { try { chrome.tabs.remove(me.id); } catch (e) {} }
+          });
+        } else {
+          chrome.tabs.update(fromTab, {active: true});
+        }
+      });
+    } catch (e) {
+      this.setState({uiMode: "builder"});
+    }
   }
 
   openOptions() {
@@ -3478,7 +3560,7 @@ class App extends React.Component {
           h("div", {className: "header-right"},
             h("button", {
               className: "header-btn",
-              onClick: () => this.setState({uiMode: "builder"}),
+              onClick: () => this.goBackFromInspector(),
               title: "Back to Object Builder"
             }, "← Builder"),
             h("button", {
@@ -3496,7 +3578,12 @@ class App extends React.Component {
               onClick: () => this.toggleColorTheme(),
               title: `Switch to ${(this.state.colorTheme || "dark") === "dark" ? "light" : "dark"} theme`
             }, (this.state.colorTheme || "dark") === "dark" ? "☾" : "☀"),
-            h("span", {className: "user-info", title: this.userInfoModel.userFullName || "User"},
+            h("span", {
+              className: "user-info",
+              title: `${this.userInfoModel.userFullName || "User"} — click for profile details`,
+              style: {cursor: "pointer"},
+              onClick: () => this.showUserCard()
+            },
               this.userInfoModel.userInitials || "R"
             )
           )
@@ -3529,7 +3616,7 @@ class App extends React.Component {
         h("div", {className: "header-right"},
           h("button", {
             className: "header-btn",
-            onClick: () => this.setState({uiMode: "inspector"}),
+            onClick: () => this.openInspector(),
             title: "SOQL, Data Import/Export, Org Info"
           }, "Inspector"),
           h("button", {
@@ -3557,7 +3644,12 @@ class App extends React.Component {
             onClick: () => this.toggleColorTheme(),
             title: "Toggle theme"
           }, (this.state.colorTheme || "dark") === "dark" ? "☾" : "☀"),
-          h("span", {className: "user-info", title: this.userInfoModel.userFullName || "User"},
+          h("span", {
+            className: "user-info",
+            title: `${this.userInfoModel.userFullName || "User"} — click for profile details`,
+            style: {cursor: "pointer"},
+            onClick: () => this.showUserCard()
+          },
             this.userInfoModel.userInitials || "R"
           )
         )

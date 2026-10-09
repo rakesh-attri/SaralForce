@@ -3883,6 +3883,78 @@ html.dark .soql-editor-box, html[data-theme="dark"] .soql-editor-box {
   margin-bottom: 0;
 }
 
+.records-page-rec {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.records-showall-btn {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 55%, #7c3aed 100%);
+  border: none;
+  border-radius: 999px;
+  padding: 9px 20px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.records-showall-btn::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -80%;
+  width: 55%;
+  height: 100%;
+  background: linear-gradient(105deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  transform: skewX(-20deg);
+}
+
+.records-showall-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.5);
+  filter: brightness(1.06);
+}
+
+.records-showall-btn:hover:not(:disabled)::after {
+  animation: showall-sheen 0.7s ease;
+}
+
+.records-showall-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.records-showall-btn:disabled {
+  filter: grayscale(0.6);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.records-showall-btn:focus-visible {
+  outline: 2px solid #7dd3fc;
+  outline-offset: 2px;
+}
+
+@keyframes showall-sheen {
+  to {
+    left: 130%;
+  }
+}
+
+.records-showall-ico {
+  flex: 0 0 auto;
+}
+
 .soql-fields {
   max-height: 170px;
 }

@@ -2,6 +2,14 @@ import {LLM_PROVIDERS, getProviderConfig, getSavedConfig, saveConfig, getCelebra
 
 let h = React.createElement;
 
+const INSPECTOR_TAB_KEY = "sfoc_open_inspector_tab";
+function openInspectorInNewTab() {
+  try { return localStorage.getItem(INSPECTOR_TAB_KEY) === "true"; } catch (e) { return false; }
+}
+function setOpenInspectorTab(on) {
+  try { localStorage.setItem(INSPECTOR_TAB_KEY, on ? "true" : "false"); } catch (e) { /* ignore */ }
+}
+
 const MODEL_DESCRIPTIONS = {
   // OpenAI
   "gpt-5.6-sol": "Flagship - Best for complex workflows, coding, science",
@@ -42,6 +50,7 @@ class OptionsApp extends React.Component {
       model: saved.model || "",
       baseUrl: saved.baseUrl || "",
       celebrate: getCelebrateVariant(),
+      openInspectorTab: openInspectorInNewTab(),
       showApiKey: false,
       saved: false,
       testStatus: null,
@@ -86,6 +95,12 @@ class OptionsApp extends React.Component {
     const celebrate = e.target.checked ? "confetti" : "plane";
     setCelebrateVariant(celebrate);
     this.setState({celebrate});
+  }
+
+  onInspectorTabChange(e) {
+    const on = e.target.checked;
+    setOpenInspectorTab(on);
+    this.setState({openInspectorTab: on});
   }
 
   toggleShowApiKey() {
@@ -259,6 +274,18 @@ class OptionsApp extends React.Component {
             h("span", null, "Confetti celebration")),
           h("p", {className: "help-text"},
             "Celebrate successful SOQL runs and Apex executions with falling confetti instead of the paper-plane fly-by. Applies to both editors and takes effect on the next run.")
+        ),
+        h("div", {className: "form-group"},
+          h("label", {className: "form-check", htmlFor: "openInspectorTab"},
+            h("input", {
+              id: "openInspectorTab",
+              type: "checkbox",
+              checked: this.state.openInspectorTab,
+              onChange: (e) => this.onInspectorTabChange(e)
+            }),
+            h("span", null, "Open Inspector in new tab")),
+          h("p", {className: "help-text"},
+            "Open the Inspector panel in a full-page browser tab for better visibility. The ← Builder button jumps back to your Salesforce tab.")
         )
       ),
 
