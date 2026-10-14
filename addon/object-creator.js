@@ -3688,7 +3688,15 @@ class App extends React.Component {
           h("div", {className: "chat-messages", ref: this.chatContainerRef},
             messages.map((msg, i) =>
               h("div", {key: i, className: `message message-${msg.role}`},
-                msg.role === "system" && h("div", {className: "message-system"}, msg.text),
+                msg.role === "system" && h("div", {className: "message-system"},
+                  msg.text,
+                  /configure your LLM provider/i.test(msg.text || "") && !hasConfig &&
+                    h("div", {style: {marginTop: "10px"}},
+                      h("button", {
+                        className: "btn btn-primary btn-sm",
+                        onClick: () => this.openOptions()
+                      }, "Open Settings"))
+                ),
                 msg.role === "user" && h("div", {className: "message-user"},
                   h("div", {className: "message-avatar user-avatar"}, "You"),
                   h("div", {className: "message-bubble"}, msg.text)
@@ -3770,11 +3778,6 @@ class App extends React.Component {
                   title: "Enhance prompt"
                 }, isEnhancing ? "..." : "🪄")
               ),
-              !hasConfig && h("button", {
-                className: "btn btn-primary",
-                style: {marginLeft: "8px", alignSelf: "flex-end"},
-                onClick: () => this.openOptions()
-              }, "Open Settings"),
               h("button", {
                 className: "send-btn",
                 title: "Send",

@@ -109,14 +109,17 @@ export function hasValidConfig() {
   return true;
 }
 
-// Editor success celebration: "plane" (default) or "confetti". Lives in
-// localStorage (shared across the options page and the panel like llmConfig)
-// instead of ffUseSession, because the setting is changed from options.html.
+// Editor success celebration: "plane" (default), "confetti", "thor" or
+// "spidey". Lives in localStorage (shared across the options page and the
+// panel like llmConfig) instead of ffUseSession, because the setting is
+// changed from options.html.
 export const CELEBRATE_VARIANT_KEY = "sfoc_celebrate";
+export const CELEBRATE_VARIANTS = ["plane", "confetti", "thor", "spidey"];
 
 export function getCelebrateVariant() {
   try {
-    return localStorage.getItem(CELEBRATE_VARIANT_KEY) === "confetti" ? "confetti" : "plane";
+    const v = localStorage.getItem(CELEBRATE_VARIANT_KEY);
+    return CELEBRATE_VARIANTS.includes(v) ? v : "plane";
   } catch (e) {
     return "plane";
   }
@@ -124,6 +127,6 @@ export function getCelebrateVariant() {
 
 export function setCelebrateVariant(variant) {
   try {
-    localStorage.setItem(CELEBRATE_VARIANT_KEY, variant === "confetti" ? "confetti" : "plane");
+    localStorage.setItem(CELEBRATE_VARIANT_KEY, CELEBRATE_VARIANTS.includes(variant) ? variant : "plane");
   } catch (e) { /* ignore */ }
 }

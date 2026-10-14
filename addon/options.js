@@ -92,9 +92,8 @@ class OptionsApp extends React.Component {
   }
 
   onCelebrateChange(e) {
-    const celebrate = e.target.checked ? "confetti" : "plane";
-    setCelebrateVariant(celebrate);
-    this.setState({celebrate});
+    setCelebrateVariant(e.target.value);
+    this.setState({celebrate: getCelebrateVariant()});
   }
 
   onInspectorTabChange(e) {
@@ -264,16 +263,20 @@ class OptionsApp extends React.Component {
       h("div", {className: "options-section"},
         h("h2", null, "Preferences"),
         h("div", {className: "form-group"},
-          h("label", {className: "form-check", htmlFor: "celebrateConfetti"},
-            h("input", {
-              id: "celebrateConfetti",
-              type: "checkbox",
-              checked: celebrate === "confetti",
-              onChange: (e) => this.onCelebrateChange(e)
-            }),
-            h("span", null, "Confetti celebration")),
+          h("label", {htmlFor: "celebrateVariant"}, "Success celebration"),
+          h("select", {
+            id: "celebrateVariant",
+            className: "form-control",
+            value: celebrate,
+            onChange: (e) => this.onCelebrateChange(e)
+          },
+            h("option", {value: "plane"}, "Paper Plane"),
+            h("option", {value: "confetti"}, "Confetti"),
+            h("option", {value: "thor"}, "Thor Storm"),
+            h("option", {value: "spidey"}, "Spider Web")
+          ),
           h("p", {className: "help-text"},
-            "Celebrate successful SOQL runs and Apex executions with falling confetti instead of the paper-plane fly-by. Applies to both editors and takes effect on the next run.")
+            "Celebrate successful SOQL runs and Apex executions with an animation. Applies to both editors and takes effect on the next run.")
         ),
         h("div", {className: "form-group"},
           h("label", {className: "form-check", htmlFor: "openInspectorTab"},

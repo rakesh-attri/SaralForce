@@ -73,12 +73,21 @@ function parseCsv(text) {
   return {headers, records};
 }
 
+function soqlNeedsLimit(q) {
+  if (/\blimit\s+\d+/i.test(q)) return false;
+  const src = String(q || "").replace(/'[^']*'/g, " ");
+  if (!/\b(COUNT|COUNT_DISTINCT|SUM|AVG|MIN|MAX)\s*\(/i.test(src)) return true;
+  return /\bGROUP\s+BY\b/i.test(src);
+}
+
 async function runSoql(query, limit) {
   let q = String(query || "").trim();
   if (!q) throw new Error("Enter a SOQL query");
   if (!/^select\b/i.test(q)) throw new Error("Only SELECT SOQL is supported");
-  // Soft-cap rows unless the user already limited.
-  if (limit && !/\blimit\s+\d+/i.test(q)) {
+  // Soft-cap rows unless the user already limited. Aggregate queries
+  // (COUNT/SUM/AVG/MIN/MAX) without GROUP BY must never carry LIMIT —
+  // Salesforce rejects them (MALFORMED_QUERY).
+  if (limit && soqlNeedsLimit(q)) {
     q = `${q} LIMIT ${parseInt(limit, 10) || 2000}`;
   }
   const url = `/services/data/v${apiVersion}/query/?q=` + encodeURIComponent(q);
@@ -271,7 +280,8 @@ async function suggestSoqlFix(failedQuery, sfError) {
   const messages = [
     {role: "system", content:
       "You are a Salesforce SOQL expert helping a beginner. " +
-      "Rules: SELECT-only queries. Never use SELECT *. Always keep or add a LIMIT. " +
+      "Rules: SELECT-only queries. Never use SELECT *. Keep or add a LIMIT, " +
+      "EXCEPT for aggregate queries (COUNT/SUM/AVG/MIN/MAX) without GROUP BY, which must never have LIMIT. " +
       "Relationship queries use __r with the relationship name, filters use __c field API names. " +
       "Reply with ONLY a JSON object: " +
       '{"explanation": "<plain simple words, 1-2 sentences, no jargon>", "fixedQuery": "<corrected SOQL, single line>"}'},
@@ -469,6 +479,33 @@ function Celebrate({seq, onDone}) {
             className: "cc-chip",
             style: {"--i": i, background: CONFETTI_COLORS[i % CONFETTI_COLORS.length]}
           }))
+      : variant === "thor"
+      ? [h("div", {key: "flash", className: "cc-flash"}),
+          h("svg", {key: "hammer", className: "cc-hammer", width: 54, height: 84,
+            viewBox: "0 0 60 92", "aria-hidden": "true"},
+            h("rect", {x: 26, y: 30, width: 8, height: 52, rx: 3, fill: "#92400e"}),
+            h("rect", {x: 22, y: 78, width: 16, height: 7, rx: 3, fill: "#57534e"}),
+            h("rect", {x: 8, y: 6, width: 44, height: 26, rx: 4, fill: "#94a3b8"}),
+            h("rect", {x: 8, y: 6, width: 44, height: 8, rx: 4, fill: "#cbd5e1"}),
+            h("rect", {x: 24, y: 6, width: 12, height: 26, fill: "#64748b"})),
+          h("div", {key: "shake", className: "cc-shake"},
+            ...[0, 1, 2].map(i =>
+              h("span", {key: "w" + i, className: "cc-shock", style: {"--i": i}})),
+            ...Array.from({length: 12}, (_, i) =>
+              h("span", {key: "p" + i, className: "cc-spark",
+                style: {"--i": i, background: ["#f8fafc", "#67e8f9", "#fbbf24"][i % 3]}}))),
+          h("div", {key: "boom", className: "cc-boom"})]
+      : variant === "spidey"
+      ? [...[0, 1, 2].map(i =>
+            h("span", {key: "r" + i, className: "cc-ring", style: {"--i": i}})),
+          ...Array.from({length: 8}, (_, i) =>
+            h("span", {key: "s" + i, className: "cc-strand", style: {"--i": i}})),
+          ...Array.from({length: 8}, (_, i) =>
+            h("span", {
+              key: "d" + i,
+              className: "cc-chip",
+              style: {"--i": i, background: i % 2 ? "#2563eb" : "#ef4444"}
+            }))]
       : h("span", {className: "cc-plane"},
           h("svg", {width: 26, height: 26, viewBox: "0 0 24 24", "aria-hidden": "true"},
             h("path", {
@@ -1130,7 +1167,7 @@ function ExportTab() {
       if (!obj) throw new Error("Enter an object API name");
       let q = `SELECT ${fields.trim() || "Id, Name"} FROM ${obj}`;
       if (where.trim()) q += ` WHERE ${where.trim()}`;
-      if (!/\blimit\s+\d+/i.test(q)) q += ` LIMIT ${parseInt(limit, 10) || 10000}`;
+      if (soqlNeedsLimit(q)) q += ` LIMIT ${parseInt(limit, 10) || 10000}`;
       const r = await runSoql(q, null);
       const rows = r.records.map(flattenRecord);
       const colSet = new Set();
@@ -1803,7 +1840,7 @@ const resolveUserNames = async (rows, idKey) => {
 // Fetches one SOQL list on mount (header Refresh re-runs it), then renders
 // stats, a filter box and click-to-copy rows. `row(r, {copied, copy})`
 // draws each line; `match(r, needle)` does the (already lowercased) filter.
-function OrgLogCard({icon, title, soql, placeholder, match, stats, row, emptyText, postFetch}) {
+function OrgLogCard({icon, title, soql, placeholder, match, stats, row, emptyText, postFetch, tooling}) {
   const [rows, setRows] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -1814,7 +1851,7 @@ function OrgLogCard({icon, title, soql, placeholder, match, stats, row, emptyTex
     setBusy(true);
     setError(null);
     try {
-      const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+      const res = await sfConn.rest(`/services/data/v${apiVersion}/${tooling ? "tooling/" : ""}query/?q=` +
         encodeURIComponent(soql), {useCache: false});
       let recs = (res && res.records) || [];
       if (postFetch) recs = await postFetch(recs);
@@ -4053,7 +4090,8 @@ function UsersTab() {
       const prefix = site && site.UrlPathPrefix ? `/${site.UrlPathPrefix}` : "";
       const home = `${prefix}/s/`;
       const url = `https://${sfConn.instanceHostname}/servlet/servlet.su` +
-        `?oid=${orgId}&suorgadminid=${sel.Id}&retURL=${encodeURIComponent(home)}&targetURL=${encodeURIComponent(home)}`;
+        `?oid=${orgId}&retURL=${encodeURIComponent(home)}` +
+        `&sunetworkid=${site ? site.Id : ""}&sunetworkuserid=${sel.Id}`;
       window.open(url, "_blank");
       setActionMsg(`Experience login opened for ${sel.Username} on ${site ? site.Name : "site"} (requires login-as permission).`);
     } catch (e) {
@@ -4390,7 +4428,7 @@ function UsersTab() {
             : `Log in to the Experience site as ${sel.Username} (community user must be active)`,
           onClick: loginToExpSite
         }, busy === "expLogin" ? "Opening…" : "Login to Exp Site"),
-        isCommunityUser(sel) && sites.length > 1 && h("label", {className: "insp-field", title: "Choose the Experience site"},
+        isCommunityUser(sel) && sites.length > 1 && h("label", {className: "user-sitepick", title: "Choose the Experience site"},
           h("span", null, "Site"),
           h("select", {
             value: expSite,
@@ -6309,18 +6347,275 @@ function LogsTab() {
   );
 }
 
+function CoverageTab() {
+  const [seq, setSeq] = React.useState(0);
+  const [runMsg, setRunMsg] = React.useState(null);
+  const [running, setRunning] = React.useState(false);
+  const [quickName, setQuickName] = React.useState("");
+  const [suggest, setSuggest] = React.useState([]);
+  const [suggestOpen, setSuggestOpen] = React.useState(false);
+  const suggestTimer = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!suggestOpen) return;
+    const onDoc = (e) => {
+      if (e.target.closest && e.target.closest(".ff-multi")) return;
+      setSuggestOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [suggestOpen]);
+
+  const searchClasses = (term) => {
+    const t = term.trim();
+    if (t.length < 2) { setSuggest([]); setSuggestOpen(false); return; }
+    if (suggestTimer.current) clearTimeout(suggestTimer.current);
+    suggestTimer.current = setTimeout(async () => {
+      try {
+        const r = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
+          encodeURIComponent(`SELECT Id, Name FROM ApexClass WHERE Name LIKE '%${t.replace(/'/g, "\\'")}%' ORDER BY Name LIMIT 20`),
+          {useCache: false});
+        setSuggest(r.records || []);
+        setSuggestOpen(true);
+      } catch (e) {
+        setSuggest([]);
+        setSuggestOpen(false);
+      }
+    }, 300);
+  };
+
+  const loadAggregates = async () => {
+    const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
+      encodeURIComponent("SELECT ApexClassOrTriggerId, ApexClassOrTrigger.Name, NumLinesCovered, NumLinesUncovered, LastModifiedDate FROM ApexCodeCoverageAggregate ORDER BY ApexClassOrTrigger.Name"),
+      {useCache: false});
+    return res.records || [];
+  };
+
+  const waitForFresh = async (sinceMs, label) => {
+    const t0 = Date.now();
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      setRunMsg(`Running ${label}… ${Math.round((Date.now() - t0) / 1000)}s`);
+      try {
+        const rows = await loadAggregates();
+        const max = rows.reduce((m, r) => Math.max(m, Date.parse(r.LastModifiedDate) || 0), 0);
+        if (max > sinceMs) return true;
+      } catch (e) { /* keep polling */ }
+    }
+    return false;
+  };
+
+  const runTests = async (body, label, targetName) => {
+    setRunning(true);
+    setRunMsg(`Running ${label}…`);
+    let before = null;
+    const classId = body && body.tests && body.tests[0] && body.tests[0].classId;
+    if (targetName) {
+      try {
+        const rows = await loadAggregates();
+        const hit = rows.find(r => nm(r) === targetName);
+        before = hit ? pctOf(hit) : null;
+      } catch (e) { /* ignore */ }
+    }
+    try {
+      await sfConn.rest(`/services/data/v${apiVersion}/tooling/runTestsAsynchronous`, {
+        method: "POST", useCache: false, body});
+      const since = Date.now();
+      if (await waitForFresh(since, label)) {
+        setRunMsg("Run complete — coverage refreshed." +
+          (targetName ? await describeRunCoverage(classId, targetName, before) : ""));
+        setSeq(s => s + 1);
+      } else {
+        setRunMsg("Still running — hit Refresh in a bit for the new numbers.");
+      }
+    } catch (e) {
+      setRunMsg("Run failed: " + (e.message || String(e)));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const pctOf = (r) => {
+    const c = r.NumLinesCovered || 0, u = r.NumLinesUncovered || 0;
+    return c + u > 0 ? Math.round(c / (c + u) * 100) : null;
+  };
+  const nm = (r) => (r.ApexClassOrTrigger && r.ApexClassOrTrigger.Name) || r.ApexClassOrTriggerId || "(unknown)";
+
+  const describeRunCoverage = async (classId, targetName, before) => {
+    if (classId) {
+      try {
+        const r = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
+          encodeURIComponent(`SELECT ApexClassOrTriggerId, ApexClassOrTrigger.Name, TestMethodName, NumLinesCovered, NumLinesUncovered FROM ApexCodeCoverage WHERE ApexTestClassId = '${classId}'`),
+          {useCache: false});
+        const cov = r.records || [];
+        if (cov.length) {
+          const parts = cov.slice(0, 3).map(c => {
+            const n = (c.ApexClassOrTrigger && c.ApexClassOrTrigger.Name) || c.ApexClassOrTriggerId;
+            const t = (c.NumLinesCovered || 0) + (c.NumLinesUncovered || 0);
+            const p = t > 0 ? Math.round((c.NumLinesCovered || 0) / t * 100) : 0;
+            return `${n} ${p}% (${fmtNum(c.NumLinesCovered || 0)}/${fmtNum(t)} lines)`;
+          });
+          return ` — ${targetName} finished — covers ` + parts.join(", ") +
+            (cov.length > 3 ? ` +${cov.length - 3} more` : "");
+        }
+      } catch (e) { /* fall through to aggregate lookup */ }
+    }
+    try {
+      const rows = await loadAggregates();
+      const hit = rows.find(r => nm(r) === targetName);
+      const after = hit ? pctOf(hit) : null;
+      return after == null ? ` — ${targetName}: no coverage yet`
+        : before == null ? ` — ${targetName}: now ${after}%`
+        : after === before ? ` — ${targetName}: unchanged at ${after}%`
+        : ` — ${targetName}: ${before}% → ${after}%`;
+    } catch (e) { /* ignore */ }
+    return "";
+  };
+
+  const quickRun = async () => {
+    const name = quickName.trim();
+    if (!name || running) return;
+    setRunning(true);
+    setRunMsg(`Resolving ${name}…`);
+    try {
+      const q = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
+        encodeURIComponent(`SELECT Id FROM ApexClass WHERE Name = '${name.replace(/'/g, "\\'")}'`),
+        {useCache: false});
+      const id = q.records && q.records[0] && q.records[0].Id;
+      if (!id) {
+        setRunMsg(`No Apex class named ${name}.`);
+        return;
+      }
+      await runTests({tests: [{classId: id}]}, name, name);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return h(React.Fragment, null,
+    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
+      h("button", {
+        className: "btn btn-primary btn-sm",
+        disabled: running,
+        title: "Run all org tests, then reload the table",
+        onClick: () => runTests({testLevel: "RunLocalTests"}, "all tests")
+      }, running ? "Running…" : "Run All Tests"),
+      runMsg && h("span", {className: "insp-meta"}, runMsg)
+    ),
+    running && h("div", {className: "cov-progress"},
+      h("div", {className: "cov-progress-fill"})
+    ),
+    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
+      h("div", {className: "ff-multi", style: {flex: 1}},
+        h("label", {className: "insp-field insp-field-grow"},
+          h("span", null, "Test class name"),
+          h("input", {
+            value: quickName,
+            placeholder: "Type to search classes…",
+            disabled: running,
+            onChange: e => { setQuickName(e.target.value); searchClasses(e.target.value); },
+            onKeyDown: e => {
+              if (e.key === "Enter") quickRun();
+              if (e.key === "Escape") setSuggestOpen(false);
+            }
+          })),
+        suggestOpen && h("div", {className: "ff-multi-panel"},
+          h("div", {className: "ff-multi-list"},
+            suggest.map(c => h("button", {
+              key: c.Id,
+              type: "button",
+              className: "ff-suggest-row",
+              title: `Run ${c.Name}`,
+              onClick: () => { setQuickName(c.Name); setSuggestOpen(false); }
+            }, c.Name)),
+            suggest.length === 0 && h("div", {className: "insp-empty"}, "No matching classes")
+          )
+        )),
+      h("button", {
+        className: "btn btn-secondary btn-sm",
+        disabled: running || !quickName.trim(),
+        title: "Find the class and run its tests",
+        onClick: quickRun
+      }, "Run Class")
+    ),
+    h(OrgLogCard, {
+      key: "cov-" + seq,
+      icon: "📊",
+      title: "Code Coverage",
+      tooling: true,
+      soql: "SELECT ApexClassOrTriggerId, ApexClassOrTrigger.Name, NumLinesCovered, NumLinesUncovered, LastModifiedDate FROM ApexCodeCoverageAggregate ORDER BY ApexClassOrTrigger.Name",
+      postFetch: async (rows) => {
+        let trig = {};
+        try {
+          const t = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+            encodeURIComponent("SELECT Id FROM ApexTrigger"), {useCache: false});
+          (t.records || []).forEach(x => { trig[x.Id] = true; });
+        } catch (e) { /* unknown types */ }
+        rows.forEach(r => { r._isTrigger = !!trig[r.ApexClassOrTriggerId]; });
+        return rows;
+      },
+      emptyText: "No coverage data yet — run your tests first.",
+      placeholder: (n) => `Filter ${fmtNum(n)} classes…`,
+      match: (r, needle) => nm(r).toLowerCase().includes(needle),
+      stats: (rows) => {
+        let c = 0, u = 0, ok = 0;
+        rows.forEach(r => {
+          c += r.NumLinesCovered || 0;
+          u += r.NumLinesUncovered || 0;
+          const p = pctOf(r);
+          if (p != null && p >= 76) ok++;
+        });
+        const avg = c + u > 0 ? Math.round(c / (c + u) * 100) : null;
+        return [
+          ["Listed", fmtNum(rows.length)],
+          ["Overall", avg == null ? "—" : avg + "%"],
+          ["Above 76%", fmtNum(ok)]
+        ];
+      },
+      row: (r, ctx) => {
+        const p = pctOf(r);
+        const good = p != null && p >= 76;
+        const key = r.ApexClassOrTriggerId || nm(r);
+        const total = (r.NumLinesCovered || 0) + (r.NumLinesUncovered || 0);
+        const line = `${nm(r)} — ${p == null ? "n/a" : p + "%"} (${fmtNum(r.NumLinesCovered || 0)}/${fmtNum(total)} lines)`;
+        return h("div", {
+          key,
+          className: "perm-row cov-" + (good ? "ok" : "bad"),
+          title: "Click to copy: " + line,
+          onClick: () => ctx.copy(key, line)
+        },
+          h("span", {className: "perm-l"}, nm(r)),
+          r._isTrigger && h(FFBadge, {kind: "off"}, "trigger"),
+          h(FFBadge, {kind: p == null ? "off" : good ? "ok" : "err"}, p == null ? "n/a" : p + "%"),
+          h("span", {className: "perm-n"},
+            ctx.copied === key ? "✓ copied" : `${fmtNum(r.NumLinesCovered || 0)}/${fmtNum(total)} lines`),
+          !r._isTrigger && h("button", {
+            className: "field-action-btn",
+            title: `Run tests in ${nm(r)}`,
+            onClick: (e) => {
+              e.stopPropagation();
+              runTests({tests: [{classId: r.ApexClassOrTriggerId}]}, nm(r), nm(r));
+            }
+          }, running ? "…" : "Run")
+        );
+      }
+    })
+  );
+}
+
 export function InspectorPanel() {
   const [tab, setTab] = ffUseSession("inspector", "tab", "soql");
   const tabs = [
-    {id: "soql", label: "SOQL"},
-    {id: "apex", label: "Run-Apex"},
-    {id: "records", label: "Records"},
-    {id: "export", label: "Export"},
-    {id: "import", label: "Import"},
-    {id: "users", label: "Users"},
-    {id: "logs", label: "Logs"},
-    {id: "org", label: "Org Info"},
-    {id: "apptabs", label: "App Tabs"}
+    {id: "soql", label: "SOQL", icon: "🗄️"},
+    {id: "apex", label: "Run-Apex", icon: "⚡"},
+    {id: "records", label: "Records", icon: "🗂️"},
+    {id: "export", label: "Export", icon: "📤"},
+    {id: "import", label: "Import", icon: "📥"},
+    {id: "users", label: "Users", icon: "👥"},
+    {id: "logs", label: "Logs", icon: "📝"},
+    {id: "org", label: "Org Info", icon: "🏢"},
+    {id: "apptabs", label: "App Tabs", icon: "📑"},
+    {id: "coverage", label: "Code Coverage", icon: "</>"}
   ];
   // A restored snapshot may name a tab id that no longer exists.
   const active = tabs.some(t => t.id === tab) ? tab : "soql";
@@ -6340,6 +6635,7 @@ export function InspectorPanel() {
         h("button", {
           key: t.id,
           className: `insp-tab ${active === t.id ? "active" : ""}`,
+          "data-ico": t.icon,
           onClick: () => pickTab(t.id)
         }, t.label)
       )
@@ -6353,7 +6649,8 @@ export function InspectorPanel() {
       active === "users" && h(UsersTab),
       active === "logs" && h(LogsTab),
       active === "org" && h(OrgTab),
-      active === "apptabs" && h(AppTabsTab)
+      active === "apptabs" && h(AppTabsTab),
+      active === "coverage" && h(CoverageTab)
     )
   );
 }

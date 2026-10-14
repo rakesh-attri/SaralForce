@@ -104,7 +104,7 @@
         position: fixed;
         top: 0;
         right: 0;
-        width: min(920px, 75vw);
+        width: min(1024px, 75vw);
         height: 100vh;
         z-index: 2147483646;
         box-shadow: -4px 0 24px rgba(0,0,0,0.2);
