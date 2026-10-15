@@ -80,17 +80,19 @@ function soqlNeedsLimit(q) {
   return /\bGROUP\s+BY\b/i.test(src);
 }
 
-async function runSoql(query, limit) {
+async function runSoql(query, limit, opts) {
+  const {tooling = false, allRows = false} = opts || {};
   let q = String(query || "").trim();
   if (!q) throw new Error("Enter a SOQL query");
   if (!/^select\b/i.test(q)) throw new Error("Only SELECT SOQL is supported");
   // Soft-cap rows unless the user already limited. Aggregate queries
-  // (COUNT/SUM/AVG/MIN/MAX) without GROUP BY must never carry LIMIT —
+  // (COUNT/SUM/AVG/MIN/MAX) without GROUP BY must never carry LIMIT -
   // Salesforce rejects them (MALFORMED_QUERY).
   if (limit && soqlNeedsLimit(q)) {
     q = `${q} LIMIT ${parseInt(limit, 10) || 2000}`;
   }
-  const url = `/services/data/v${apiVersion}/query/?q=` + encodeURIComponent(q);
+  const base = tooling ? "tooling/query/" : allRows ? "queryAll/" : "query/";
+  const url = `/services/data/v${apiVersion}/${base}?q=` + encodeURIComponent(q);
   let loc = url;
   let all = [];
   let pages = 0;
@@ -152,6 +154,64 @@ function fmtDateTime(value) {
   });
 }
 
+// Relative "Last refreshed / Last updated" stamp shared by the Records
+// summary headers and the Show-all-data info strip.
+function ffFmtRelative(ts) {
+  if (!ts) return "—";
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return "Just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  let hh = d.getHours();
+  const ap = hh >= 12 ? "PM" : "AM";
+  hh = hh % 12 || 12;
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const day = sameDay ? "Today"
+    : d.toLocaleDateString(undefined, {month: "short", day: "numeric"});
+  return `${day}, ${hh}:${mm} ${ap}`;
+}
+
+// "Show all data" field-type glyph: a plain text marker, never an emoji.
+function sadTypeGlyph(t) {
+  const s = String(t || "").toLowerCase();
+  if (["int", "double", "currency", "percent", "number"].includes(s)) return "#";
+  if (["date", "datetime", "time"].includes(s)) return "◷";
+  if (s === "boolean") return "✓";
+  if (s === "picklist" || s === "multipicklist") return "☰";
+  if (s === "address" || s === "location") return "◎";
+  if (["base64", "anytype", "json", "complexvalue"].includes(s)) return "❖";
+  return "Aa";
+}
+
+function sadInfoCell(label, value) {
+  return h("div", {className: "sad-info-cell"},
+    h("div", {className: "sad-info-l"}, label),
+    h("div", {className: "sad-info-v"}, value));
+}
+
+// ─── Shared stroke icons (SOQL M3 redesign) ─────────────────────────────
+// Path-only SVGs: no text nodes, so card innerText stays clean.
+function ffIcon(paths, s) {
+  return h("svg", {width: s || 15, height: s || 15, viewBox: "0 0 24 24",
+    fill: "none", stroke: "currentColor", strokeWidth: 1.9,
+    strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true"},
+    ...paths);
+}
+const FF_I_DB = [h("path", {d: "M12 3c4.4 0 8 1.1 8 2.5S16.4 8 12 8 4 6.9 4 5.5 7.6 3 12 3z"}),
+  h("path", {d: "M4 5.5V18.5C4 19.9 7.6 21 12 21s8-1.1 8-2.5V5.5"}),
+  h("path", {d: "M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5"})];
+const FF_I_CLOCK = [h("circle", {cx: 12, cy: 12, r: 8.5}),
+  h("path", {d: "M12 7.5V12l3 2"})];
+const FF_I_BOOKMARK = [h("path", {d: "M7 4h10v16l-5-4-5 4z"})];
+const FF_I_SLIDERS = [h("path", {d: "M4 7h16"}), h("circle", {cx: 9, cy: 7, r: 2}),
+  h("path", {d: "M4 12h16"}), h("circle", {cx: 15, cy: 12, r: 2}),
+  h("path", {d: "M4 17h16"}), h("circle", {cx: 8, cy: 17, r: 2})];
+const FF_I_DOWNLOAD = [h("path", {d: "M12 4v11"}), h("path", {d: "M7 11l5 5 5-5"}),
+  h("path", {d: "M5 20h14"})];
+const FF_I_DOC = [h("path", {d: "M7 3h7l4 4v14H7z"}), h("path", {d: "M14 3v4h4"})];
+
 function fmtNum(n) {
   return typeof n === "number" ? n.toLocaleString() : String(n);
 }
@@ -187,7 +247,9 @@ function ffTruthy(v) {
   return v === true || v === "true";
 }
 
-function ResultTable({columns, rows, maxRows, onRowClick, rowHint, cellFmt}) {
+function ResultTable({columns, rows, maxRows, onRowClick, rowHint, cellFmt,
+  wrapClass, selectable, isSelected, onToggle, allChecked, onToggleAll,
+  sortCol, sortDir, onSort}) {
   const shown = rows.slice(0, maxRows || 200);
   if (!columns.length) return h("div", {className: "insp-empty"}, "No rows");
   // ↗ gets its own column, right after Name (or at the row end when the
@@ -200,23 +262,54 @@ function ResultTable({columns, rows, maxRows, onRowClick, rowHint, cellFmt}) {
   const cells = showOpen
     ? columns.slice(0, openIdx).concat("__open", columns.slice(openIdx))
     : columns.slice();
-  return h("div", {className: "insp-table-wrap"},
-    h("table", {className: "insp-table"},
-      h("thead", null,
-        h("tr", null, cells.map(c =>
-          c === "__open"
-            ? h("th", {key: c, className: "insp-open-col"})
-            : h("th", {key: c}, c)))
-      ),
-      h("tbody", null,
-        shown.map((row, i) =>
-          h("tr", {
-            key: i,
-            className: onRowClick ? "insp-row-click" : "",
-            title: onRowClick ? (rowHint || "Click to show all data") : undefined,
-            onClick: onRowClick ? () => onRowClick(row, i) : undefined
-          },
+  return h("div", {className: "insp-table-wrap" + (wrapClass ? " " + wrapClass : "")},
+      h("table", {className: "insp-table"},
+        h("thead", null,
+          h("tr", null,
+            selectable && h("th", {key: "__sel", className: "sq3-sel-col"},
+              onToggleAll ? h("input", {
+                type: "checkbox",
+                checked: !!allChecked,
+                onChange: onToggleAll,
+                "aria-label": "Select all rows"
+              }) : null),
             cells.map(c => {
+              if (c === "__open") return h("th", {key: c, className: "insp-open-col"});
+              const sorted = onSort && sortCol != null && sortCol === c;
+              return h("th", {
+                key: c,
+                ...(onSort ? {
+                  className: "sq3-sortable" + (sorted ? " sq3-sorted" : ""),
+                  onClick: () => onSort(c),
+                  title: "Sort by " + c
+                } : {})
+              },
+                h("span", null, c),
+                sorted && h("span", {className: "sq3-sort-arrow", "aria-hidden": "true"},
+                  sortDir === -1 ? " ▼" : " ▲"));
+            })
+          )
+        ),
+        h("tbody", null,
+          shown.map((row, i) =>
+            h("tr", {
+              key: i,
+              className: onRowClick ? "insp-row-click" : "",
+              title: onRowClick ? (rowHint || "Click to show all data") : undefined,
+              onClick: onRowClick ? () => onRowClick(row, i) : undefined
+            },
+              selectable && h("td", {key: "__sel", className: "sq3-sel-col"},
+                h("input", {
+                  type: "checkbox",
+                  checked: !!(isSelected && isSelected(row, i)),
+                  onChange: (e) => {
+                    e.stopPropagation();
+                    if (onToggle) onToggle(row, i);
+                  },
+                  onClick: (e) => e.stopPropagation(),
+                  "aria-label": "Select row"
+                })),
+              cells.map(c => {
               if (c === "__open") {
                 return h("td", {key: c, className: "insp-open-col"},
                   ffIsSfId(row[idField]) && h("a", {
@@ -230,11 +323,16 @@ function ResultTable({columns, rows, maxRows, onRowClick, rowHint, cellFmt}) {
               }
               const raw = row[c] == null ? "" : String(row[c]);
               const isId = String(c).toLowerCase() === "id";
+              const isIdVal = isId && row[c] != null && String(row[c]).trim() !== "";
               const title = row[c] == null ? ""
                 : (isId && onRowClick
                   ? `${raw} — ${rowHint || "click: open all record data in a popup"}`
                   : raw);
-              return h("td", {key: c, title},
+              return h("td", {
+                key: c,
+                title,
+                ...(isIdVal ? {className: "sq3-id-cell"} : {})
+              },
                 row[c] == null ? ""
                   : (cellFmt && cellFmt[c] ? cellFmt[c](row[c], row) : String(row[c]))
               );
@@ -445,15 +543,38 @@ async function ffGetObjects(force) {
 }
 
 const _ffDescribeCache = {};
-async function ffDescribeObject(objApi) {
+async function ffDescribeObject(objApi, opts) {
   const key = String(objApi || "").trim();
   if (!key) throw new Error("Enter an object API name");
-  if (_ffDescribeCache[key]) return _ffDescribeCache[key];
+  const tooling = !!(opts && opts.tooling);
+  const cacheKey = (tooling ? "tooling:" : "std:") + key;
+  if (_ffDescribeCache[cacheKey]) return _ffDescribeCache[cacheKey];
   const d = await sfConn.rest(
-    `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(key)}/describe`,
+    tooling
+      ? `/services/data/v${apiVersion}/tooling/sobjects/${encodeURIComponent(key)}/describe`
+      : `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(key)}/describe`,
     {useCache: false});
-  _ffDescribeCache[key] = d;
+  _ffDescribeCache[cacheKey] = d;
   return d;
+}
+
+// Objects visible through Setup (Tooling API toggle): EntityDefinition is
+// the source of truth; mapped onto the {name, label, custom} shape the
+// explorer already consumes.
+async function toolingListObjects() {
+  const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+    encodeURIComponent("SELECT QualifiedApiName, Label FROM EntityDefinition ORDER BY Label"),
+    {useCache: false});
+  const list = (res.records || [])
+    .filter(r => r && r.QualifiedApiName)
+    .map(r => ({
+      name: r.QualifiedApiName,
+      label: r.Label || r.QualifiedApiName,
+      custom: /__c$/.test(r.QualifiedApiName)
+    }));
+  list.sort((a, b) =>
+    (b.custom - a.custom) || a.label.localeCompare(b.label));
+  return list;
 }
 
 // ─── Shared code-editor pieces (SOQL + Apex tabs) ─────────────────────
@@ -574,6 +695,20 @@ function SoqlTab() {
   const [soqlDetailLoading, setSoqlDetailLoading] = React.useState(false);
   const [detailHint, setDetailHint] = React.useState(null);
   const [useLlm, setUseLlm] = React.useState(() => ffLoadJson("ff_soql_use_llm", false));
+  // API mode toggles: Tooling API and Recycle Bin are mutually exclusive —
+  // enabling one switches the other off. Persisted like the LLM checkbox.
+  const [useTooling, setUseToolingState] = React.useState(() => ffLoadJson("ff_soql_use_tooling", false));
+  const [useRecycle, setUseRecycleState] = React.useState(() => ffLoadJson("ff_soql_use_recycle", false));
+  const setApiMode = (mode) => {
+    const tooling = mode === "tooling";
+    const recycle = mode === "recycle";
+    setUseToolingState(tooling);
+    setUseRecycleState(recycle);
+    ffSaveJson("ff_soql_use_tooling", tooling);
+    ffSaveJson("ff_soql_use_recycle", recycle);
+  };
+  const [fieldsExpanded, setFieldsExpanded] = React.useState(false);
+  const [showLlmHelp, setShowLlmHelp] = React.useState(false);
   const [fixing, setFixing] = React.useState(false);
   const [suggestion, setSuggestion] = React.useState(null);
   const [fixError, setFixError] = React.useState(null);
@@ -584,6 +719,10 @@ function SoqlTab() {
   const [saved, setSaved] = React.useState(() => ffLoadJson("ff_soql_saved", []));
   const [saveLabel, setSaveLabel] = React.useState("");
   const [resultFilter, setResultFilter] = React.useState("");
+  const [fieldCat, setFieldCat] = React.useState("All");
+  const [sortCol, setSortCol] = React.useState(null);
+  const [sortDir, setSortDir] = React.useState(1);
+  const [selected, setSelected] = React.useState(() => new Set());
   const taRef = React.useRef(null);
   const hlRef = React.useRef(null);
   const gutterRef = React.useRef(null);
@@ -600,8 +739,43 @@ function SoqlTab() {
   };
 
   React.useEffect(() => {
-    ffGetObjects().then(setObjects).catch(() => {});
+    if (!useTooling) { ffGetObjects().then(setObjects).catch(() => {}); return; }
+    toolingListObjects()
+      .then(setObjects)
+      .catch((e) => {
+        setError("Tooling API object list failed: " + e.message + ". Showing standard objects instead.");
+        ffGetObjects().then(setObjects).catch(() => {});
+      });
+  }, [useTooling]);
+
+  // The tab lives inside white .insp-panel — flush it so the CloudFlow
+  // page/card contrast shows through. Removed again on unmount.
+  React.useEffect(() => {
+    let panel = null;
+    try {
+      const root = document.querySelector(".soql-layout");
+      panel = root && root.closest ? root.closest(".insp-panel") : null;
+      if (panel) panel.classList.add("insp-panel-flush");
+    } catch (e) { /* ignore */ }
+    return () => {
+      try { if (panel) panel.classList.remove("insp-panel-flush"); }
+      catch (e) { /* ignore */ }
+    };
   }, []);
+
+  // LLM status pill, read live every render so what the frontend captured
+  // is always visible — no more guessing whether Options saved correctly.
+  const llmStatusPill = () => {
+    const cfg = getSavedConfig();
+    const ok = hasValidConfig();
+    const def = cfg && cfg.provider ? getProviderConfig(cfg.provider) : null;
+    return h("span", {
+      className: "sq3-pill-state " + (ok ? "ok" : "warn"),
+      title: ok
+        ? `Provider: ${cfg.provider}\nModel: ${cfg.model || "(default)"}\nKey: ${cfg.apiKey ? "••••" + String(cfg.apiKey).slice(-4) : "missing"}\n(uncheck to stop asking the LLM when a query fails)`
+        : "Open Settings (gear in the sidebar header) → choose provider, paste API key, Save Settings"
+    }, ok ? `${def ? def.name : cfg.provider} · ${cfg.model || "default"}` : "Not configured");
+  };
 
   // Object detected after the last FROM — offer its fields.
   const fromMatch = /\bfrom\s+([a-zA-Z0-9_]*)$/i.exec(query) ||
@@ -610,10 +784,13 @@ function SoqlTab() {
 
   React.useEffect(() => {
     if (!fromObj) { setFromFields(null); return; }
-    ffDescribeObject(fromObj)
-      .then(d => setFromFields((d.fields || []).map(f => ({name: f.name, label: f.label, type: f.type}))))
+    ffDescribeObject(fromObj, {tooling: useTooling})
+      .then(d => setFromFields((d.fields || []).map(f => ({
+        name: f.name, label: f.label, type: f.type,
+        custom: !!f.custom, calculated: !!f.calculated
+      }))))
       .catch(() => setFromFields(null));
-  }, [fromObj]);
+  }, [fromObj, useTooling]);
 
   const insertAtCursor = (text) => {
     const ta = taRef.current;
@@ -640,20 +817,33 @@ function SoqlTab() {
     setSoqlDetail(null);
     setDetailHint(null);
     try {
-      const r = await runSoql(q, limit);
+      const r = await runSoql(q, limit, {tooling: useTooling, allRows: useRecycle});
       const flat = r.records.map(flattenRecord);
       const colSet = new Set();
       flat.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
       setResult({...r, rows: flat, columns: [...colSet]});
       setResultFilter("");
       setCeleb(c => c + 1);
+      setSortCol(null);
+      setSortDir(1);
+      setSelected(new Set());
       setHistory(prev => {
         const next = [{q, ts: Date.now()}, ...prev.filter(h => h.q !== q)].slice(0, 20);
         ffSaveJson("ff_soql_history", next);
         return next;
       });
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        try {
+          const el = document.querySelector(".sq3-results-card");
+          if (el && el.scrollIntoView) el.scrollIntoView({behavior: "smooth", block: "nearest"});
+        } catch (e) { /* ignore */ }
+      }));
     } catch (e) {
-      setError(e.message);
+      setError(e.message + (useTooling
+        ? " (Tooling API — turn the toggle off to use the standard API.)"
+        : useRecycle
+        ? " (Recycle Bin lookup — turn the toggle off for live records only.)"
+        : ""));
       setResult(null);
       // Smart fix, only when the user opted in via the checkbox.
       if (useLlm) askLlmForFix(q, e.message);
@@ -695,9 +885,11 @@ function SoqlTab() {
     setDetailHint(null);
     setSoqlDetailLoading(true);
     try {
-      const d = await ffDescribeObject(m[1]);
+      const d = await ffDescribeObject(m[1], {tooling: useTooling});
       const rec = await fetchFullRecord(m[1], id);
-      setSoqlDetail({id, obj: m[1], rows: buildDetailRows(rec, d.fields || [])});
+      setSoqlDetail({id, obj: m[1], rows: buildDetailRows(rec, d.fields || []),
+        meta: {label: (d && d.label) || m[1], custom: !!(d && d.custom),
+          total: null, updated: null}});
     } catch (e) {
       setDetailHint(`Could not load the full record: ${e.message}`);
     } finally {
@@ -729,7 +921,87 @@ function SoqlTab() {
 
   const exportCsv = () => {
     if (!result) return;
-    downloadText("soql-results.csv", toCsv(result.columns, result.rows));
+    // Checked rows win; with nothing checked the whole loaded set goes.
+    const rows = selected.size
+      ? result.rows.filter((_, i) => selected.has(i))
+      : result.rows;
+    downloadText("soql-results.csv", toCsv(result.columns, rows));
+  };
+
+  // Field categories for the explorer pills (mutually exclusive).
+  const fieldCategory = (f) => {
+    const t = String(f.type || "").toLowerCase();
+    if (t === "picklist" || t === "multipicklist") return "Picklist";
+    if (f.calculated) return "Formula";
+    if (t === "reference") return "Relationships";
+    if (f.custom) return "Custom";
+    if (["string", "textarea", "email", "phone", "url", "id",
+         "boolean", "date", "datetime", "time"].includes(t)) return "Standard";
+    return "Other";
+  };
+  const FIELD_CATS = ["All", "Standard", "Custom", "Relationships",
+    "Picklist", "Formula", "Other"];
+
+  // Stroke-only type glyphs (SVG keeps card innerText equal to the bare
+  // field name, which the probes assert on).
+  const fieldTypeSvg = (type) => {
+    const t = String(type || "").toLowerCase();
+    const num = ["int", "double", "currency", "percent"].includes(t);
+    const dt = ["date", "datetime", "time"].includes(t);
+    const d = num
+      ? "M9 4L7 20M17 4l-2 16M4 9h17M3 15h17"
+      : dt
+      ? "M5 6h14v13H5zM5 10h14M8 3v5M16 3v5"
+      : t === "boolean"
+      ? "M5 12l5 5 9-11"
+      : (t === "picklist" || t === "multipicklist")
+      ? "M4 7h16M4 12h16M4 17h10"
+      : t === "reference"
+      ? "M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"
+      : "M7 3h7l4 4v14H7zM14 3v4h4";
+    return h("svg", {width: 18, height: 18, viewBox: "0 0 24 24",
+      fill: "none", stroke: "currentColor", strokeWidth: 1.9,
+      strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true"},
+      h("path", {d}));
+  };
+
+  // Quote-aware lightweight formatter: case + whitespace only, the query
+  // semantics never change.
+  const formatSoql = () => {
+    const src = String(query || "");
+    if (!src.trim()) return;
+    const segs = src.split(/('[^']*')/g);
+    const majors = ["select", "from", "where", "group by", "order by",
+      "having", "limit", "offset"];
+    const minors = ["and", "or", "not", "in", "like", "asc", "desc",
+      "nulls first", "nulls last"];
+    const out = segs.map((seg, i) => {
+      if (i % 2 === 1) return seg;
+      let s = seg.replace(/\s+/g, " ");
+      for (const kw of [...majors, ...minors].sort((a, b) => b.length - a.length)) {
+        const re = new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi");
+        s = s.replace(re, kw.toUpperCase());
+      }
+      for (const kw of majors.slice(1)) {
+        s = s.replace(new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi"), `\n${kw.toUpperCase()}`);
+      }
+      return s;
+    }).join("");
+    setQuery(out.trim());
+  };
+
+  const clearQuery = () => {
+    setQuery("SELECT Id, Name FROM Account LIMIT 50");
+    setResult(null);
+    setResultFilter("");
+    setError(null);
+    setSuggestion(null);
+    setFixError(null);
+    setSoqlDetail(null);
+    setDetailHint(null);
+    setSortCol(null);
+    setSortDir(1);
+    setSelected(new Set());
   };
 
   const saveCurrent = () => {
@@ -778,9 +1050,14 @@ function SoqlTab() {
       const next = query.slice(0, query.length - trailingFrom[1].length) + name + " ";
       setQuery(next);
       const ta = taRef.current;
+      const appliedQuery = next;
       requestAnimationFrame(() => {
         if (!ta) return;
-        try { ta.focus(); ta.setSelectionRange(next.length, next.length); } catch (e) { /* ignore */ }
+        try {
+          if (ta.value !== appliedQuery) return;
+          ta.focus();
+          ta.setSelectionRange(next.length, next.length);
+        } catch (e) { /* ignore */ }
       });
       return;
     }
@@ -795,13 +1072,77 @@ function SoqlTab() {
     const m = quotes % 2 === 0 ? /(\w+)$/.exec(before) : null;
     if (!m) { insertAtCursor(name); return; }
     const start = caret - m[1].length;
-    const suffix = caret === query.length ? " " : "";
-    const next = query.slice(0, start) + name + suffix + query.slice(caret);
+    let next = query.slice(0, start) + name;
+    let pos = start + name.length;
+    const after = query.slice(caret);
+    // Automatic comma: exactly one separator, unless one is already there
+    // or a FROM clause follows (a trailing comma would break the query).
+    if (!/^\s*,/.test(after) && !/^\s*from\b/i.test(after)) {
+      next += ",";
+      pos += 1;
+    }
+    if (after === "" || /^[^\s,]/.test(after)) {
+      next += " ";
+      pos += 1;
+    }
+    next += after;
     setQuery(next);
-    const pos = start + name.length + suffix.length;
+    // Restore focus/caret on the next frame — but only if no newer edit
+    // landed meanwhile (a late frame must never clobber fresh input).
+    const appliedQuery = next;
     requestAnimationFrame(() => {
       if (!ta) return;
-      try { ta.focus(); ta.setSelectionRange(pos, pos); } catch (e) { /* ignore */ }
+      try {
+        if (ta.value !== appliedQuery) return;
+        ta.focus(); ta.setSelectionRange(pos, pos);
+      } catch (e) { /* ignore */ }
+    });
+  };
+
+  // Ctrl+Space: insert ALL available fields for the FROM object.
+  const insertAllFields = async () => {
+    const ta = taRef.current;
+    const caret = ta && ta.selectionStart != null ? ta.selectionStart : query.length;
+    if (!fromObj) {
+      setError("Type FROM <Object> first, then press Ctrl+Space.");
+      return;
+    }
+    setError(null);
+    let fieldNames = (fromFields && fromFields.length)
+      ? fromFields.map(f => f.name)
+      : null;
+    if (!fieldNames) {
+      try {
+        const d = await ffDescribeObject(fromObj, {tooling: useTooling});
+        fieldNames = (d.fields || []).map(f => f.name);
+      } catch (e) {
+        setError(`Could not load fields for ${fromObj}: ${e.message}`);
+        return;
+      }
+    }
+    if (!fieldNames.length) {
+      setError(`No fields found for ${fromObj}.`);
+      return;
+    }
+    let all = fieldNames.join(", ");
+    if (all.length > 15000) {
+      all = fieldNames.slice(0, 100).join(", ");
+      setError("Field list truncated to 100 fields (query length guard).");
+    }
+    const before = query.slice(0, caret);
+    const quotes = (before.match(/'/g) || []).length;
+    const m = quotes % 2 === 0 ? /(\w+)$/.exec(before) : null;
+    const start = m ? caret - m[1].length : caret;
+    const next = query.slice(0, start) + all + " " + query.slice(caret).replace(/^\s+/, "");
+    setQuery(next);
+    const pos = start + all.length + 1;
+    const appliedQuery = next;
+    requestAnimationFrame(() => {
+      if (!ta) return;
+      try {
+        if (ta.value !== appliedQuery) return;
+        ta.focus(); ta.setSelectionRange(pos, pos);
+      } catch (e) { /* ignore */ }
     });
   };
 
@@ -818,25 +1159,68 @@ function SoqlTab() {
     : !rf ? result.rows
     : result.rows.filter(r => result.columns.some(c =>
         String(r[c] == null ? "" : r[c]).toLowerCase().includes(rf)));
+  const displayRows = sortCol ? visibleRows.slice().sort((a, b) => {
+    const av = a[sortCol], bv = b[sortCol];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "number" && typeof bv === "number") return (av - bv) * sortDir;
+    return String(av).localeCompare(String(bv)) * sortDir;
+  }) : visibleRows;
+  const toggleSort = (col) => {
+    if (sortCol !== col) { setSortCol(col); setSortDir(1); return; }
+    if (sortDir === 1) { setSortDir(-1); return; }
+    setSortCol(null); setSortDir(1);
+  };
+  const resultRowIndex = (row) => result ? result.rows.indexOf(row) : -1;
+  const catCounts = {};
+  if (fromFields) {
+    for (const f of fromFields) {
+      const c = fieldCategory(f);
+      catCounts[c] = (catCounts[c] || 0) + 1;
+    }
+  }
+
+  const apiToggle = (label, hint, on, onFlip) => h("label", {className: "sq3-toggle", title: hint},
+    h("span", {className: "sq3-toggle-lbl"}, label),
+    h("span", {className: "sq3-switch"},
+      h("input", {
+        type: "checkbox",
+        checked: !!on,
+        onChange: e => onFlip(e.target.checked)
+      }),
+      h("span", {className: "sq3-slider"})),
+    h("span", {className: "sq3-toggle-state"}, on ? "Enabled" : "Disabled"));
 
   return h("div", {className: "insp-panel"},
     h("div", {className: "soql-layout"},
 
       // ── Left column (1/4): settings · row limit · history · saved ──
       h("div", {className: "soql-side"},
-        h("div", {className: "soql-side-h"}, "LLM"),
-        (() => {
-          // Read live every render so what the frontend captured is always
-          // visible — no more guessing whether Options saved correctly.
-          const cfg = getSavedConfig();
-          const ok = hasValidConfig();
-          const def = cfg && cfg.provider ? getProviderConfig(cfg.provider) : null;
-          return h("label", {
-            className: "llm-chip" + (ok ? " ok" : " off"),
-            title: ok
-              ? `Provider: ${cfg.provider}\nModel: ${cfg.model || "(default)"}\nKey: ${cfg.apiKey ? "••••" + String(cfg.apiKey).slice(-4) : "missing"}\n(uncheck to stop asking the LLM when a query fails)`
-              : "Open Settings (⚙ in the sidebar header) → choose provider, paste API key, Save Settings"
-          },
+        h("div", {className: "sq3-card sq3-card-llm"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, "✨"),
+            h("span", {className: "sq3-card-t"}, "LLM Assistant"),
+            (() => {
+              // Read live every render so what the frontend captured is always
+              // visible — no more guessing whether Options saved correctly.
+              const cfg = getSavedConfig();
+              const ok = hasValidConfig();
+              const def = cfg && cfg.provider ? getProviderConfig(cfg.provider) : null;
+              return h("span", {
+                className: "sq3-pill-state " + (ok ? "ok" : "warn"),
+                title: ok
+                  ? `Provider: ${cfg.provider}\nModel: ${cfg.model || "(default)"}\nKey: ${cfg.apiKey ? "••••" + String(cfg.apiKey).slice(-4) : "missing"}\n(uncheck to stop asking the LLM when a query fails)`
+                  : "Open Settings (gear in the sidebar header) → choose provider, paste API key, Save Settings"
+    }, ok ? (def ? def.name : cfg.provider) : "Not configured");
+            })(),
+            h("button", {
+              className: "sq3-info-btn",
+              title: "How to enable LLM assistance",
+              "aria-expanded": !!showLlmHelp,
+              onClick: () => setShowLlmHelp(v => !v)
+            }, "i")),
+          h("label", {className: "sq3-check"},
             h("input", {
               type: "checkbox",
               checked: !!useLlm,
@@ -845,98 +1229,139 @@ function SoqlTab() {
                 ffSaveJson("ff_soql_use_llm", e.target.checked);
               }
             }),
-            h("span", null, ok
-              ? `✨ ${def ? def.name : cfg.provider} · ${cfg.model || "default"}`
-              : "✨ LLM not configured")
-          );
-        })(),
-        h("label", {className: "insp-field"},
-          h("span", null, "Row limit"),
-          h("input", {
-            type: "number",
-            min: 1,
-            max: 20000,
-            value: limit,
-            onChange: e => setLimit(e.target.value)
-          })
+            h("span", null, "Enable LLM assistance")),
+          h("div", {className: "sq3-card-sub"},
+            "Enable AI-powered query assistance when an LLM provider is configured."),
+          showLlmHelp && h("div", {className: "sq3-info-panel"},
+            h("div", {className: "sq3-info-t"}, "How to enable:"),
+            h("ol", {className: "sq3-info-steps"},
+              h("li", {key: 1}, "Click the gear icon in the sidebar header, then Settings."),
+              h("li", {key: 2}, "Choose a provider (OpenAI, Claude, Gemini, or OpenAI-compatible)."),
+              h("li", {key: 3}, "Paste your API key, pick a model, and Save Settings."),
+              h("li", {key: 4}, "Return here and tick Enable LLM assistance.")),
+            h("div", {className: "sq3-card-sub"},
+              "Your API key stays in this browser and is only sent to your chosen provider."))
         ),
-        h("button", {
-          className: "btn btn-primary",
-          disabled: loading,
-          onClick: () => run()
-        }, loading ? "Running…" : "▶ Run SOQL"),
-        h("div", {className: "soql-side-h"}, "History"),
-        h("label", {className: "insp-field"},
-          h("select", {
-            value: "",
-            onChange: e => {
-              if (e.target.value) { setQuery(e.target.value); run(e.target.value); }
-              e.target.value = "";
-            }
-          },
-            h("option", {value: ""}, history.length ? "— recent queries —" : "No history yet"),
-            history.map((hh, i) =>
-              h("option", {key: i, value: hh.q},
-                `${new Date(hh.ts).toLocaleString()} — ${hh.q.slice(0, 60)}`)
-            )
-          )
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_SLIDERS)),
+            h("span", {className: "sq3-card-t"}, "Query Tools")),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Row Limit"),
+            h("input", {
+              type: "number",
+              min: 1,
+              max: 20000,
+              value: limit,
+              onChange: e => setLimit(e.target.value)
+            })
+          ),
+          h("button", {
+            className: "btn btn-primary sq3-run",
+            disabled: loading,
+            onClick: () => run()
+          }, loading ? "Running…" : "▶ Run SOQL",
+            h("span", {className: "sq3-kbd-hint"}, "Ctrl+Enter"))
         ),
-        h("div", {className: "soql-side-h"}, "Saved queries"),
-        saved.length > 0
-          ? h("div", {className: "insp-chips soql-saved-chips"},
-              saved.slice(0, 12).map(s =>
-                h("span", {key: s.label, className: "insp-chip-group"},
-                  h("button", {
-                    className: "insp-chip",
-                    title: s.q,
-                    onClick: () => setQuery(s.q)
-                  }, s.label),
-                  h("button", {
-                    className: "insp-chip-x",
-                    title: `Delete "${s.label}"`,
-                    onClick: () => deleteSaved(s.label)
-                  }, "×")
-                )
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_CLOCK)),
+            h("span", {className: "sq3-card-t"}, "History")),
+          h("label", {className: "insp-field sq3-field"},
+            h("select", {
+              value: "",
+              onChange: e => {
+                if (e.target.value) { setQuery(e.target.value); run(e.target.value); }
+                e.target.value = "";
+              }
+            },
+              h("option", {value: ""}, history.length ? "Select from history" : "No history yet"),
+              history.map((hh, i) =>
+                h("option", {key: i, value: hh.q},
+                  `${new Date(hh.ts).toLocaleString()} — ${hh.q.slice(0, 60)}`)
               )
             )
-          : h("div", {className: "insp-meta"}, "Save a query to reuse it later."),
-        h("div", {className: "soql-save-row"},
-          h("input", {
-            className: "soql-save-input",
-            value: saveLabel,
-            placeholder: "Query label",
-            onChange: e => setSaveLabel(e.target.value),
-            onKeyDown: e => { if (e.key === "Enter") saveCurrent(); }
-          }),
-          h("button", {
-            className: "btn btn-primary btn-sm",
-            disabled: !query.trim(),
-            onClick: saveCurrent
-          }, "Save Query")
+          ),
+          history.length > 0 && h("button", {
+            className: "btn btn-secondary btn-sm",
+            onClick: clearHistory,
+            title: "Clear recent query history"
+          }, "Clear history")
         ),
-        history.length > 0 && h("button", {
-          className: "btn btn-secondary btn-sm",
-          onClick: clearHistory,
-          title: "Clear recent query history"
-        }, "Clear history")
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_BOOKMARK)),
+            h("span", {className: "sq3-card-t"}, "Saved Queries")),
+          h("div", {className: "sq3-card-sub"}, "Save a query to reuse it later."),
+          saved.length > 0 && h("div", {className: "sq3-saved-list"},
+            saved.slice(0, 12).map(s =>
+              h("div", {
+                key: s.label,
+                className: "sq3-saved-row",
+                role: "button",
+                tabIndex: 0,
+                title: s.q,
+                onClick: () => setQuery(s.q),
+                onKeyDown: e => { if (e.key === "Enter") setQuery(s.q); }
+              },
+                h("span", {className: "sq3-saved-ico", "aria-hidden": "true"}, ffIcon(FF_I_DOC)),
+                h("span", {className: "sq3-saved-tx"},
+                  h("span", {className: "sq3-saved-label"}, s.label),
+                  h("span", {className: "sq3-saved-q"}, s.q)),
+                h("span", {className: "sq3-saved-chev", "aria-hidden": "true"}, "›"),
+                h("button", {
+                  className: "sq3-saved-x",
+                  title: `Delete "${s.label}"`,
+                  onClick: (e) => { e.stopPropagation(); deleteSaved(s.label); }
+                }, "×"))
+            )
+          ),
+          h("div", {className: "soql-save-row"},
+            h("input", {
+              className: "soql-save-input",
+              value: saveLabel,
+              placeholder: "Query label",
+              onChange: e => setSaveLabel(e.target.value),
+              onKeyDown: e => { if (e.key === "Enter") saveCurrent(); }
+            }),
+            h("button", {
+              className: "btn btn-primary btn-sm",
+              disabled: !query.trim(),
+              onClick: saveCurrent
+            }, "Save Query")
+          )
+        ),
       ),
 
       // ── Right column (3/4): editor · field explorer · results ──
       h("div", {className: "soql-main"},
-        h("div", {className: "insp-card-header"},
-          h("div", {className: "insp-card-title"}, "SOQL Query Editor"),
-          h("div", {className: "insp-card-actions"},
-            h("button", {
-              className: "btn btn-secondary btn-sm",
-              disabled: !query.trim(),
-              onClick: saveCurrent
-            }, "Save Query"),
-            result && h("button", {
-              className: "btn btn-secondary btn-sm",
-              onClick: exportCsv
-            }, "Export CSV")
-          )
-        ),
+        h("div", {className: "sq3-card sq3-editor-card"},
+          h("div", {className: "insp-card-header sq3-card-head"},
+            h("div", {className: "sq3-title-wrap"},
+              h("span", {className: "sq3-code-ico", "aria-hidden": "true"}, "</>"),
+              h("div", null,
+                h("div", {className: "insp-card-title"}, "SOQL Query Editor"),
+                h("div", {className: "sq3-card-sub"},
+                  "Write and execute SOQL queries against your Salesforce org."))),
+            h("div", {className: "insp-card-actions"},
+              apiToggle("Tooling API",
+                "Use the Salesforce Tooling API for objects and metadata available through Setup.",
+                useTooling, on => setApiMode(on ? "tooling" : "standard")),
+              apiToggle("Recycle Bin",
+                "Retrieve deleted records from the Salesforce Recycle Bin.",
+                useRecycle, on => setApiMode(on ? "recycle" : "standard")),
+              h("button", {
+                className: "btn btn-secondary btn-sm",
+                disabled: !query.trim(),
+                onClick: saveCurrent
+              }, "Save Query"),
+              h("button", {
+                className: "btn btn-secondary btn-sm",
+                disabled: loading,
+                onClick: clearQuery
+              }, "Clear")
+            )
+          ),
         h("div", {className: "soql-editor-box"},
           h("div", {className: "soql-term"},
             h("div", {className: "soql-gutter", ref: gutterRef, "aria-hidden": "true"},
@@ -955,6 +1380,14 @@ function SoqlTab() {
                 onScroll: onTermScroll,
                 onKeyDown: e => {
                   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
+                  if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+                    e.preventDefault();
+                    formatSoql();
+                  }
+                  if ((e.ctrlKey || e.metaKey) && e.key === " ") {
+                    e.preventDefault();
+                    insertAllFields();
+                  }
                 },
                 placeholder: "SELECT Id, Name FROM Account LIMIT 50"
               })),
@@ -962,10 +1395,15 @@ function SoqlTab() {
           h("div", {className: "soql-hint-row"},
             h("span", null,
               h("kbd", null, "Ctrl"), " / ", h("kbd", null, "⌘"),
-              " + ", h("kbd", null, "Enter"), " to run")
-          )
+              " + ", h("kbd", null, "Enter"), " to run"),
+            h("button", {
+              className: "sq3-format-btn",
+              onClick: formatSoql,
+              title: "Format query"
+            }, "Ctrl+/ Format")
+          ),
         ),
-        error && h("div", {className: "insp-error"}, error),
+    error && h("div", {className: "insp-error"}, error),
         fixing && h("div", {className: "insp-meta"}, "✨ Asking LLM to fix the query…"),
         fixError === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},
           "LLM fix needs a provider + API key. ",
@@ -992,11 +1430,14 @@ function SoqlTab() {
             }, "Copy")
           )
         ),
+        ), // sq3-editor-card
 
-        // Field Explorer — colourful pill tags + in-field search icon
+        // Field Explorer — category pills + field cards with type icons
+        h("div", {className: "sq3-card sq3-explorer-card"},
         h("div", {className: "soql-explorer-h"},
-          h("div", {className: "insp-card-title"},
-            fromFields ? `Available Fields · ${fromObj}` : "Available Objects"),
+          h("div", {className: "insp-card-title sq3-explorer-title"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_DB)),
+            h("span", null, fromFields ? `Available Fields · ${fromObj}` : "Available Objects")),
           h("div", {className: "soql-search"},
             h("svg", {
               className: "soql-search-ico",
@@ -1013,12 +1454,21 @@ function SoqlTab() {
             })
           )
         ),
-        h("div", {className: "insp-chips soql-fields"},
+        fromFields && h("div", {className: "sq3-pills", role: "group", "aria-label": "Field categories"},
+          FIELD_CATS.map(c => h("button", {
+            key: c,
+            className: "sq3-pill" + (fieldCat === c ? " active" : ""),
+            onClick: () => setFieldCat(c)
+          }, `${c} (${c === "All" ? (fromFields ? fromFields.length : 0) : (catCounts[c] || 0)})`))
+        ),
+        h("div", {className: "insp-chips soql-fields sq3-field-grid"},
           (fromFields
             ? (() => {
-                let list = fromFields.filter(f => !objFilter ||
-                  f.name.toLowerCase().includes(objFilter.toLowerCase()) ||
-                  (f.label || "").toLowerCase().includes(objFilter.toLowerCase()));
+                let list = fromFields.filter(f =>
+                  (fieldCat === "All" || fieldCategory(f) === fieldCat) &&
+                  (!objFilter ||
+                    f.name.toLowerCase().includes(objFilter.toLowerCase()) ||
+                    (f.label || "").toLowerCase().includes(objFilter.toLowerCase())));
                 const w = wordBeforeCaret;
                 const rank = f => {
                   const n = f.name.toLowerCase();
@@ -1031,12 +1481,21 @@ function SoqlTab() {
                   return 4;
                 };
                 list = list.slice().sort((a, b) => rank(a) - rank(b));
-                return list.slice(0, 60).map(f => h("button", {
+                const cards = list.slice(0, fieldsExpanded ? 60 : 6).map(f => h("button", {
                   key: f.name,
-                  className: "insp-chip t" + pillTone(f.name),
+                  "data-name": f.name,
+                  className: "sq3-field",
                   title: `${f.label} · ${f.type} — click to insert`,
                   onClick: () => insertField(f.name)
-                }, f.name));
+                },
+                  h("span", {className: "sq3-field-ico", "aria-hidden": "true"}, fieldTypeSvg(f.type)),
+                  h("span", {className: "sq3-field-tx"},
+                    h("span", {className: "sq3-field-name"}, f.name),
+                    h("span", {className: "sq3-field-type"}, f.type || ""))));
+                return cards.length ? cards : h("div", {
+                  key: "__empty",
+                  className: "insp-empty sq3-pills-empty"
+                }, `No ${fieldCat} fields match.`);
               })()
             : objChips.map(o => h("button", {
                 key: o.name,
@@ -1051,13 +1510,30 @@ function SoqlTab() {
             title: "Back to object suggestions"
           }, "← objects")
         ),
+        ), // sq3-explorer-card
 
-        result && h("div", {className: "soql-results-h"},
+        fromFields && fromFields.length > 6 && h("button", {
+          className: "sq3-expander" + (fieldsExpanded ? " expanded" : ""),
+          onClick: () => setFieldsExpanded(v => !v)
+        }, fieldsExpanded ? "Show fewer" : `Show all ${fromFields.length} fields`),
+
+        result && h("div", {className: "sq3-card sq3-results-card"},
+        h("div", {className: "soql-results-h"},
+          h("div", {className: "sq3-results-title"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_DB)),
+            h("span", {className: "insp-card-title"}, "Results")),
           h("div", {className: "insp-meta"},
             rf
               ? `showing ${visibleRows.length} of ${result.rows.length} row(s)`
               : `${result.totalSize} row(s) · pages OK · query ends LIMIT ${/\blimit\s+(\d+)/i.exec(result.query)?.[1] || "—"}`
           ),
+          h("button", {
+            className: "btn btn-secondary btn-sm",
+            onClick: exportCsv,
+            title: selected.size
+              ? `Download ${selected.size} selected row(s)`
+              : "Download all loaded rows"
+          }, ffIcon(FF_I_DOWNLOAD), h("span", null, "Download")),
           h("div", {className: "soql-search"},
             h("svg", {
               className: "soql-search-ico",
@@ -1074,17 +1550,40 @@ function SoqlTab() {
             })
           )
         ),
-        result && h("div", {className: "soql-id-hint"},
-          "Click on any Id to Show the all data for record"),
         result && (rf && !visibleRows.length
           ? h("div", {className: "insp-empty"}, "No matching rows.")
           : h(ResultTable, {
               columns: result.columns,
-              rows: visibleRows,
+              rows: displayRows,
               maxRows: 300,
               onRowClick: openSoqlDetail,
-              rowHint: "Click to show all data"
+              rowHint: "Click to show all data",
+              wrapClass: "soql-results-table",
+              selectable: true,
+              isSelected: (row) => selected.has(resultRowIndex(row)),
+              onToggle: (row) => {
+                const i = resultRowIndex(row);
+                if (i < 0) return;
+                setSelected(prev => {
+                  const next = new Set(prev);
+                  if (next.has(i)) next.delete(i); else next.add(i);
+                  return next;
+                });
+              },
+              allChecked: displayRows.length > 0 &&
+                displayRows.every(r => selected.has(resultRowIndex(r))),
+              onToggleAll: () => {
+                const idx = displayRows.map(resultRowIndex).filter(i => i >= 0);
+                setSelected(prev => {
+                  const all = idx.length > 0 && idx.every(i => prev.has(i));
+                  const next = new Set(prev);
+                  idx.forEach(i => { if (all) next.delete(i); else next.add(i); });
+                  return next;
+                });
+              },
+              sortCol, sortDir, onSort: toggleSort
             })),
+        ), // sq3-results-card
         detailHint && h("div", {className: "insp-meta"}, detailHint),
         (soqlDetailLoading || soqlDetail) && h(RecordDetailPanel, {
           detail: soqlDetail,
@@ -2552,14 +3051,20 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
       onMouseDown: (e) => { if (e.target === e.currentTarget) onBack(); }
     },
     h("div", {className: "ff-modal", role: "dialog", "aria-modal": "true"},
-      h("div", {className: "ff-modal-head"},
-        h("div", {className: "ff-modal-title"}, "Show all data",
-          detail && h("span", {className: "ff-modal-sub"},
-            rf ? ` - ${detail.obj} / ${detail.id} (${shownRows.length} of ${detail.rows.length} fields)`
-               : ` - ${detail.obj} / ${detail.id} (${detail.rows.length} fields)`)),
-        h("button", {className: "ff-modal-x", title: "Close (Esc)", onClick: onBack}, "\u00d7")
+      h("div", {className: "ff-modal-head sad-head"},
+        h("div", {className: "sad-title"},
+          h("svg", {className: "sad-cloud", width: 30, height: 30, viewBox: "0 0 24 24",
+            fill: "none", stroke: "currentColor", strokeWidth: 1.8,
+            strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true"},
+            h("path", {d: "M7 18a4 4 0 1 1 .6-7.96A5.5 5.5 0 0 1 18.3 12H18a3 3 0 0 1 0 6H7z"})),
+          h("span", {className: "sad-title-tx"}, "Show all data",
+            detail && h("span", {className: "sad-title-sub"}, `  -  ${detail.obj} / ${detail.id}`),
+            detail && h("span", {className: "sad-pill"},
+              rf ? `${shownRows.length} of ${detail.rows.length} fields`
+                 : `${detail.rows.length} fields`))),
+        h("button", {className: "ff-modal-x sad-x", title: "Close (Esc)", onClick: onBack}, "\u00d7")
       ),
-      h("div", {className: "insp-toolbar"},
+      h("div", {className: "sad-sub"},
       detail && ffIsSfId(detail.id) && h("button", {
         className: "btn btn-secondary btn-sm",
         title: "Open this record in Salesforce",
@@ -2578,21 +3083,44 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
         h("input", {
           className: "soql-search-input",
           value: rowFilter,
-          placeholder: "search fields…",
+          placeholder: "Search fields...",
           onChange: e => setRowFilter(e.target.value)
         })
       )
     ),
     loading && h("div", {className: "insp-meta"}, "Loading full record…"),
+    detail && h("div", {className: "sad-info"},
+      h("div", {className: "sad-info-id"},
+        h("div", {className: "sad-info-tile", "aria-hidden": "true"},
+          h("svg", {width: 26, height: 26, viewBox: "0 0 24 24",
+            fill: "none", stroke: "currentColor", strokeWidth: 1.7, "aria-hidden": "true"},
+            h("ellipse", {cx: 12, cy: 5.5, rx: 7.5, ry: 2.8}),
+            h("path", {d: "M4.5 5.5v13c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-13"}),
+            h("path", {d: "M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"}))),
+        h("div", null,
+          h("div", {className: "sad-info-name"},
+            (detail.meta && detail.meta.label) || detail.obj,
+            h("span", {className: "rec-chip rec-chip-obj"}, "Object")),
+          h("div", {className: "sad-info-api"}, "API Name: ",
+            h("span", {className: "sad-info-apiv"}, detail.obj)))),
+      h("div", {className: "sad-info-cells"},
+        sadInfoCell("Fields", String(detail.rows.length)),
+        sadInfoCell("Records",
+          detail.meta && typeof detail.meta.total === "number"
+            ? detail.meta.total.toLocaleString("en-US") : "—"),
+        sadInfoCell("Last Updated",
+          detail.meta && detail.meta.updated ? ffFmtRelative(detail.meta.updated) : "—"))
+    ),
     detail && h("div", {className: "ff-modal-body"},
       h("div", {className: "insp-table-wrap"},
-      h("table", {className: "insp-table"},
+      h("table", {className: "insp-table sad-table"},
         h("thead", null,
           h("tr", null,
             h("th", null, "Field API Name"),
             h("th", null, "Label"),
             h("th", null, "Type"),
-            h("th", null, "Value")
+            h("th", null, "Value"),
+            h("th", {className: "sad-act-h", "aria-hidden": "true"})
           )
         ),
         h("tbody", null,
@@ -2603,7 +3131,10 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
             return h("tr", {key: r.api},
               h("td", null, r.api),
               h("td", null, r.label),
-              h("td", null, r.type),
+              h("td", {className: "sad-type"},
+                h("span", {className: "sad-type-ico", "aria-hidden": "true"},
+                  sadTypeGlyph(r.type)),
+                h("span", null, r.type)),
               h("td", {
                 className: [
                   (!hasDraft && r.value == null) ? "insp-blank" : "",
@@ -2612,7 +3143,19 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
                 ].join(" "),
                 title: canStart ? (isEditing ? "" : "Click to edit") : (r.value == null ? "" : r.value),
                 onClick: canStart && !isEditing ? () => startEdit(r) : undefined
-              }, renderValue(r))
+              }, renderValue(r)),
+              h("td", {className: "sad-act"},
+                canStart && !isEditing
+                  ? h("button", {
+                      className: "sad-edit-btn",
+                      title: `Edit ${r.api}`,
+                      onClick: (e) => { e.stopPropagation(); startEdit(r); }
+                    },
+                    h("svg", {width: 13, height: 13, viewBox: "0 0 24 24",
+                      fill: "none", stroke: "currentColor", strokeWidth: 2,
+                      strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true"},
+                      h("path", {d: "M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19l-4 1z"})))
+                  : null)
             );
           })
         )
@@ -2643,40 +3186,72 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
   );
 }
 
+// ─── Records: screenshot-driven summary UI ────────────────────────────────
+// Exactly three views, nothing else:
+//   VIEW R — open Salesforce record page: record header (name/meta/chips),
+//     Quick Overview + Quick Actions, empty panel. Show All Data opens the
+//     full-field modal (VIEW M) for THAT record.
+//   VIEW O — object / object-list page (or remembered object): object
+//     header, Quick overview, empty panel. Show All Data stays disabled.
+//   VIEW M — the shared RecordDetailPanel modal (see Shared section).
+// Context comes from the open page: button.js answers sfoc-query-open-record
+// with {obj, id} (id null on list pages). There is no object picker, no
+// field list, no rows table and no row-click detail.
 function RecordsTab() {
-  const [objects, setObjects] = React.useState([]);
-  const [objLoading, setObjLoading] = React.useState(false);
   const [objInput, setObjInput] = ffUseSession("records", "objInput", "");
-  const [fields, setFields] = ffUseSession("records", "fields", []);
-  const [checked, setChecked] = ffUseSession("records", "checked", []);
-  const [descLoading, setDescLoading] = React.useState(false);
-  const [rows, setRows] = ffUseSession("records", "rows", []);
-  const [columns, setColumns] = ffUseSession("records", "columns", []);
-  const [totalSize, setTotalSize] = ffUseSession("records", "totalSize", null);
-  const [nextUrl, setNextUrl] = ffUseSession("records", "nextUrl", null);
-  const [loading, setLoading] = React.useState(false);
-  const [loadingMore, setLoadingMore] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [detail, setDetail] = ffUseSession("records", "detail", null);
   const [detailLoading, setDetailLoading] = React.useState(false);
-  const [openRec, setOpenRec] = React.useState(null);
-  const [pageLoading, setPageLoading] = React.useState(false);
+  const [objMeta, setObjMeta] = ffUseSession("records", "objMeta", null);
+  const [recordCount, setRecordCount] = ffUseSession("records", "recordCount", null);
+  const [lastRefresh, setLastRefresh] = ffUseSession("records", "lastRefresh", null);
+  const [descFields, setDescFields] = React.useState([]);
+  const [pageRec, setPageRec] = React.useState(null);
+  const [recDetail, setRecDetail] = React.useState(null);
+  const [ctxLoading, setCtxLoading] = React.useState(false);
 
-  React.useEffect(() => {
-    const onMsg = (e) => {
-      if (e.data && e.data.type === "sfoc-open-record") setOpenRec(e.data.rec || null);
-    };
-    window.addEventListener("message", onMsg);
-    try { window.parent.postMessage({type: "sfoc-query-open-record"}, "*"); } catch (err) { /* standalone */ }
-    return () => window.removeEventListener("message", onMsg);
-  }, []);
+  const fmtCount = (n) => (typeof n === "number" ? n.toLocaleString("en-US") : "—");
+  const countRecords = async (obj) => {
+    try {
+      const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent(`SELECT COUNT() FROM ${obj}`), {useCache: false});
+      return typeof res.totalSize === "number" ? res.totalSize : null;
+    } catch (e) {
+      return null;
+    }
+  };
+  const lastObjKey = () => {
+    try { return (sfConn.instanceHostname || "default") + "_records_last_obj"; }
+    catch (e) { return "records_last_obj"; }
+  };
+  const rememberLast = (obj) => {
+    try { if (obj) localStorage.setItem(lastObjKey(), obj); } catch (e) { /* ignore */ }
+  };
+  const readLast = () => {
+    try { return localStorage.getItem(lastObjKey()) || ""; }
+    catch (e) { return ""; }
+  };
 
-  // "Show All Data" for the current page record: describe + full record,
-  // painted through the same detail panel (search + save included).
-  // The open record is re-queried on EVERY click — Lightning SPA navigation
-  // doesn't remount the tab, so a mount-time snapshot would go stale when
-  // the user moves from one record to another.
-  const queryOpenRec = () => new Promise((resolve) => {
+  const describe = async (objName) => {
+    const obj = String(objName || "").trim();
+    if (!obj) return null;
+    const d = await sfConn.rest(
+      `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/describe`,
+      {useCache: false});
+    const total = await countRecords(obj);
+    setObjInput(obj);
+    setObjMeta({label: d.label || obj, custom: !!d.custom,
+      fieldCount: (d.fields || []).length});
+    setDescFields(d.fields || []);
+    setRecordCount(total);
+    setLastRefresh(Date.now());
+    rememberLast(obj);
+    return d;
+  };
+
+  // Ask the host page which record/list is open (button.js replies
+  // {obj, id}; id is null on list pages). Times out off-record.
+  const queryPageRec = () => new Promise((resolve) => {
     let done = false;
     const onMsg = (e) => {
       if (e.data && e.data.type === "sfoc-open-record") {
@@ -2700,157 +3275,129 @@ function RecordsTab() {
     }, 1500);
   });
 
-  const openPageRecord = async () => {
-    setPageLoading(true);
-    setError(null);
-    try {
-      const fresh = await queryOpenRec();
-      const rec = fresh && fresh.obj && fresh.id ? fresh : openRec;
-      setOpenRec(rec);
-      if (!rec || !rec.obj || !rec.id) return;
-      const d = await ffDescribeObject(rec.obj);
-      const full = await fetchFullRecord(rec.obj, rec.id);
-      setDetail({id: rec.id, obj: rec.obj, rows: buildDetailRows(full, d.fields || [])});
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setPageLoading(false);
-    }
-  };
-  const loadObjects = async () => {
-    setObjLoading(true);
-    setError(null);
-    try {
-      setObjects(await recordsListObjects());
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setObjLoading(false);
-    }
-  };
-
-  React.useEffect(() => { loadObjects(); }, []);
-
-  const pickDefaultFields = (fieldList) => {
-    const names = new Set(fieldList.map(f => f.name));
-    const preferred = ["Id", "Name", "Subject", "Title", "CaseNumber",
-      "DeveloperName", "MasterLabel", "LastName", "FirstName"];
-    const picks = preferred.filter(n => names.has(n));
-    for (const f of fieldList) {
-      if (picks.length >= 6) break;
-      if (!picks.includes(f.name) &&
-          ["string", "textarea", "email", "phone", "url", "date", "datetime",
-           "currency", "double", "int", "boolean", "picklist", "reference"].includes(f.type)) {
-        picks.push(f.name);
+  const loadRecordContext = async (rec) => {
+    const d = await describe(rec.obj);
+    const full = await fetchFullRecord(rec.obj, rec.id);
+    const nameKeys = ["Name", "Subject", "Title", "CaseNumber",
+      "DeveloperName", "MasterLabel", "OrderNumber"];
+    let name = null;
+    if (full) {
+      for (const k of nameKeys) {
+        if (full[k] != null && String(full[k]).trim() !== "") { name = String(full[k]); break; }
       }
     }
-    return picks.length ? picks : fieldList.slice(0, 6).map(f => f.name);
-  };
-
-  const describe = async (objName) => {
-    const obj = String(objName || objInput || "").trim();
-    if (!obj) { setError("Pick or type an object API name"); return; }
-    setObjInput(obj);
-    setDescLoading(true);
-    setError(null);
-    try {
-      const d = await sfConn.rest(
-        `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/describe`,
-        {useCache: false});
-      const fieldList = (d.fields || []).map(f => ({
-        name: f.name, label: f.label, type: f.type,
-        updateable: f.updateable, nillable: f.nillable,
-        picklistValues: (f.picklistValues || []).filter(p => p.active).map(p => String(p.value))
-      }));
-      setFields(fieldList);
-      setChecked(pickDefaultFields(fieldList));
-      setRows([]);
-      setColumns([]);
-      setTotalSize(null);
-      setNextUrl(null);
-    } catch (e) {
-      setError(e.message);
-      setFields([]);
-      setChecked([]);
-    } finally {
-      setDescLoading(false);
+    let updated = null;
+    if (full && full.LastModifiedDate) {
+      const t = Date.parse(full.LastModifiedDate);
+      if (!isNaN(t)) updated = t;
     }
-  };
-
-  const toggleField = (name) => {
-    setChecked(prev => prev.includes(name)
-      ? prev.filter(n => n !== name)
-      : [...prev, name]);
-  };
-
-  const mergeRows = (flat) => {
-    setRows(prev => [...prev, ...flat]);
-    setColumns(prev => {
-      const set = new Set(prev);
-      flat.forEach(r => Object.keys(r).forEach(k => set.add(k)));
-      return [...set];
-    });
-  };
-
-  const runQuery = async () => {
-    setError(null);
-    const obj = objInput.trim();
-    if (!obj) { setError("Pick or type an object API name"); return; }
-    if (!checked.length) { setError("Tick at least one field"); return; }
-    setLoading(true);
-    setRows([]);
-    setColumns([]);
-    setTotalSize(null);
-    setNextUrl(null);
-    try {
-      const q = `SELECT ${checked.join(", ")} FROM ${obj} LIMIT 200`;
-      const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-        encodeURIComponent(q), {useCache: false});
-      mergeRows((res.records || []).map(flattenRecord));
-      setTotalSize(typeof res.totalSize === "number" ? res.totalSize : null);
-      setNextUrl(res.done === false && res.nextRecordsUrl ? res.nextRecordsUrl : null);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
+    // Record type chip (e.g. Business Account): resolved from the record's
+    // RecordTypeId. Status chip: IsActive first, then a Status text field.
+    // Both are best-effort — the chips are simply omitted when unknown.
+    let recordType = null;
+    if (full && full.RecordTypeId) {
+      try {
+        const rt = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent(`SELECT Name FROM RecordType WHERE Id = '${full.RecordTypeId}'`),
+          {useCache: false});
+        const row = rt.records && rt.records[0];
+        if (row && row.Name) recordType = String(row.Name);
+      } catch (e) { /* omit chip */ }
     }
+    let status = null;
+    if (full && full.IsActive === true) {
+      status = "Active";
+    } else if (full && typeof full.Status === "string" && full.Status.trim() !== "") {
+      status = full.Status.trim();
+    }
+    setPageRec({obj: rec.obj, id: rec.id});
+    setRecDetail({name: name || (String(rec.id).slice(0, 6) + "…"), updated, recordType, status});
   };
 
-  const loadMore = async () => {
-    if (!nextUrl) return;
-    setLoadingMore(true);
+  const loadObjectContext = async (obj) => {
+    await describe(obj);
+    setPageRec(prev => (prev && !prev.id && prev.obj === obj) ? prev : {obj, id: null});
+    setRecDetail(null);
+  };
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const boot = async () => {
+      setCtxLoading(true);
+      setError(null);
+      try {
+        const rec = await queryPageRec();
+        if (cancelled) return;
+        if (rec && rec.obj && rec.id) { await loadRecordContext(rec); return; }
+        if (rec && rec.obj) { await loadObjectContext(rec.obj); return; }
+        const seed = objInput.trim() || readLast();
+        if (seed) { await loadObjectContext(seed); return; }
+        setPageRec(null);
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setCtxLoading(false);
+      }
+    };
+    boot();
+    return () => { cancelled = true; };
+  }, []);
+
+  const refreshContext = async () => {
+    setCtxLoading(true);
     setError(null);
     try {
-      const res = await sfConn.rest(nextUrl, {useCache: false});
-      mergeRows((res.records || []).map(flattenRecord));
-      if (typeof res.totalSize === "number") setTotalSize(res.totalSize);
-      setNextUrl(res.done === false && res.nextRecordsUrl ? res.nextRecordsUrl : null);
+      if (pageRec && pageRec.obj && pageRec.id) {
+        await loadRecordContext(pageRec);
+      } else {
+        const obj = (pageRec && pageRec.obj) || objInput.trim() || readLast();
+        if (obj) await loadObjectContext(obj);
+      }
     } catch (e) {
       setError(e.message);
     } finally {
-      setLoadingMore(false);
+      setCtxLoading(false);
     }
   };
 
-  const download = () => {
-    if (!rows.length) return;
-    downloadText(`${objInput.trim() || "records"}.csv`, toCsv(columns, rows));
-  };
-
-  // "Show all data": fetch the FULL record and shape it via the shared helper.
-  const openDetail = async (row) => {
-    const obj = objInput.trim();
-    const id = row && (row.Id || row.id);
-    if (!obj || !id) return;
+  // VIEW M trigger: the full-field modal for the open page record.
+  const openRecordModal = async () => {
+    if (!pageRec || !pageRec.obj || !pageRec.id) return;
     setDetailLoading(true);
     setError(null);
     try {
-      const rec = await fetchFullRecord(obj, id);
-      setDetail({id, obj, rows: buildDetailRows(rec, fields)});
+      const d = await ffDescribeObject(pageRec.obj);
+      const full = await fetchFullRecord(pageRec.obj, pageRec.id);
+      setDescFields(d.fields || []);
+      setDetail({id: pageRec.id, obj: pageRec.obj,
+        rows: buildDetailRows(full, d.fields || []),
+        meta: {label: d.label || pageRec.obj, custom: !!d.custom,
+          total: recordCount, updated: (recDetail && recDetail.updated) || lastRefresh || null}});
     } catch (e) {
       setError(e.message);
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  // Export Records: CSV of the open record's fields (VIEW R only).
+  const exportRecord = async () => {
+    if (!pageRec || !pageRec.obj || !pageRec.id) return;
+    setError(null);
+    try {
+      let rows = (detail && detail.id === pageRec.id) ? detail.rows : null;
+      if (!rows) {
+        const full = await fetchFullRecord(pageRec.obj, pageRec.id);
+        rows = buildDetailRows(full, descFields);
+      }
+      const cols = ["Field API Name", "Label", "Type", "Value"];
+      const csv = toCsv(cols, rows.map(r => ({
+        "Field API Name": r.api, Label: r.label || "", Type: r.type || "",
+        Value: r.value == null ? "" : String(r.value)
+      })));
+      downloadText(`${pageRec.obj}_${pageRec.id}.csv`, csv);
+    } catch (e) {
+      setError(e.message);
     }
   };
 
@@ -2872,122 +3419,187 @@ function RecordsTab() {
     });
   };
 
+  const sumLabel = (objMeta && objMeta.label) || objInput.trim();
+  const sumCustom = !!((objMeta && objMeta.custom));
+  const sumTotal = recordCount;
+  const sumUpdated = (recDetail && recDetail.updated) || lastRefresh;
+  const sumFields = (objMeta && typeof objMeta.fieldCount === "number") ? objMeta.fieldCount : null;
+  const isRecord = !!(pageRec && pageRec.obj && pageRec.id);
+  const showObject = !isRecord && !!objInput.trim() && !!objMeta;
+  const svgW = (paths, s) => h("svg", {width: s || 15, height: s || 15, viewBox: "0 0 24 24",
+    fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round",
+    strokeLinejoin: "round", "aria-hidden": "true"}, ...paths);
+  const gridSvg = () => h("svg", {
+      width: 15, height: 15, viewBox: "0 0 24 24",
+      fill: "none", stroke: "currentColor", strokeWidth: 2.2,
+      "aria-hidden": "true"
+    },
+      h("rect", {x: 3.5, y: 3.5, width: 7, height: 7, rx: 1.5}),
+      h("rect", {x: 13.5, y: 3.5, width: 7, height: 7, rx: 1.5}),
+      h("rect", {x: 3.5, y: 13.5, width: 7, height: 7, rx: 1.5}),
+      h("rect", {x: 13.5, y: 13.5, width: 7, height: 7, rx: 1.5}));
+  const dbSvg = (s) => h("svg", {width: s, height: s, viewBox: "0 0 24 24",
+      fill: "none", stroke: "currentColor", strokeWidth: 1.7, "aria-hidden": "true"},
+      h("ellipse", {cx: 12, cy: 5.5, rx: 7.5, ry: 2.8}),
+      h("path", {d: "M4.5 5.5v13c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-13"}),
+      h("path", {d: "M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"}));
+  const bldgSvg = (s) => h("svg", {width: s, height: s, viewBox: "0 0 24 24",
+      fill: "none", stroke: "currentColor", strokeWidth: 1.7,
+      strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true"},
+      h("path", {d: "M4 21h16"}),
+      h("path", {d: "M6 21V4h8v17"}),
+      h("path", {d: "M14 21V9h4v12"}),
+      h("path", {d: "M8.5 7h2M8.5 10h2M8.5 13h2"}));
+  const crownSvg = (s) => h("svg", {className: "rec-tile-crown", width: s, height: s,
+      viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8,
+      strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true"},
+      h("path", {d: "M3 8l3.5 3L12 5l5.5 6L21 8l-1.6 9H4.6z"}),
+      h("path", {d: "M4 20h16"}));
+  // Mini (13px) glyphs for the summary meta rows and chips.
+  const P_DOC = [h("path", {d: "M7 3h7l4 4v14H7z"}), h("path", {d: "M14 3v4h4"})];
+  const P_SLIDERS = [h("path", {d: "M4 7h16"}), h("circle", {cx: 9, cy: 7, r: 2}),
+    h("path", {d: "M4 12h16"}), h("circle", {cx: 15, cy: 12, r: 2}),
+    h("path", {d: "M4 17h16"}), h("circle", {cx: 8, cy: 17, r: 2})];
+  const P_REFRESH = [h("path", {d: "M20 12a8 8 0 1 1-2.34-5.66"}), h("path", {d: "M20 4v5h-5"})];
+  const P_CODE = [h("path", {d: "M9 8l-5 4 5 4"}), h("path", {d: "M15 8l5 4-5 4"})];
+  const P_CASE = [h("path", {d: "M4 8h16v11H4z"}), h("path", {d: "M9 8V6h6v2"})];
+  const P_CLOCK = [h("circle", {cx: 12, cy: 12, r: 8}), h("path", {d: "M12 8v4l3 2"})];
+  const miniSvg = (paths) => svgW(paths, 13);
+  const metaItem = (icon, text) => h("span", {className: "rec-meta-item"},
+    icon, h("span", null, text));
+  const metaSep = () => h("span", {className: "rec-meta-sep", "aria-hidden": "true"}, "|");
+  const statSvg = (kind) => h("svg", {width: 26, height: 26, viewBox: "0 0 24 24",
+      fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round",
+      strokeLinejoin: "round", "aria-hidden": "true"},
+      kind === "records"
+        ? [h("path", {key: "a", d: "M7 3h7l4 4v14H7z"}),
+           h("path", {key: "b", d: "M14 3v4h4"}),
+           h("path", {key: "c", d: "M10 12h5"}),
+           h("path", {key: "d", d: "M10 16h5"})]
+        : kind === "fields"
+        ? [h("path", {key: "a", d: "M4 7h16"}),
+           h("circle", {key: "b", cx: 9, cy: 7, r: 2}),
+           h("path", {key: "c", d: "M4 12h16"}),
+           h("circle", {key: "d", cx: 15, cy: 12, r: 2}),
+           h("path", {key: "e", d: "M4 17h16"}),
+           h("circle", {key: "f", cx: 8, cy: 17, r: 2})]
+        : [h("circle", {key: "a", cx: 12, cy: 12, r: 8}),
+           h("path", {key: "b", d: "M12 8v4l3 2"})]);
+  const statCard = (kind, label, value) => h("div", {className: "rec-stat"},
+      h("div", {className: "rec-stat-ico rec-stat-" + kind}, statSvg(kind)),
+      h("div", {className: "rec-stat-tx"},
+        h("div", {className: "rec-stat-l"}, label),
+        h("div", {className: "rec-stat-v"}, value)));
+  const refreshBtn = (key) => h("button", {key, className: "rec-act-btn",
+      disabled: ctxLoading,
+      title: "Refresh object details", onClick: refreshContext},
+      svgW([h("path", {d: "M20 12a8 8 0 1 1-2.34-5.66"}), h("path", {d: "M20 4v5h-5"})]),
+      h("span", null, "Refresh"));
+  const exportBtn = (key) => h("button", {key, className: "rec-act-btn",
+      disabled: !isRecord || ctxLoading,
+      title: isRecord ? "Download this record's fields as CSV" : "Open a record page to export it",
+      onClick: exportRecord},
+      svgW([h("path", {d: "M12 4v11"}), h("path", {d: "M7 11l5 5 5-5"}),
+        h("path", {d: "M5 20h14"})]),
+      h("span", null, "Export Records"));
+
   return h("div", {className: "insp-panel"},
-    window.parent !== window && h("div", {className: "records-page-rec"},
-      h("button", {
-        className: "records-showall-btn",
-        disabled: !openRec || !openRec.obj || pageLoading,
-        title: openRec && openRec.obj
-          ? `Show all data for this page's ${openRec.obj} record`
-          : "Open a Salesforce record page, then reopen this tab",
-        onClick: openPageRecord
-      },
-        h("svg", {
-          className: "records-showall-ico",
-          width: 15, height: 15, viewBox: "0 0 24 24",
-          fill: "none", stroke: "currentColor", strokeWidth: 2.2,
-          "aria-hidden": "true"
-        },
-          h("rect", {x: 3.5, y: 3.5, width: 7, height: 7, rx: 1.5}),
-          h("rect", {x: 13.5, y: 3.5, width: 7, height: 7, rx: 1.5}),
-          h("rect", {x: 3.5, y: 13.5, width: 7, height: 7, rx: 1.5}),
-          h("rect", {x: 13.5, y: 13.5, width: 7, height: 7, rx: 1.5})),
-        h("span", null, pageLoading ? "Loading…" : "Show All Data")),
-      h("div", {className: "insp-meta"},
-        openRec && openRec.obj
-          ? `Current page: ${openRec.obj} · ${String(openRec.id).slice(0, 6)}…`
-          : "No record page detected")
-    ),
-    h("p", {className: "app-section-hint"},
-      "Pick an object to see all of its records. Tick fields, run, then Load more to page through everything."
-    ),
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "Object"),
-        h("input", {
-          value: objInput,
-          list: "insp-records-objects",
-          placeholder: "Account / IT_Asset__c — type to filter",
-          disabled: loading || descLoading,
-          onChange: e => setObjInput(e.target.value),
-          onKeyDown: e => { if (e.key === "Enter") describe(); }
-        }),
-        h("datalist", {id: "insp-records-objects"},
-          objects.map(o =>
-            h("option", {key: o.name, value: o.name}, `${o.label}${o.custom ? " (custom)" : ""}`)
-          )
-        )
-      ),
-      h("button", {
-        className: "btn btn-secondary btn-sm",
-        disabled: objLoading || descLoading || loading,
-        onClick: loadObjects
-      }, objLoading ? "Loading…" : `Objects (${objects.length || "—"})`),
-      h("button", {
-        className: "btn btn-secondary btn-sm",
-        disabled: descLoading || loading || !objInput.trim(),
-        onClick: () => describe()
-      }, descLoading ? "Describing…" : "Describe")
-    ),
-    fields.length > 0 && h("div", {className: "insp-map"},
-      h("div", {className: "insp-map-title"},
-        `Fields (${checked.length}/${fields.length}) — `,
-        h("button", {
-          className: "field-action-btn",
-          onClick: () => setChecked(fields.map(f => f.name))
-        }, "All"),
-        " ",
-        h("button", {
-          className: "field-action-btn",
-          onClick: () => setChecked([])
-        }, "None")
-      ),
-      h("div", {className: "insp-field-checks"},
-        fields.map(f =>
-          h("label", {key: f.name, className: "insp-check", title: `${f.label} · ${f.type}`},
-            h("input", {
-              type: "checkbox",
-              checked: checked.includes(f.name),
-              onChange: () => toggleField(f.name)
-            }),
-            h("span", null, f.name)
-          )
-        )
+    (isRecord && h("div", {className: "rec-sum-card"},
+      h("div", {className: "rec-sum-top"},
+        h("div", {className: "rec-sum-id"},
+          h("div", {className: "rec-sum-tile", "aria-hidden": "true"}, bldgSvg(30)),
+          h("div", {className: "rec-sum-titles"},
+            h("span", {className: "rec-sum-obj"}, dbSvg(11), h("span", null, sumLabel)),
+            h("div", {className: "rec-sum-name"},
+              ctxLoading && !recDetail ? "Loading…" : ((recDetail && recDetail.name) || sumLabel)),
+            h("div", {className: "rec-sum-meta"},
+              metaItem(dbSvg(13), `Object: ${pageRec.obj}`), metaSep(),
+              metaItem(miniSvg(P_DOC), `API Name: ${pageRec.obj}`), metaSep(),
+              metaItem(miniSvg(P_SLIDERS), `Fields: ${sumFields != null ? sumFields : "—"}`), metaSep(),
+              metaItem(miniSvg(P_DOC), `Records: ${fmtCount(sumTotal)}`)),
+            h("div", {className: "rec-sum-chips"},
+              (recDetail && recDetail.recordType) && h("span", {className: "rec-chip"},
+                miniSvg(P_CASE), h("span", null, recDetail.recordType)),
+              (recDetail && recDetail.status) && h("span", {className: /active/i.test(recDetail.status)
+                ? "rec-chip rec-chip-green" : "rec-chip rec-chip-soft"},
+                h("span", {className: /active/i.test(recDetail.status)
+                  ? "rec-dot" : "rec-dot rec-dot-grey", "aria-hidden": "true"}),
+                h("span", null, recDetail.status)),
+              h("span", {className: "rec-chip rec-chip-soft"},
+                miniSvg(P_CLOCK),
+                h("span", null, "Last updated: " + ffFmtRelative(sumUpdated)))))),
+        h("div", {className: "rec-sum-action"},
+          h("button", {
+            className: "rec-obj-showall",
+            disabled: ctxLoading || detailLoading,
+            title: `Show all data for this ${pageRec.obj} record`,
+            onClick: openRecordModal
+          }, gridSvg(), h("span", null, detailLoading ? "Loading…" : "Show All Data"),
+            h("span", {className: "rec-obj-chev", "aria-hidden": "true"}, "›")))),
+      h("div", {className: "rec-quick-split"},
+        h("div", {className: "rec-quick-col"},
+          h("h3", {className: "rec-quick-h"}, "Quick Overview"),
+          h("div", {className: "rec-stats"},
+            statCard("records", "Total Records", fmtCount(sumTotal)),
+            statCard("fields", "Fields", sumFields != null ? String(sumFields) : "—"),
+            statCard("updated", "Last Updated", ffFmtRelative(sumUpdated)))),
+        h("div", {className: "rec-quick-col"},
+          h("h3", {className: "rec-quick-h"}, "Quick Actions"),
+          h("div", {className: "rec-actions"}, [refreshBtn("ref"), exportBtn("exp")]))),
+      h("div", {className: "rec-empty"},
+        h("div", {className: "rec-empty-ico", "aria-hidden": "true"}, bldgSvg(64)),
+        h("div", {className: "rec-empty-t"}, `Ready to explore your ${sumLabel} records`),
+        h("div", {className: "rec-empty-s"},
+          `Click on "Show All Data" to load all ${sumLabel} records, or use the quick actions above to refresh data or export records.`)
       )
-    ),
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("button", {
-        className: "btn btn-primary btn-sm",
-        disabled: loading || !objInput.trim() || !checked.length,
-        onClick: runQuery
-      }, loading ? "Querying…" : "Show all records"),
-      rows.length > 0 && h("button", {
-        className: "btn btn-secondary btn-sm",
-        onClick: download
-      }, "Export CSV"),
-      nextUrl && h("button", {
-        className: "btn btn-secondary btn-sm",
-        disabled: loadingMore,
-        onClick: loadMore
-      }, loadingMore ? "Loading…" : `Load more (${rows.length}${totalSize != null ? `/${totalSize}` : ""})`)
-    ),
+    )),
+    (showObject && h("div", {className: "rec-sum-card"},
+      h("div", {className: "rec-sum-top"},
+        h("div", {className: "rec-sum-id"},
+          h("div", {className: "rec-sum-tile", "aria-hidden": "true"}, crownSvg(30)),
+          h("div", {className: "rec-sum-titles"},
+            h("div", {className: "rec-sum-name"}, sumLabel),
+            h("div", {className: "rec-sum-chips"},
+              h("span", {className: "rec-chip rec-chip-std"}, dbSvg(12), h("span", null, sumCustom ? "Custom" : "Standard")),
+              h("span", {className: "rec-chip rec-chip-api"}, miniSvg(P_CODE), h("span", null, "API Name: " + objInput.trim()))),
+            h("div", {className: "rec-sum-meta"},
+              metaItem(miniSvg(P_SLIDERS), ((sumFields != null ? sumFields : "\u2014") + " Fields")), metaSep(),
+              metaItem(miniSvg(P_DOC), `${fmtCount(sumTotal)} Records`), metaSep(),
+              h("span", {className: "rec-meta-item"}, miniSvg(P_REFRESH),
+                h("span", null, "Last refreshed: "),
+                h("span", {className: "rec-fresh"}, ffFmtRelative(sumUpdated)))))),
+        h("div", {className: "rec-sum-action"},
+          h("button", {
+            className: "rec-obj-showall",
+            disabled: true,
+            title: "Open a record page to view its data",
+            onClick: () => {}
+          }, gridSvg(), h("span", null, "Show All Data"),
+            h("span", {className: "rec-obj-chev", "aria-hidden": "true"}, "›")),
+          h("div", {className: "rec-sum-sub"}, "Load all records for the current object."))),
+      h("h3", {className: "rec-quick-h"}, "Quick overview"),
+      h("div", {className: "rec-stats"},
+        statCard("records", "Total Records", fmtCount(sumTotal)),
+        statCard("fields", "Fields", sumFields != null ? String(sumFields) : "—"),
+        statCard("updated", "Last Updated", ffFmtRelative(sumUpdated))),
+      h("div", {className: "rec-actions rec-actions-under"},
+        [refreshBtn("ref"), exportBtn("exp")]),
+      h("div", {className: "rec-empty"},
+        h("div", {className: "rec-empty-ico", "aria-hidden": "true"}, dbSvg(64)),
+        h("div", {className: "rec-empty-t"}, "Ready to explore your records"),
+        h("div", {className: "rec-empty-s"},
+          "Choose Show All Data to load records, or select fields to customize the table.")
+      )
+    )),
+    (!isRecord && !showObject && h("div", {className: "insp-meta"},
+      ctxLoading ? "Loading…" : "Open a Salesforce record or list page to browse it here.")),
     error && h("div", {className: "insp-error"}, error),
-    totalSize != null && h("div", {className: "insp-meta"},
-      `${objInput.trim()}: ${totalSize} record(s) total · showing ${rows.length}` +
-      (nextUrl ? " · more available" : " · all loaded") +
-      " · click a row for Show all data"
-    ),
-    rows.length > 0 && h(ResultTable, {
-      columns, rows, maxRows: 500,
-      onRowClick: (row) => openDetail(row)
-    }),
     (detailLoading || detail) && h(RecordDetailPanel, {
       detail,
       loading: detailLoading,
       onBack: () => setDetail(null),
       onSave: saveDetailChanges
     }),
-    // Detail markup consolidated into RecordDetailPanel (see Shared section).
   );
 }
 
@@ -6351,6 +6963,7 @@ function CoverageTab() {
   const [seq, setSeq] = React.useState(0);
   const [runMsg, setRunMsg] = React.useState(null);
   const [running, setRunning] = React.useState(false);
+  const [filterNote, setFilterNote] = React.useState(null);
   const [quickName, setQuickName] = React.useState("");
   const [suggest, setSuggest] = React.useState([]);
   const [suggestOpen, setSuggestOpen] = React.useState(false);
@@ -6500,7 +7113,8 @@ function CoverageTab() {
         title: "Run all org tests, then reload the table",
         onClick: () => runTests({testLevel: "RunLocalTests"}, "all tests")
       }, running ? "Running…" : "Run All Tests"),
-      runMsg && h("span", {className: "insp-meta"}, runMsg)
+      runMsg && h("span", {className: "insp-meta"}, runMsg),
+      filterNote && h("span", {className: "insp-meta"}, filterNote)
     ),
     running && h("div", {className: "cov-progress"},
       h("div", {className: "cov-progress-fill"})
@@ -6552,7 +7166,18 @@ function CoverageTab() {
           (t.records || []).forEach(x => { trig[x.Id] = true; });
         } catch (e) { /* unknown types */ }
         rows.forEach(r => { r._isTrigger = !!trig[r.ApexClassOrTriggerId]; });
-        return rows;
+        try {
+          const s = await sfConn.rest(`/services/data/v${apiVersion}/search/?q=` +
+            encodeURIComponent("FIND {@IsTest} IN ALL FIELDS RETURNING ApexClass(Id, Name)"),
+            {useCache: false});
+          const testIds = {};
+          (s.searchRecords || []).forEach(x => { testIds[x.Id] = true; });
+          setFilterNote(null);
+          return rows.filter(r => r._isTrigger || !testIds[r.ApexClassOrTriggerId]);
+        } catch (e) {
+          setFilterNote("Could not check @IsTest classes — showing all rows.");
+          return rows;
+        }
       },
       emptyText: "No coverage data yet — run your tests first.",
       placeholder: (n) => `Filter ${fmtNum(n)} classes…`,
@@ -6604,11 +7229,11 @@ function CoverageTab() {
 }
 
 export function InspectorPanel() {
-  const [tab, setTab] = ffUseSession("inspector", "tab", "soql");
+  const [tab, setTab] = ffUseSession("inspector", "tab", "records");
   const tabs = [
+    {id: "records", label: "Records", icon: "🗂️"},
     {id: "soql", label: "SOQL", icon: "🗄️"},
     {id: "apex", label: "Run-Apex", icon: "⚡"},
-    {id: "records", label: "Records", icon: "🗂️"},
     {id: "export", label: "Export", icon: "📤"},
     {id: "import", label: "Import", icon: "📥"},
     {id: "users", label: "Users", icon: "👥"},

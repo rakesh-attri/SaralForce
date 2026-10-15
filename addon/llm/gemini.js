@@ -4,7 +4,7 @@ export class GeminiProvider {
   }
 
   async sendMessage(messages, apiKey, model, onChunk) {
-    const modelId = model || "gemini-2.0-flash";
+    const modelId = model || "gemini-4-argon";
     const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
 
     // Convert messages to Gemini format

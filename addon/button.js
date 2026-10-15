@@ -5,6 +5,19 @@
   let sidebarOpen = false;
   let sidebarContainer = null;
 
+  // Host-page boot id: bumped once per host document load (top frame only)
+  // and passed to the panel iframe. The panel stamps its minimize snapshot
+  // with it and ignores snapshots from an older boot — so a host-page
+  // reload always reopens on a fresh page instead of the pre-reload one.
+  let hostBoot = null;
+  if (window.top === window) {
+    try {
+      const n = parseInt(sessionStorage.getItem("sfoc_host_boot") || "0", 10) || 0;
+      hostBoot = n + 1;
+      sessionStorage.setItem("sfoc_host_boot", String(hostBoot));
+    } catch (e) { hostBoot = null; }
+  }
+
   function getHostFromUrl(url) {
     try {
       return new URL(url).hostname;
@@ -247,7 +260,8 @@
         border: none;
         display: block;
       `;
-      iframe.src = chrome.runtime.getURL(`object-creator.html?host=${sfHost}`);
+      iframe.src = chrome.runtime.getURL(`object-creator.html?host=${sfHost}` +
+        (hostBoot != null ? `&hostBoot=${hostBoot}` : ""));
 
       sidebarContainer.appendChild(header);
       sidebarContainer.appendChild(iframe);
@@ -568,6 +582,9 @@
       if (m) return {obj: m[1], id: m[2]};
       const m2 = p.match(/\/([A-Za-z0-9_]+)\/([a-zA-Z0-9]{15,18})(?:\/view)?\/?$/);
       if (m2) return {obj: m2[1], id: m2[2]};
+      // Object / list page (Records tab VIEW O): object known, no record.
+      const m3 = p.match(/\/o\/([A-Za-z0-9_]+)\/(?:list|home)(?:\/|$)/);
+      if (m3) return {obj: m3[1], id: null};
     }
     const rid = new URLSearchParams(location.search).get("rid");
     if (rid && /^[a-zA-Z0-9]{15,18}$/.test(rid)) return {obj: null, id: rid};

@@ -454,7 +454,8 @@ function loadInspectorState(sfHost) {
 }
 
 function saveInspectorState(sfHost, state) {
-  const payload = {uiMode: state.uiMode || "builder", ff: null};
+  const payload = {uiMode: state.uiMode || "inspector",
+    hostBoot: urlParams.get("hostBoot") || null, ff: null};
   try { payload.ff = ffTakeSnapshot(); } catch (e) { /* ignore */ }
   // Quota: retry without the snapshot rather than lose the current page too.
   const attempts = [payload, {...payload, ff: null}];
@@ -471,10 +472,22 @@ class App extends React.Component {
     super(props);
     const saved = loadPersistedState(props.sfHost);
     const inspectorSaved = loadInspectorState(props.sfHost);
-    ffApplyRestore(inspectorSaved && inspectorSaved.ff);
+    // Minimize/maximize restores the last opened page, but only within the
+    // same host-page boot: after a host reload the snapshot is stale and the
+    // app opens fresh on the Inspector.
+    const bootOk = !!(inspectorSaved && inspectorSaved.hostBoot &&
+      inspectorSaved.hostBoot === urlParams.get("hostBoot"));
+    const restoredSnap = bootOk ? inspectorSaved : null;
+    ffApplyRestore(restoredSnap && restoredSnap.ff);
     this.state = {
       llmConfig: getSavedConfig(),
-      uiMode: urlParams.get("view") === "inspector" ? "inspector" : (inspectorSaved?.uiMode || "builder"),
+      // First open after login (no in-boot snapshot) always lands on the
+      // Inspector. Minimize/maximize restores the last opened page: the
+      // sidebar content script saves {uiMode} on minimize and the snapshot
+      // is consumed here on the next construction.
+      uiMode: urlParams.get("view") === "builder" ? "builder"
+        : urlParams.get("view") === "inspector" ? "inspector"
+        : (restoredSnap && restoredSnap.uiMode === "builder" ? "builder" : "inspector"),
       messages: saved?.messages || [],
       currentProposal: saved?.currentProposal || null,
       isGenerating: false,
@@ -3546,7 +3559,7 @@ class App extends React.Component {
 
     const setupLink = this.getSetupLink();
     const hasConfig = hasValidConfig();
-    const uiMode = this.state.uiMode || "builder";
+    const uiMode = this.state.uiMode || "inspector";
     // Chat and preview are mutually exclusive: the chat panel renders only
     // before the first proposal; Plan/Build pages are preview-only.
 
@@ -3561,8 +3574,8 @@ class App extends React.Component {
             h("button", {
               className: "header-btn",
               onClick: () => this.goBackFromInspector(),
-              title: "Back to Object Builder"
-            }, "← Builder"),
+              title: "Back to AI Object Builder"
+            }, "← AI Object Builder"),
             h("button", {
               className: `header-btn${this.state.apiNamesOn ? " active" : ""}`,
               onClick: () => this.toggleApiNames(),

@@ -30,14 +30,14 @@ const MODEL_DESCRIPTIONS = {
   "claude-opus-4-8": "Previous Opus gen - Still capable, fast mode support",
   "claude-sonnet-4-20250514": "Previous Sonnet gen - Solid general purpose",
   // Gemini
-  "gemini-3.8-flash": "Latest Flash - Best reasoning & coding, agentic tasks",
-  "gemini-3.7-flash": "Previous Flash - Good balance of speed and capability",
-  "gemini-3.5-flash": "GA Flash - Intelligent, sustained frontier performance",
+  "gemini-4-argon": "Flagship reasoning - 1M context, deep multi-step work",
+  "gemini-3.8-flash": "Workhorse Flash - Long-horizon coding and agents",
+  "gemini-3.7-flash": "Everyday driver - Strong software engineering",
+  "gemini-3.6-flash": "Balanced Flash - Coding and multimodal, efficient",
+  "gemini-3.5-flash": "Fast Flash - Speed and price-performance",
   "gemini-3.5-flash-lite": "Cost-effective - High-throughput, low-latency",
   "gemini-3.1-pro-preview": "Pro tier - Software engineering, agentic workflows",
-  "gemini-3.1-flash-lite": "Budget Flash - Most cost-efficient Gemini model",
-  "gemini-2.5-pro": "Previous Pro gen - Strong reasoning, large context",
-  "gemini-2.5-flash": "Previous Flash gen - Fast, efficient"
+  "gemini-3.1-flash-lite": "Budget Flash - Most cost-efficient Gemini model"
 };
 
 class OptionsApp extends React.Component {
@@ -54,8 +54,35 @@ class OptionsApp extends React.Component {
       showApiKey: false,
       saved: false,
       testStatus: null,
-      testMessage: ""
+      testMessage: "",
+      appVersion: ""
     };
+  }
+
+  componentDidMount() {
+    this.loadAppVersion();
+  }
+
+  // Manifest version shown next to Privacy Policy. Prefers the extension
+  // API; falls back to reading manifest.json (harness shim has no
+  // getManifest).
+  loadAppVersion = async () => {
+    try {
+      const m = chrome?.runtime?.getManifest?.call(chrome.runtime);
+      if (m && (m.version_name || m.version)) {
+        this.setState({appVersion: m.version_name || m.version});
+        return;
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const r = await fetch("manifest.json");
+      if (r.ok) {
+        const m = await r.json();
+        if (m && (m.version_name || m.version)) {
+          this.setState({appVersion: m.version_name || m.version});
+        }
+      }
+    } catch (e) { /* leave blank */ }
   }
 
   getProviderDef() {
@@ -238,7 +265,7 @@ class OptionsApp extends React.Component {
                 className: "form-control",
                 value: model,
                 onChange: (e) => this.onModelChange(e),
-                placeholder: "e.g., gpt-4o, claude-sonnet-5, gemini-3.8-flash"
+                placeholder: "e.g., gpt-4o, claude-sonnet-5, gemini-4-argon"
               }),
           h("p", {className: "help-text"}, "Recommended: GPT-5.6 Terra, Claude Sonnet 5, or Gemini 3.8 Flash")
         ),
@@ -288,7 +315,7 @@ class OptionsApp extends React.Component {
             }),
             h("span", null, "Open Inspector in new tab")),
           h("p", {className: "help-text"},
-            "Open the Inspector panel in a full-page browser tab for better visibility. The ← Builder button jumps back to your Salesforce tab.")
+            "Open the Inspector panel in a full-page browser tab for better visibility. The ← AI Object Builder button jumps back to your Salesforce tab.")
         )
       ),
 
@@ -311,7 +338,8 @@ class OptionsApp extends React.Component {
             href: "https://rakesh-attri.github.io/SaralForce/privacy.html",
             target: "_blank",
             rel: "noopener noreferrer"
-          }, "Privacy Policy"))
+          }, "Privacy Policy"),
+          this.state.appVersion ? ` · v${this.state.appVersion}` : "")
       )
     );
   }
