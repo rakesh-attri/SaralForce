@@ -66,9 +66,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   } else if (request.message == "openInspectorTab") {
     const openerTabId = sender.tab && sender.tab.id != null ? sender.tab.id : null;
+    // Record context carried from the opener page (absent when the sidebar
+    // had no record context): the new tab has no content-script parent to
+    // ask, so it arrives as openRecObj/openRecId URL params instead.
+    const recSuffix = request.rec && /^[A-Za-z0-9_]+$/.test(request.rec.obj || "")
+      ? `&openRecObj=${encodeURIComponent(request.rec.obj)}` +
+        (request.rec.id ? `&openRecId=${encodeURIComponent(request.rec.id)}` : "")
+      : "";
     const openFresh = () => {
       let url = chrome.runtime.getURL("object-creator.html" + (request.host ? `?host=${encodeURIComponent(request.host)}` : ""));
       url += (url.includes("?") ? "&" : "?") + "view=inspector";
+      url += recSuffix;
       if (openerTabId != null) url += `&fromTab=${openerTabId}`;
       const props = {url, active: true};
       if (openerTabId != null) props.openerTabId = openerTabId;
@@ -77,7 +85,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ok: true});
       });
     };
-    if (inspectorTabId != null) {
+    if (inspectorTabId != null && !recSuffix) {
       chrome.tabs.get(inspectorTabId, () => {
         if (!chrome.runtime.lastError) {
           chrome.tabs.update(inspectorTabId, {active: true});
@@ -88,6 +96,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       });
     } else {
+      // A record context always opens fresh so the previous tab keeps its
+      // work; the new tab becomes the reused one from here on.
+      inspectorTabId = null;
       openFresh();
     }
     return true;

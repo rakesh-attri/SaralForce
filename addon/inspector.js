@@ -104,7 +104,8 @@ export let sfConn = {
     return tokenData.access_token;
   },
 
-  async rest(url, {logErrors = true, method = "GET", body = undefined, bodyType = "json", responseType = "json", headers = {}, useCache = true, suppressSessionError = false} = {}) {
+  async rest(url, {logErrors = true, method = "GET", body = undefined, bodyType = "json", responseType = "json", headers = {},
+    useCache = true, suppressSessionError = false, timeoutMs = 0} = {}) {
     if (!this.instanceHostname) {
       throw new Error("Instance Hostname not found");
     }
@@ -140,6 +141,9 @@ export let sfConn = {
     xhr.setRequestHeader("Sforce-Call-Options", `client=${getCallOptionsClientId()}`);
 
     xhr.responseType = responseType;
+    if (timeoutMs > 0) {
+      try { xhr.timeout = timeoutMs; } catch (e) { /* unsupported, ignore */ }
+    }
     await new Promise((resolve, reject) => {
       xhr.onreadystatechange = () => {
         if (xhr.readyState == 4) {

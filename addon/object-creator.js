@@ -467,6 +467,35 @@ function saveInspectorState(sfHost, state) {
   }
 }
 
+// Ask the host page (content script) which record/list is open: it replies
+// {obj, id} (id null on list pages). Resolves null when standalone — e.g.
+// the inspector tab itself has no content-script parent — or on timeout.
+function queryHostRecord() {
+  return new Promise((resolve) => {
+    let done = false;
+    const onMsg = (e) => {
+      if (e.data && e.data.type === "sfoc-open-record") {
+        done = true;
+        window.removeEventListener("message", onMsg);
+        resolve(e.data.rec || null);
+      }
+    };
+    window.addEventListener("message", onMsg);
+    try {
+      window.parent.postMessage({type: "sfoc-query-open-record"}, "*");
+    } catch (err) {
+      window.removeEventListener("message", onMsg);
+      resolve(null);
+    }
+    setTimeout(() => {
+      if (!done) {
+        window.removeEventListener("message", onMsg);
+        resolve(null);
+      }
+    }, 1500);
+  });
+}
+
 class App extends React.Component {
   constructor(props) {
     super(props);
@@ -817,11 +846,20 @@ class App extends React.Component {
 
   openInspector() {
     if (openInspectorInNewTab()) {
-      try {
-        chrome.runtime.sendMessage({message: "openInspectorTab", host: this.props.sfHost || ""});
-      } catch (e) {
-        this.setState({uiMode: "inspector"});
-      }
+      // New tabs have no content-script parent to ask later, so carry the
+      // current record context in the open request (background.js turns it
+      // into openRecObj/openRecId URL params).
+      queryHostRecord().then((rec) => {
+        try {
+          const msg = {message: "openInspectorTab", host: this.props.sfHost || ""};
+          if (rec && rec.obj) {
+            msg.rec = {obj: String(rec.obj), id: rec.id ? String(rec.id) : null};
+          }
+          chrome.runtime.sendMessage(msg);
+        } catch (e) {
+          this.setState({uiMode: "inspector"});
+        }
+      });
       return;
     }
     this.setState({uiMode: "inspector"});

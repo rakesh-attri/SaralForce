@@ -1679,39 +1679,23 @@ td .plan-cell-input {
 .apex-ai-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
   border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
   font-family: var(--font-ui);
-  line-height: 1.5;
   cursor: pointer;
   user-select: none;
-  border: 1px solid #cfd8e6;
-  background: #f3f6fa;
-  color: #54698d;
-  transition: background .18s ease, border-color .18s ease,
-    color .18s ease, box-shadow .18s ease;
+  border: 1px solid #DCE5F2;
+  background: #FFFFFF;
 }
 
 .apex-ai-toggle:hover {
-  border-color: #b893f5;
-  color: #5b2cc4;
-  background: #f5f0ff;
+  border-color: #b9cdf3;
 }
 
-.apex-ai-toggle.is-on {
-  background: linear-gradient(90deg, #6d28d9, #9333ea);
-  border-color: #6d28d9;
-  color: #fff;
-  box-shadow: 0 2px 10px rgba(124, 58, 237, 0.35);
-}
-
-.apex-ai-toggle.is-on:hover {
-  background: linear-gradient(90deg, #5b21b6, #7e22ce);
-  border-color: #5b21b6;
-  color: #fff;
+.apex-ai-toggle:focus-visible {
+  outline: 2px solid #2878F0;
+  outline-offset: 2px;
 }
 
 .apex-ai-spark {
@@ -1719,23 +1703,42 @@ td .plan-cell-input {
   line-height: 1;
 }
 
-.apex-ai-toggle.is-on .apex-ai-spark {
-  filter: drop-shadow(0 0 3px rgba(233, 213, 255, 0.9));
+.apex-ai-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #172B4D;
+  white-space: nowrap;
 }
 
-.apex-ai-state {
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: #e4eaf3;
-  color: #8ba0c0;
+/* iOS-style switch track + thumb (no ON/OFF badge). */
+.apex-ai-track {
+  width: 36px;
+  height: 21px;
+  border-radius: 999px;
+  background: #CBD5E1;
+  position: relative;
+  flex: 0 0 auto;
+  transition: background-color 0.2s ease;
 }
 
-.apex-ai-toggle.is-on .apex-ai-state {
-  background: rgba(255, 255, 255, 0.22);
-  color: #fff;
+.apex-ai-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #FFFFFF;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.3);
+  transition: transform 0.2s ease;
+}
+
+.apex-ai-toggle.is-on .apex-ai-track {
+  background: #2878F0;
+}
+
+.apex-ai-toggle.is-on .apex-ai-thumb {
+  transform: translateX(15px);
 }
 
 .apex-ai-hint {
@@ -3543,6 +3546,327 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   gap: 8px;
 }
 
+/* ─── Run-Apex two-column workspace (mirrors .soql-layout) ─────────────── */
+.apex-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  background: #F4F7FC;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.apex-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  position: sticky;
+  top: 8px;
+}
+
+.apex-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.apex-conn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #172B4D;
+  margin-bottom: 8px;
+}
+
+.apex-conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94A3B8;
+  flex: 0 0 auto;
+}
+
+.apex-conn-dot.on {
+  background: #16A34A;
+}
+
+.apex-org {
+  margin-left: auto;
+  font-size: 12px;
+  color: #64748B;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apex-exec-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.apex-hl-btn {
+  margin-top: 6px;
+}
+
+/* Compact Log Level + Timeout controls (side-by-side mini fields). */
+.apex-mini-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.apex-mini-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.apex-mini-field > span {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748B;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.apex-mini-field select,
+.apex-mini-field input {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid #DCE5F2;
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: #172B4D;
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.apex-mini-field select:focus,
+.apex-mini-field input:focus {
+  border-color: #2878F0;
+  box-shadow: 0 0 0 3px rgba(40, 120, 240, 0.15);
+  outline: none;
+}
+
+.apex-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.apex-meta-chip {
+  font-size: 12px;
+  color: #64748B;
+  background: #F4F7FC;
+  border: 1px solid #DCE5F2;
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+.apex-tpl-wrap {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #64748B;
+}
+
+.apex-tpl-wrap select {
+  border: 1px solid #DCE5F2;
+  border-radius: 10px;
+  font-size: 12px;
+  padding: 5px 8px;
+  color: #172B4D;
+  background: #FFFFFF;
+  max-width: 190px;
+}
+
+.apex-results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.apex-results-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.apex-status-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.apex-status-pill.running {
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+}
+
+.apex-status-pill.ok {
+  color: #15803d;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.apex-status-pill.bad {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+}
+
+.apex-duration {
+  font-size: 12px;
+  color: #64748B;
+  font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+.apex-collapse-btn {
+  border: 1px solid #DCE5F2;
+  background: #FFFFFF;
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  color: #172B4D;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.apex-collapse-chev {
+  font-size: 10px;
+  color: #64748B;
+  margin-right: 5px;
+}
+
+.apex-results-body {
+  min-width: 0;
+}
+
+.apex-empty {
+  border: 1px dashed #DCE5F2;
+  border-radius: 10px;
+  padding: 18px 14px;
+  text-align: center;
+}
+
+.apex-empty-t {
+  font-size: 14px;
+  font-weight: 600;
+  color: #172B4D;
+  margin-bottom: 4px;
+}
+
+.apex-result-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.apex-result-tab {
+  border: 1px solid #DCE5F2;
+  background: #FFFFFF;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: pointer;
+  color: #64748B;
+}
+
+.apex-result-tab.active {
+  color: #FFFFFF;
+  background: #2878F0;
+  border-color: #2878F0;
+}
+
+.apex-debug-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.apex-debug-row {
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.apex-debug-row dt {
+  flex: 0 0 130px;
+  font-weight: 600;
+  color: #172B4D;
+}
+
+.apex-debug-row dd {
+  margin: 0;
+  color: #64748B;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.apex-saved-group {
+  display: inline-flex;
+}
+
+.apex-saved-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+}
+
+.apex-saved-label {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apex-saved-sub {
+  font-size: 11px;
+  color: #64748B;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apex-ai-hint {
+  font-size: 11px;
+  color: #64748B;
+}
+
+@media (max-width: 900px) {
+  .apex-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .apex-side {
+    position: static;
+  }
+}
+
 /* ── SaralForce · Execution-log table cells (SF-style) ── */
 .ff-log-ev {
   display: inline-block;
@@ -4108,6 +4432,14 @@ html.dark .soql-editor-box, html[data-theme="dark"] .soql-editor-box {
 
 .soql-results-h .insp-meta {
   margin-bottom: 0;
+}
+
+/* Hint above the results grid: clicking an Id cell opens all record data. */
+.soql-id-hint {
+  text-align: center;
+  font-size: 12px;
+  color: #64748B;
+  padding: 2px 0 8px;
 }
 
 /* ─── Records summary headers (object + open record) ─────────────────────── */
@@ -5407,6 +5739,19 @@ html.dark .message.message-system::after, html[data-theme="dark"] .message.messa
   margin-bottom: 12px;
 }
 
+.sq3-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.sq3-editor-card .insp-card-actions .btn {
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
 .soql-main .soql-editor-box {
   border-radius: 12px;
 }
@@ -5842,9 +6187,9 @@ input[type="radio"] {
   display: inline-flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   cursor: pointer;
-  padding: 2px 6px;
+  padding: 1px 4px;
 }
 
 .sq3-toggle-lbl {
@@ -5857,8 +6202,8 @@ input[type="radio"] {
 .sq3-switch {
   position: relative;
   display: inline-block;
-  width: 38px;
-  height: 21px;
+  width: 32px;
+  height: 18px;
   flex-shrink: 0;
 }
 
@@ -5883,10 +6228,10 @@ input[type="radio"] {
 .sq3-slider::after {
   content: "";
   position: absolute;
-  top: 2.5px;
-  left: 3px;
-  width: 16px;
-  height: 16px;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 3px rgba(16, 24, 40, 0.3);
@@ -5898,7 +6243,7 @@ input[type="radio"] {
 }
 
 .sq3-switch input:checked + .sq3-slider::after {
-  left: 19px;
+  left: 16px;
 }
 
 .sq3-switch input:focus-visible + .sq3-slider {
@@ -5958,5 +6303,565 @@ html[data-theme="dark"] .soql-editor-box {
 .soql-results-table .sq3-id-cell {
   color: #2878F0;
   font-weight: 600;
+}
+
+/* ─── Users tab rebuild (CloudFlow, mirrors .soql-layout/.apex-layout) ─── */
+.usr-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  background: #F4F7FC;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.usr-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  position: sticky;
+  top: 8px;
+}
+
+.usr-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.usr-search {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.usr-search input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #DCE5F2;
+  border-radius: 10px;
+  font-size: 13px;
+  padding: 7px 10px;
+  color: #172B4D;
+  background: #FFFFFF;
+}
+
+.usr-search input:focus {
+  border-color: #2878F0;
+  box-shadow: 0 0 0 3px rgba(40, 120, 240, 0.15);
+  outline: none;
+}
+
+.usr-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.usr-filters select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #DCE5F2;
+  border-radius: 10px;
+  font-size: 12px;
+  padding: 6px 8px;
+  color: #172B4D;
+  background: #FFFFFF;
+}
+
+.usr-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #FFFFFF;
+  border: 1px solid #DCE5F2;
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.usr-row:hover {
+  border-color: #b9cdf3;
+}
+
+.usr-row.selected {
+  border-color: #2878F0;
+  box-shadow: 0 0 0 3px rgba(40, 120, 240, 0.15);
+}
+
+.usr-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0176d3 0%, #032d60 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+.usr-avatar-lg {
+  width: 52px;
+  height: 52px;
+  font-size: 18px;
+}
+
+.usr-avatar-xl {
+  width: 60px;
+  height: 60px;
+  font-size: 20px;
+}
+
+.usr-row-tx {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.usr-row-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #172B4D;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usr-row-sub {
+  font-size: 12px;
+  color: #64748B;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usr-row-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.usr-row-chev {
+  color: #94A3B8;
+  font-size: 16px;
+}
+
+.usr-pages {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.usr-dhead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.usr-dtitle {
+  min-width: 0;
+  flex: 1;
+}
+
+.usr-dname {
+  font-size: 18px;
+  font-weight: 700;
+  color: #172B4D;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.usr-sep {
+  color: #94A3B8;
+  margin: 0 4px;
+}
+
+.usr-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #DCE5F2;
+  margin-bottom: 2px;
+}
+
+.usr-tab {
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748B;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.usr-tab:hover {
+  color: #2878F0;
+}
+
+.usr-tab.active {
+  color: #2878F0;
+  border-bottom-color: #2878F0;
+}
+
+.usr-grid2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.usr-kv {
+  display: flex;
+  flex-direction: column;
+}
+
+.usr-kv-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid #EDF1F7;
+  font-size: 13px;
+}
+
+.usr-kv-row:last-child {
+  border-bottom: 0;
+}
+
+.usr-kv-k {
+  color: #64748B;
+  flex-shrink: 0;
+}
+
+.usr-kv-v {
+  color: #172B4D;
+  font-weight: 500;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usr-qa {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.usr-qa .btn {
+  width: 100%;
+}
+
+/* Clone wizard modal. */
+.usr-modal-veil {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+  z-index: 60;
+}
+
+.usr-modal {
+  width: min(880px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.usr-modal-h {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.usr-modal-t {
+  flex: 1;
+  min-width: 0;
+}
+
+.usr-steps {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.usr-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 180px;
+  padding: 8px 12px;
+  border: 1px solid #DCE5F2;
+  border-radius: 10px;
+  background: #F8FAFD;
+}
+
+.usr-step-n {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #CBD5E1;
+  color: #FFFFFF;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.usr-step.active .usr-step-n {
+  background: #2878F0;
+}
+
+.usr-step-t {
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748B;
+}
+
+.usr-step.active .usr-step-t {
+  color: #172B4D;
+}
+
+.usr-src {
+  display: flex;
+  gap: 12px;
+  background: #F0F6FF;
+  border: 1px solid #DCE5F2;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.usr-src-tx {
+  min-width: 0;
+  flex: 1;
+}
+
+.usr-src-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #172B4D;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.usr-src-sub {
+  font-size: 12px;
+  color: #64748B;
+  margin-top: 2px;
+}
+
+.usr-src-meta {
+  min-width: 200px;
+  flex: 1;
+}
+
+.usr-src-mrow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.usr-comp-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 12px 0 4px;
+}
+
+.usr-selectall {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #172B4D;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.usr-selectall input {
+  accent-color: #2878F0;
+}
+
+.usr-comp {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: #FFFFFF;
+  border: 1px solid #DCE5F2;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  cursor: pointer;
+}
+
+.usr-comp input {
+  accent-color: #2878F0;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.usr-comp-tx {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.usr-comp-t {
+  font-size: 13px;
+  font-weight: 600;
+  color: #172B4D;
+}
+
+.usr-comp-s {
+  font-size: 12px;
+  color: #64748B;
+}
+
+.usr-modal-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+@media (max-width: 900px) {
+  .usr-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .usr-side {
+    position: static;
+  }
+  .usr-grid2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Users panels always render in the CloudFlow light scheme — .sq3-card
+   surfaces stay white in every theme, so all usr text is pinned to the
+   light palette here (otherwise values turn white-on-white). */
+html.dark .usr-layout,
+html[data-theme="dark"] .usr-layout {
+  background: #F4F7FC;
+}
+
+html.dark .usr-row,
+html[data-theme="dark"] .usr-row,
+html.dark .usr-comp,
+html[data-theme="dark"] .usr-comp,
+html.dark .usr-step,
+html[data-theme="dark"] .usr-step {
+  background: #FFFFFF;
+  border-color: #DCE5F2;
+}
+
+html.dark .usr-src,
+html[data-theme="dark"] .usr-src {
+  background: #F0F6FF;
+  border-color: #DCE5F2;
+}
+
+html.dark .usr-row-name,
+html[data-theme="dark"] .usr-row-name,
+html.dark .usr-dname,
+html[data-theme="dark"] .usr-dname,
+html.dark .usr-comp-t,
+html[data-theme="dark"] .usr-comp-t,
+html.dark .usr-src-name,
+html[data-theme="dark"] .usr-src-name,
+html.dark .usr-kv-v,
+html[data-theme="dark"] .usr-kv-v {
+  color: #172B4D;
+}
+
+html.dark .usr-row-sub,
+html[data-theme="dark"] .usr-row-sub,
+html.dark .usr-kv-k,
+html[data-theme="dark"] .usr-kv-k,
+html.dark .usr-src-sub,
+html[data-theme="dark"] .usr-src-sub,
+html.dark .usr-comp-s,
+html[data-theme="dark"] .usr-comp-s,
+html.dark .usr-step-t,
+html[data-theme="dark"] .usr-step-t {
+  color: #64748B;
+}
+
+html.dark .usr-step.active .usr-step-t,
+html[data-theme="dark"] .usr-step.active .usr-step-t {
+  color: #172B4D;
+}
+
+html.dark .usr-step-n,
+html[data-theme="dark"] .usr-step-n {
+  background: #CBD5E1;
+  color: #FFFFFF;
+}
+
+html.dark .usr-step.active .usr-step-n,
+html[data-theme="dark"] .usr-step.active .usr-step-n {
+  background: #2878F0;
+}
+
+html.dark .usr-tab,
+html[data-theme="dark"] .usr-tab {
+  color: #64748B;
+}
+
+html.dark .usr-tab.active,
+html[data-theme="dark"] .usr-tab.active {
+  color: #2878F0;
+  border-bottom-color: #2878F0;
+}
+
+html.dark .usr-row-chev,
+html[data-theme="dark"] .usr-row-chev,
+html.dark .usr-sep,
+html[data-theme="dark"] .usr-sep {
+  color: #94A3B8;
+}
+
+html.dark .usr-search input,
+html[data-theme="dark"] .usr-search input,
+html.dark .usr-filters select,
+html[data-theme="dark"] .usr-filters select {
+  background: #FFFFFF;
+  border-color: #DCE5F2;
+  color: #172B4D;
 }
 

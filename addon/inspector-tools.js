@@ -1,6 +1,10 @@
 import {sfConn, apiVersion} from "./inspector.js";
 import {getSavedConfig, getLLMProvider, getProviderConfig, hasValidConfig, getCelebrateVariant} from "./llm/llm-service.js";
 import {safeCopyText} from "./utils.js";
+import {
+  isDateOnlyString, looksLikeSfDateTime, parseSfInstant, formatSfDateTime, formatSfDate,
+  formatSfInstantForInput, parseSfWallInputToIso, ensureSfTimeZone, getEffectiveTimeZone
+} from "./sf-time.js";
 
 const h = React.createElement;
 
@@ -143,34 +147,78 @@ function openRecordInSf(id, e) {
   window.open(ffRecordUrl(id), "_blank");
 }
 
+// ─── Salesforce time zone + presentational helpers ─────────
+// Salesforce REST returns UTC ISO (`...+0000`); Salesforce UI renders in the
+// authenticated user's TimeZoneSidKey. All on-screen datetimes go through
+// formatSfDateTime (SF zone), date-only values pass through untouched, and
+// CSV/export keeps raw ISO. No hardcoded offsets anywhere.
+let _sfTzKick = false;
+function kickSfTzFetch() {
+  if (_sfTzKick) return;
+  _sfTzKick = true;
+  try {
+    ensureSfTimeZone(sfConn, apiVersion).then(() => {
+      try {
+        if (typeof window !== "undefined" && window.dispatchEvent) {
+          window.dispatchEvent(new Event("sf-tz-ready"));
+        }
+      } catch (e) { /* ignore */ }
+    }).catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+// Re-render hook: refreshes once the SF zone arrives so the first paint
+// (browser-zone fallback) corrects itself without user action.
+function useSfTimeZoneTick() {
+  const [, setTick] = React.useState(0);
+  React.useEffect(() => {
+    kickSfTzFetch();
+    const onReady = () => setTick(t => t + 1);
+    try { window.addEventListener("sf-tz-ready", onReady); } catch (e) { /* ignore */ }
+    return () => { try { window.removeEventListener("sf-tz-ready", onReady); } catch (e) {} };
+  }, []);
+}
+
 // ─── Presentational helpers (visual only) ────────────────
 function fmtDateTime(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return String(value);
-  return d.toLocaleString(undefined, {
-    year: "numeric", month: "short", day: "numeric",
-    hour: "numeric", minute: "2-digit"
-  });
+  if (value == null || value === "") return "";
+  kickSfTzFetch();
+  // Date-only must never shift days.
+  if (isDateOnlyString(String(value))) return String(value).slice(0, 10);
+  const d = parseSfInstant(value);
+  if (!d) return String(value);
+  return formatSfDateTime(d);
 }
 
 // Relative "Last refreshed / Last updated" stamp shared by the Records
 // summary headers and the Show-all-data info strip.
+// Relative part is TZ-agnostic; absolute fallback uses the SF zone.
 function ffFmtRelative(ts) {
   if (!ts) return "—";
+  kickSfTzFetch();
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (s < 60) return "Just now";
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   const d = new Date(ts);
-  const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  let hh = d.getHours();
-  const ap = hh >= 12 ? "PM" : "AM";
-  hh = hh % 12 || 12;
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const day = sameDay ? "Today"
-    : d.toLocaleDateString(undefined, {month: "short", day: "numeric"});
-  return `${day}, ${hh}:${mm} ${ap}`;
+  if (isNaN(d.getTime())) return "—";
+  try {
+    const tz = getEffectiveTimeZone();
+    const dayFmt = new Intl.DateTimeFormat(undefined, {timeZone: tz, month: "short", day: "numeric"});
+    const todayStr = new Intl.DateTimeFormat("en-CA", {timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date());
+    const dStr = new Intl.DateTimeFormat("en-CA", {timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit"}).format(d);
+    const timeFmt = new Intl.DateTimeFormat(undefined, {timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true});
+    const day = dStr === todayStr ? "Today" : dayFmt.format(d);
+    return `${day}, ${timeFmt.format(d)}`;
+  } catch (e) {
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    let hh = d.getHours();
+    const ap = hh >= 12 ? "PM" : "AM";
+    hh = hh % 12 || 12;
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const day = sameDay ? "Today"
+      : d.toLocaleDateString(undefined, {month: "short", day: "numeric"});
+    return `${day}, ${hh}:${mm} ${ap}`;
+  }
 }
 
 // "Show all data" field-type glyph: a plain text marker, never an emoji.
@@ -211,6 +259,8 @@ const FF_I_SLIDERS = [h("path", {d: "M4 7h16"}), h("circle", {cx: 9, cy: 7, r: 2
 const FF_I_DOWNLOAD = [h("path", {d: "M12 4v11"}), h("path", {d: "M7 11l5 5 5-5"}),
   h("path", {d: "M5 20h14"})];
 const FF_I_DOC = [h("path", {d: "M7 3h7l4 4v14H7z"}), h("path", {d: "M14 3v4h4"})];
+const FF_I_ZAP = [h("path", {d: "M13 2L4 14h6l-1 8 9-12h-6z"})];
+const FF_I_CODE = [h("path", {d: "M9 8l-5 4 5 4"}), h("path", {d: "M15 8l5 4-5 4"})];
 
 function fmtNum(n) {
   return typeof n === "number" ? n.toLocaleString() : String(n);
@@ -228,15 +278,40 @@ function fmtStorage(mb) {
 // Relative label for list rows ("just now", "5m ago", "3h ago", "2d ago"),
 // falling back to the absolute date past 30 days. Computed per render — the
 // lists are static snapshots, no timer re-renders them.
+// Uses single-parse SF instant; absolute fallback renders in the SF zone.
 function ffAgo(value) {
-  const d = new Date(value);
-  if (isNaN(d.getTime())) return value ? String(value) : "";
+  if (value == null || value === "") return "";
+  kickSfTzFetch();
+  if (isDateOnlyString(String(value))) return String(value).slice(0, 10);
+  const d = parseSfInstant(value);
+  if (!d) return String(value);
   const s = Math.floor((Date.now() - d.getTime()) / 1000);
   if (s < 60) return "just now";
   if (s < 3600) return Math.floor(s / 60) + "m ago";
   if (s < 86400) return Math.floor(s / 3600) + "h ago";
   if (s < 86400 * 30) return Math.floor(s / 86400) + "d ago";
   return fmtDateTime(value);
+}
+
+// Format one SOQL/Export cell for display. Datetimes -> SF zone UI style,
+// dates -> verbatim, everything else -> raw. Export/CSV path keeps raw ISO.
+function fmtSfCell(value, fieldType) {
+  if (value == null || value === "") return "";
+  const t = String(fieldType || "").toLowerCase();
+  if (t === "date") return formatSfDate(value);
+  if (t === "datetime") {
+    kickSfTzFetch();
+    if (isDateOnlyString(String(value))) return String(value).slice(0, 10);
+    return formatSfDateTime(value);
+  }
+  // No describe info: heuristically format only clear datetime strings so
+  // date-only values never shift.
+  if (!t && looksLikeSfDateTime(value)) {
+    kickSfTzFetch();
+    return formatSfDateTime(value);
+  }
+  if (!t && isDateOnlyString(String(value))) return String(value).slice(0, 10);
+  return String(value);
 }
 
 function FFBadge({kind, children}) {
@@ -249,7 +324,7 @@ function ffTruthy(v) {
 
 function ResultTable({columns, rows, maxRows, onRowClick, rowHint, cellFmt,
   wrapClass, selectable, isSelected, onToggle, allChecked, onToggleAll,
-  sortCol, sortDir, onSort}) {
+  sortCol, sortDir, onSort, fieldTypes}) {
   const shown = rows.slice(0, maxRows || 200);
   if (!columns.length) return h("div", {className: "insp-empty"}, "No rows");
   // ↗ gets its own column, right after Name (or at the row end when the
@@ -328,13 +403,15 @@ function ResultTable({columns, rows, maxRows, onRowClick, rowHint, cellFmt,
                 : (isId && onRowClick
                   ? `${raw} — ${rowHint || "click: open all record data in a popup"}`
                   : raw);
+              const fmtVal = row[c] == null ? ""
+                : (cellFmt && cellFmt[c] ? cellFmt[c](row[c], row)
+                  : fmtSfCell(row[c], fieldTypes && fieldTypes[c]));
               return h("td", {
                 key: c,
                 title,
                 ...(isIdVal ? {className: "sq3-id-cell"} : {})
               },
-                row[c] == null ? ""
-                  : (cellFmt && cellFmt[c] ? cellFmt[c](row[c], row) : String(row[c]))
+                fmtVal
               );
             })
           )
@@ -686,6 +763,7 @@ function soqlHighlight(src) {
 
 // ─── SOQL tab ───────────────────────────────────────────────
 function SoqlTab() {
+  useSfTimeZoneTick();
   const [query, setQuery] = ffUseSession("soql", "query", "SELECT Id, Name FROM Account LIMIT 50");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
@@ -739,13 +817,16 @@ function SoqlTab() {
   };
 
   React.useEffect(() => {
+    let stale = false;
     if (!useTooling) { ffGetObjects().then(setObjects).catch(() => {}); return; }
     toolingListObjects()
-      .then(setObjects)
+      .then(list => { if (!stale) setObjects(list); })
       .catch((e) => {
+        if (stale) return;
         setError("Tooling API object list failed: " + e.message + ". Showing standard objects instead.");
         ffGetObjects().then(setObjects).catch(() => {});
       });
+    return () => { stale = true; };
   }, [useTooling]);
 
   // The tab lives inside white .insp-panel — flush it so the CloudFlow
@@ -783,24 +864,32 @@ function SoqlTab() {
   const fromObj = fromMatch ? fromMatch[1] : "";
 
   React.useEffect(() => {
+    let stale = false;
     if (!fromObj) { setFromFields(null); return; }
     ffDescribeObject(fromObj, {tooling: useTooling})
-      .then(d => setFromFields((d.fields || []).map(f => ({
-        name: f.name, label: f.label, type: f.type,
-        custom: !!f.custom, calculated: !!f.calculated
-      }))))
-      .catch(() => setFromFields(null));
+      .then(d => {
+        if (stale) return;
+        setFromFields((d.fields || []).map(f => ({
+          name: f.name, label: f.label, type: f.type,
+          custom: !!f.custom, calculated: !!f.calculated
+        })));
+      })
+      .catch(() => { if (!stale) setFromFields(null); });
+    return () => { stale = true; };
   }, [fromObj, useTooling]);
 
   const insertAtCursor = (text) => {
     const ta = taRef.current;
     if (!ta) { setQuery(q => q + text); return; }
-    const start = ta.selectionStart ?? query.length;
-    const end = ta.selectionEnd ?? query.length;
-    const next = query.slice(0, start) + text + query.slice(end);
+    const src = (typeof ta.value === "string") ? ta.value : query;
+    const start = ta.selectionStart ?? src.length;
+    const end = ta.selectionEnd ?? src.length;
+    const next = src.slice(0, start) + text + src.slice(end);
     setQuery(next);
+    const appliedQuery = next;
     requestAnimationFrame(() => {
       try {
+        if (ta.value !== appliedQuery) return;
         ta.focus();
         const pos = start + text.length;
         ta.setSelectionRange(pos, pos);
@@ -824,6 +913,7 @@ function SoqlTab() {
       setResult({...r, rows: flat, columns: [...colSet]});
       setResultFilter("");
       setCeleb(c => c + 1);
+      scrollAfterCelebration();
       setSortCol(null);
       setSortDir(1);
       setSelected(new Set());
@@ -832,12 +922,6 @@ function SoqlTab() {
         ffSaveJson("ff_soql_history", next);
         return next;
       });
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        try {
-          const el = document.querySelector(".sq3-results-card");
-          if (el && el.scrollIntoView) el.scrollIntoView({behavior: "smooth", block: "nearest"});
-        } catch (e) { /* ignore */ }
-      }));
     } catch (e) {
       setError(e.message + (useTooling
         ? " (Tooling API — turn the toggle off to use the standard API.)"
@@ -1025,6 +1109,32 @@ function SoqlTab() {
     ffSaveJson("ff_soql_history", []);
   };
 
+  // Scroll to results only AFTER the success celebration has played
+  // (its animationend clears celeb). The timeout is a fallback in case the
+  // animation end never fires (e.g. reduced motion); whichever fires first
+  // consumes the pending scroll.
+  const ranAt = React.useRef(0);
+  const scrollToResults = () => {
+    try {
+      const el = document.querySelector(".sq3-results-card");
+      if (el && el.scrollIntoView) el.scrollIntoView({behavior: "smooth", block: "nearest"});
+    } catch (e) { /* ignore */ }
+  };
+  const scrollAfterCelebration = () => {
+    ranAt.current += 1;
+    const seq = ranAt.current;
+    setTimeout(() => {
+      if (ranAt.current !== seq) return;
+      ranAt.current = 0;
+      scrollToResults();
+    }, 4000);
+  };
+  React.useEffect(() => {
+    if (celeb !== 0 || !ranAt.current) return;
+    ranAt.current = 0;
+    scrollToResults();
+  }, [celeb]);
+
   const trailingFrom = /\bfrom\s+([a-zA-Z0-9_]*)$/i.exec(query);
   const caretPos = taRef.current && taRef.current.selectionStart != null
     ? taRef.current.selectionStart : query.length;
@@ -1065,29 +1175,38 @@ function SoqlTab() {
   };
 
   const insertField = (name) => {
+    // Live DOM is the source of truth: after rapid edits the render closure
+    // can hold a stale query string, but the textarea always shows the
+    // committed text, so inserts never compute on outdated state.
     const ta = taRef.current;
-    const caret = ta && ta.selectionStart != null ? ta.selectionStart : query.length;
-    const before = query.slice(0, caret);
+    const src = (ta && typeof ta.value === "string") ? ta.value : query;
+    const caret = ta && ta.selectionStart != null ? ta.selectionStart : src.length;
+    const before = src.slice(0, caret);
     const quotes = (before.match(/'/g) || []).length;
     const m = quotes % 2 === 0 ? /(\w+)$/.exec(before) : null;
-    if (!m) { insertAtCursor(name); return; }
-    const start = caret - m[1].length;
-    let next = query.slice(0, start) + name;
-    let pos = start + name.length;
-    const after = query.slice(caret);
-    // Automatic comma: exactly one separator, unless one is already there
-    // or a FROM clause follows (a trailing comma would break the query).
-    if (!/^\s*,/.test(after) && !/^\s*from\b/i.test(after)) {
-      next += ",";
-      pos += 1;
+    insertFieldAt(name, m ? caret - m[1].length : caret, caret, src);
+  };
+
+  // Single choke point for FIELD insertion (partial-word replace AND
+  // mid-text caret paths): exactly one comma separator, never before FROM,
+  // never doubled. Object names keep the raw insertAtCursor path below.
+  const insertFieldAt = (name, start, caretPos, src) => {
+    const ta = taRef.current;
+    const contextBefore = src.slice(0, start);
+    const after = src.slice(caretPos);
+    const inSelectList = /\bfrom\b/i.test(after);
+    let head = contextBefore;
+    if (inSelectList && /[A-Za-z0-9_\)]\s*$/.test(contextBefore) &&
+        !/\bselect\s*$/i.test(contextBefore)) {
+      head = contextBefore.replace(/\s+$/, "") + ", ";
     }
-    if (after === "" || /^[^\s,]/.test(after)) {
-      next += " ";
-      pos += 1;
-    }
-    next += after;
+    let sep = "";
+    if (!/^\s*,/.test(after) && !/^\s*from\b/i.test(after)) sep = ",";
+    if (after === "" || /^[^\s,]/.test(after)) sep += " ";
+    const next = head + name + sep + after;
+    const pos = (head + name + sep).length;
     setQuery(next);
-    // Restore focus/caret on the next frame — but only if no newer edit
+    // Restore focus/caret on the next frame - but only if no newer edit
     // landed meanwhile (a late frame must never clobber fresh input).
     const appliedQuery = next;
     requestAnimationFrame(() => {
@@ -1102,7 +1221,8 @@ function SoqlTab() {
   // Ctrl+Space: insert ALL available fields for the FROM object.
   const insertAllFields = async () => {
     const ta = taRef.current;
-    const caret = ta && ta.selectionStart != null ? ta.selectionStart : query.length;
+    const src = (ta && typeof ta.value === "string") ? ta.value : query;
+    const caret = ta && ta.selectionStart != null ? ta.selectionStart : src.length;
     if (!fromObj) {
       setError("Type FROM <Object> first, then press Ctrl+Space.");
       return;
@@ -1129,11 +1249,11 @@ function SoqlTab() {
       all = fieldNames.slice(0, 100).join(", ");
       setError("Field list truncated to 100 fields (query length guard).");
     }
-    const before = query.slice(0, caret);
+    const before = src.slice(0, caret);
     const quotes = (before.match(/'/g) || []).length;
     const m = quotes % 2 === 0 ? /(\w+)$/.exec(before) : null;
     const start = m ? caret - m[1].length : caret;
-    const next = query.slice(0, start) + all + " " + query.slice(caret).replace(/^\s+/, "");
+    const next = src.slice(0, start) + all + " " + src.slice(caret).replace(/^\s+/, "");
     setQuery(next);
     const pos = start + all.length + 1;
     const appliedQuery = next;
@@ -1173,6 +1293,13 @@ function SoqlTab() {
     setSortCol(null); setSortDir(1);
   };
   const resultRowIndex = (row) => result ? result.rows.indexOf(row) : -1;
+  // Describe-driven datetime formatting: same record must match Salesforce UI.
+  const soqlFieldTypes = {};
+  if (fromFields) {
+    for (const f of fromFields) {
+      if (f && f.name) soqlFieldTypes[f.name] = f.type;
+    }
+  }
   const catCounts = {};
   if (fromFields) {
     for (const f of fromFields) {
@@ -1349,18 +1476,20 @@ function SoqlTab() {
                 useTooling, on => setApiMode(on ? "tooling" : "standard")),
               apiToggle("Recycle Bin",
                 "Retrieve deleted records from the Salesforce Recycle Bin.",
-                useRecycle, on => setApiMode(on ? "recycle" : "standard")),
-              h("button", {
-                className: "btn btn-secondary btn-sm",
-                disabled: !query.trim(),
-                onClick: saveCurrent
-              }, "Save Query"),
-              h("button", {
-                className: "btn btn-secondary btn-sm",
-                disabled: loading,
-                onClick: clearQuery
-              }, "Clear")
+                useRecycle, on => setApiMode(on ? "recycle" : "standard"))
             )
+          ),
+          h("div", {className: "sq3-editor-actions"},
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: !query.trim(),
+              onClick: saveCurrent
+            }, "Save Query"),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: loading,
+              onClick: clearQuery
+            }, "Clear")
           ),
         h("div", {className: "soql-editor-box"},
           h("div", {className: "soql-term"},
@@ -1525,7 +1654,7 @@ function SoqlTab() {
           h("div", {className: "insp-meta"},
             rf
               ? `showing ${visibleRows.length} of ${result.rows.length} row(s)`
-              : `${result.totalSize} row(s) · pages OK · query ends LIMIT ${/\blimit\s+(\d+)/i.exec(result.query)?.[1] || "—"}`
+              : `${result.totalSize} row(s)`
           ),
           h("button", {
             className: "btn btn-secondary btn-sm",
@@ -1550,6 +1679,8 @@ function SoqlTab() {
             })
           )
         ),
+        result.columns && result.columns.some(c => String(c).toLowerCase() === "id") &&
+          h("div", {className: "soql-id-hint"}, "Click on ID to Show All Data"),
         result && (rf && !visibleRows.length
           ? h("div", {className: "insp-empty"}, "No matching rows.")
           : h(ResultTable, {
@@ -1581,7 +1712,8 @@ function SoqlTab() {
                   return next;
                 });
               },
-              sortCol, sortDir, onSort: toggleSort
+              sortCol, sortDir, onSort: toggleSort,
+              fieldTypes: soqlFieldTypes
             })),
         ), // sq3-results-card
         detailHint && h("div", {className: "insp-meta"}, detailHint),
@@ -1598,6 +1730,7 @@ function SoqlTab() {
 
 // ─── Data Export tab ────────────────────────────────────────
 function ExportTab() {
+  useSfTimeZoneTick();
   const [objectApi, setObjectApi] = ffUseSession("export", "objectApi", "");
   const [fields, setFields] = ffUseSession("export", "fields", "Id, Name");
   const [where, setWhere] = ffUseSession("export", "where", "");
@@ -1843,7 +1976,16 @@ function ExportTab() {
     preview && h(ResultTable, {
       columns: preview.columns,
       rows: preview.rows,
-      maxRows: 200
+      maxRows: 200,
+      fieldTypes: (() => {
+        const m = {};
+        if (meta && meta.fields) {
+          for (const f of meta.fields) {
+            if (f && f.name) m[f.name] = f.type;
+          }
+        }
+        return m;
+      })()
     })
   );
 }
@@ -2024,6 +2166,7 @@ function ImportTab() {
 
 // ─── Org Info tab ───────────────────────────────────────────
 function OrgTab() {
+  useSfTimeZoneTick();
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [info, setInfo] = ffUseSession("org", "info", null);
@@ -2032,9 +2175,12 @@ function OrgTab() {
     setLoading(true);
     setError(null);
     try {
+      // Prime the SF user time zone first so every fmtDateTime below matches
+      // the Salesforce UI for the authenticated user.
+      try { await ensureSfTimeZone(sfConn, apiVersion); } catch (e) { /* fallback to browser */ }
       const org = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
         encodeURIComponent(
-          "SELECT Id, Name, InstanceName, IsSandbox, OrganizationType, TrialExpirationDate, FiscalYearStartMonth, DefaultLocaleSidKey FROM Organization LIMIT 1"),
+          "SELECT Id, Name, InstanceName, IsSandbox, OrganizationType, TrialExpirationDate, FiscalYearStartMonth, DefaultLocaleSidKey, TimeZoneSidKey FROM Organization LIMIT 1"),
         {useCache: false});
       const limits = await sfConn.rest(`/services/data/v${apiVersion}/limits`);
       let user = null;
@@ -2855,6 +3001,16 @@ function buildDetailRows(rec, metaFields) {
   return detailRows;
 }
 
+// Apex log levels for the TraceFlag DebugLevel (single dropdown drives
+// every workflow category).
+const APEX_LOG_LEVELS = ["Error", "Warn", "Info", "Debug", "Fine", "Finer", "Finest"];
+
+// Display name for a history entry: first non-empty code line, truncated.
+function apexRecentName(h) {
+  const first = String((h && h.code) || "").split("\n").map(s => s.trim()).find(s => s);
+  return (first || "(empty script)").slice(0, 40);
+}
+
 // Accepts raw describe picklistValues ([{active, value}]) or the already
 // flattened active-value arrays kept by tab state.
 function normalizePicklistValues(picklistValues) {
@@ -2875,12 +3031,19 @@ async function fetchFullRecord(obj, id) {
     {useCache: true});
 }
 
-// Render an ISO instant for a datetime-local input (browser-local wall time).
+// Render an instant as SF-zone wall time for `datetime-local` inputs.
+// Single conversion via the Salesforce user time zone — never browser-local,
+// never a manual offset.
 function toLocalInput(s) {
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return String(s).slice(0, 16);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  kickSfTzFetch();
+  try {
+    return formatSfInstantForInput(s);
+  } catch (e) {
+    const d = parseSfInstant(s);
+    if (!d) return String(s).slice(0, 16);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
 }
 
 function detailDraftSeed(row) {
@@ -2904,9 +3067,13 @@ function coerceDetailValue(row, draftVal) {
   if (draftVal === "" || draftVal == null) return null;
   if (row.type === "boolean") return draftVal === "true";
   if (row.type === "datetime") {
-    const t = Date.parse(String(draftVal));
-    if (isNaN(t)) throw new Error(`${row.api}: "${draftVal}" is not a valid date/time.`);
-    return new Date(t).toISOString();
+    // Interpret the `datetime-local` wall time as SF-zone wall time so the
+    // display->edit->save round trip is identity (no double conversion).
+    try {
+      return parseSfWallInputToIso(String(draftVal));
+    } catch (e) {
+      throw new Error(`${row.api}: "${draftVal}" is not a valid date/time.`);
+    }
   }
   if (["int", "double", "currency", "percent"].includes(row.type)) {
     const n = Number(draftVal);
@@ -2917,6 +3084,7 @@ function coerceDetailValue(row, draftVal) {
 }
 
 function RecordDetailPanel({detail, loading, onBack, onSave}) {
+  useSfTimeZoneTick();
   const [editingApi, setEditingApi] = React.useState(null);
   const [drafts, setDrafts] = React.useState({});
   const [saving, setSaving] = React.useState(false);
@@ -3041,8 +3209,19 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
   const renderValue = (row) => {
     if (editingApi === row.api) return renderEditor(row);
     const hasDraft = drafts[row.api] !== undefined && draftDiffers(row, drafts[row.api]);
-    const shown = hasDraft ? String(drafts[row.api]) : (row.value == null ? "(Blank)" : row.value);
-    return h("span", null,
+    let shown;
+    if (hasDraft) {
+      shown = String(drafts[row.api]);
+    } else if (row.value == null) {
+      shown = "(Blank)";
+    } else if (row.type === "datetime") {
+      shown = fmtSfCell(row.value, "datetime");
+    } else if (row.type === "date") {
+      shown = formatSfDate(row.value);
+    } else {
+      shown = row.value;
+    }
+    return h("span", {title: row.value == null ? "" : String(row.value)},
       shown,
       hasDraft && h("span", {className: "insp-dirty-dot", title: "Unsaved change"}, " *"));
   };
@@ -3198,6 +3377,7 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
 // with {obj, id} (id null on list pages). There is no object picker, no
 // field list, no rows table and no row-click detail.
 function RecordsTab() {
+  useSfTimeZoneTick();
   const [objInput, setObjInput] = ffUseSession("records", "objInput", "");
   const [error, setError] = React.useState(null);
   const [detail, setDetail] = ffUseSession("records", "detail", null);
@@ -3247,6 +3427,21 @@ function RecordsTab() {
     setLastRefresh(Date.now());
     rememberLast(obj);
     return d;
+  };
+
+  // Record context from the inspector-tab URL (openRecObj/openRecId, put
+  // there by background.js): the new tab has no content-script parent, so
+  // the opener page's context travels in the URL instead.
+  const urlPageRec = () => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const obj = (q.get("openRecObj") || "").trim();
+      if (!obj || !/^[A-Za-z0-9_]+$/.test(obj)) return null;
+      const id = (q.get("openRecId") || "").trim() || null;
+      return {obj, id};
+    } catch (e) {
+      return null;
+    }
   };
 
   // Ask the host page which record/list is open (button.js replies
@@ -3326,7 +3521,10 @@ function RecordsTab() {
       setCtxLoading(true);
       setError(null);
       try {
-        const rec = await queryPageRec();
+        // New-tab inspector boots (VIEW R/O) carry the opener page's record
+        // in the URL — that tab has no content-script parent to ask.
+        let rec = urlPageRec();
+        if (!rec) rec = await queryPageRec();
         if (cancelled) return;
         if (rec && rec.obj && rec.id) { await loadRecordContext(rec); return; }
         if (rec && rec.obj) { await loadObjectContext(rec.obj); return; }
@@ -4559,6 +4757,7 @@ function MultiCheckDropdown({label, items, selected, onChange, emptyText}) {
 }
 
 function UsersTab() {
+  useSfTimeZoneTick();
   const [q, setQ] = ffUseSession("users", "q", "");
   const [users, setUsers] = ffUseSession("users", "users", []);
   const [userCols, setUserCols] = ffUseSession("users", "userCols", []);
@@ -4581,6 +4780,51 @@ function UsersTab() {
   const [cloneResult, setCloneResult] = React.useState(null);
   const [sites, setSites] = React.useState([]);
   const [expSite, setExpSite] = React.useState("");
+  const [profileFilter, setProfileFilter] = ffUseSession("users", "profileFilter", "");
+  const [roleFilter, setRoleFilter] = ffUseSession("users", "roleFilter", "");
+  const [allProfiles, setAllProfiles] = React.useState([]);
+  const [allRoles, setAllRoles] = React.useState([]);
+  const [page, setPage] = React.useState(1);
+  const [userTab, setUserTab] = React.useState("details");
+  const [loginIp, setLoginIp] = React.useState(null);
+  const [cloneStep, setCloneStep] = React.useState(1);
+  const [cloneErr, setCloneErr] = React.useState(null);
+  const [compSel, setCompSel] = React.useState({profile: true, ps: true, groups: true, roles: true});
+  const [resetting, setResetting] = React.useState(false);
+  const USR_PAGE_SIZE = 8;
+
+  const mapUserRows = (records) => (records || []).map(r => ({
+    Id: r.Id,
+    Name: r.Name,
+    Username: r.Username,
+    Email: r.Email,
+    Alias: r.Alias,
+    Active: r.IsActive ? "true" : "false",
+    ProfileId: r.ProfileId,
+    RoleId: r.UserRoleId,
+    UserType: r.UserType || "Standard",
+    Language: r.LanguageLocaleKey
+  }));
+  const USER_LIST_FIELDS = "Id, Name, Username, Email, Alias, IsActive, ProfileId, UserRoleId, UserType, LanguageLocaleKey";
+
+  const loadAllUsers = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent(`SELECT ${USER_LIST_FIELDS} FROM User ORDER BY Name LIMIT 25`),
+        {useCache: false});
+      const flat = mapUserRows(res.records);
+      setUsers(flat);
+      setUserCols(["Name", "Username", "Email", "Alias", "Active"]);
+      setPage(1);
+    } catch (e) {
+      setError(e.message);
+      setUsers([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const search = async () => {
     setError(null);
@@ -4590,25 +4834,15 @@ function UsersTab() {
     if (!term) { setError("Type a name, username, email or alias"); return; }
     setLoading(true);
     try {
-      const soql = `SELECT Id, Name, Username, Email, Alias, IsActive, ProfileId, UserRoleId, UserType, LanguageLocaleKey ` +
+      const soql = `SELECT ${USER_LIST_FIELDS} ` +
         `FROM User WHERE Name LIKE '%${term}%' OR Username LIKE '%${term}%' ` +
         `OR Email LIKE '%${term}%' OR Alias LIKE '%${term}%' ORDER BY Name LIMIT 50`;
       const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
         encodeURIComponent(soql), {useCache: false});
-      const flat = (res.records || []).map(r => ({
-        Id: r.Id,
-        Name: r.Name,
-        Username: r.Username,
-        Email: r.Email,
-        Alias: r.Alias,
-        Active: r.IsActive ? "true" : "false",
-        ProfileId: r.ProfileId,
-        RoleId: r.UserRoleId,
-        UserType: r.UserType || "Standard",
-        Language: r.LanguageLocaleKey
-      }));
+      const flat = mapUserRows(res.records);
       setUsers(flat);
       setUserCols(["Name", "Username", "Email", "Alias", "Active"]);
+      setPage(1);
       if (!flat.length) setError(`No users matching "${q.trim()}"`);
     } catch (e) {
       setError(e.message);
@@ -4618,6 +4852,41 @@ function UsersTab() {
     }
   };
 
+  // Filter dropdown data + first-page auto-load (best-effort; the tab is
+  // usable even when Profile/UserRole listing fails).
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [pRes, rRes] = await Promise.all([
+          sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+            encodeURIComponent("SELECT Id, Name FROM Profile ORDER BY Name"), {useCache: false})
+            .catch(() => ({records: []})),
+          sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+            encodeURIComponent("SELECT Id, Name FROM UserRole ORDER BY Name"), {useCache: false})
+            .catch(() => ({records: []}))
+        ]);
+        if (cancelled) return;
+        setAllProfiles((pRes.records || []).map(p => ({id: p.Id, name: p.Name})));
+        setAllRoles((rRes.records || []).map(r => ({id: r.Id, name: r.Name})));
+      } catch (e) { /* filters stay empty */ }
+      if (!cancelled && !users.length) {
+        try {
+          const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+            encodeURIComponent(`SELECT ${USER_LIST_FIELDS} FROM User ORDER BY Name LIMIT 25`),
+            {useCache: false});
+          if (cancelled) return;
+          const flat = mapUserRows(res.records);
+          setUsers(flat);
+          setUserCols(["Name", "Username", "Email", "Alias", "Active"]);
+          setPage(1);
+        } catch (e) { /* list stays empty until searched */ }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const selectUser = async (row) => {
     setSel(row);
     setDetail(null);
@@ -4626,7 +4895,9 @@ function UsersTab() {
     setSrcRec(null);
     setCloneOpen(false);
     setCloneResult(null);
+    setUserTab("details");
     setDetailLoading(true);
+    loadUserExtras(row);
     try {
       const [rec, prof, roleQ] = await Promise.all([
         sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/${encodeURIComponent(row.Id)}`,
@@ -4748,68 +5019,122 @@ function UsersTab() {
     else setActionErr(`Copy was blocked by the browser — copy the Id manually: ${sel.Id}`);
   };
 
+  // Reset Password: invalidates the current password and emails the user a
+  // reset link (also unlocks a locked-out account). Documented REST:
+  // DELETE /sobjects/User/{id}/password.
+  const resetPassword = async () => {
+    if (!sel) return;
+    setActionMsg(null);
+    setActionErr(null);
+    setResetting(true);
+    try {
+      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/${sel.Id}/password`, {
+        method: "DELETE",
+        useCache: false
+      });
+      setActionMsg(`Password reset sent for ${sel.Username} — their current password is now invalid and they will receive a reset link. This also unlocks a locked-out account.`);
+    } catch (e) {
+      setActionErr(e.message);
+    } finally {
+      setResetting(false);
+    }
+  };
+
   // ── Clone user: same profile/role, copied permission sets, groups ──
+  // Shared assignment loader (clone wizard + detail tabs).
+  const fetchAssignments = async (userId) => {
+    const [assignRes, grpRes] = await Promise.all([
+      sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent(
+          `SELECT PermissionSetId, PermissionSet.Name, PermissionSet.Label, ` +
+          `PermissionSet.IsOwnedByProfile FROM PermissionSetAssignment ` +
+          `WHERE AssigneeId = '${userId}'`), {useCache: false}),
+      sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent(
+          `SELECT GroupId FROM GroupMember WHERE UserOrGroupId = '${userId}'`),
+        {useCache: false}).catch(() => ({records: []}))
+    ]);
+    const rows = assignRes.records || [];
+    const direct = rows.filter(a =>
+      a.PermissionSet && a.PermissionSet.IsOwnedByProfile !== true && a.PermissionSetId);
+    let psgIds = new Set();
+    try {
+      const ids = direct.map(a => `'${a.PermissionSetId}'`).join(",");
+      if (ids) {
+        const gRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent(`SELECT Id FROM PermissionSetGroup WHERE Id IN (${ids})`),
+          {useCache: false});
+        psgIds = new Set((gRes.records || []).map(g => g.Id));
+      }
+    } catch (e) { /* treat all as permission sets */ }
+    const ps = [];
+    const psg = [];
+    for (const a of direct) {
+      const entry = {
+        id: a.PermissionSetId,
+        name: (a.PermissionSet && (a.PermissionSet.Label || a.PermissionSet.Name)) || a.PermissionSetId
+      };
+      (psgIds.has(a.PermissionSetId) ? psg : ps).push(entry);
+    }
+    let groups = [];
+    const grpIds = (grpRes.records || []).map(g => g.GroupId).filter(Boolean);
+    if (grpIds.length) {
+      try {
+        const gDetail = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent(
+            `SELECT Id, Name, Type FROM Group WHERE Id IN (${grpIds.map(id => `'${id}'`).join(",")})`),
+          {useCache: false});
+        groups = (gDetail.records || [])
+          .filter(g => g.Type === "Regular" || g.Type === "Queue")
+          .map(g => ({id: g.Id, name: `${g.Name} (${g.Type})`}));
+      } catch (e) { /* skip groups */ }
+    }
+    return {ps, psg, groups};
+  };
+
+  // Detail-tab extras: assignments for the PS/Groups tabs + latest login IP.
+  const loadUserExtras = async (row) => {
+    setSrcPerms(null);
+    setLoginIp(null);
+    try {
+      const perms = await fetchAssignments(row.Id);
+      setSrcPerms(perms);
+    } catch (e) { /* tabs show empty state */ }
+    try {
+      const lh = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent(
+          `SELECT UserId, SourceIp, LoginTime, Status FROM LoginHistory ` +
+          `WHERE UserId = '${row.Id}' ORDER BY LoginTime DESC LIMIT 20`),
+        {useCache: false}).catch(() => null);
+      const rows = (lh && lh.records || [])
+        .sort((a, b) => String(b.LoginTime || "").localeCompare(String(a.LoginTime || "")));
+      const hit = rows.find(r => r.Status === "Success" && r.SourceIp) || rows[0];
+      if (hit && hit.SourceIp) setLoginIp(hit.SourceIp);
+    } catch (e) { /* IP stays blank */ }
+  };
+
   const openClone = async () => {
     if (!sel) return;
     setCloneOpen(true);
+    setCloneStep(1);
+    setCloneErr(null);
+    setCompSel({profile: true, ps: true, groups: true, roles: true});
     setCloneResult(null);
     setSrcLoading(true);
     setActionMsg(null);
     setActionErr(null);
     try {
-      const [profRes, roleRes, assignRes, grpRes] = await Promise.all([
+      const [profRes, roleRes, perms] = await Promise.all([
         sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
           encodeURIComponent("SELECT Id, Name FROM Profile ORDER BY Name"), {useCache: false}),
         sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
           encodeURIComponent("SELECT Id, Name FROM UserRole ORDER BY Name"), {useCache: false})
           .catch(() => ({records: []})),
-        sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-          encodeURIComponent(
-            `SELECT PermissionSetId, PermissionSet.Name, PermissionSet.Label, ` +
-            `PermissionSet.IsOwnedByProfile FROM PermissionSetAssignment ` +
-            `WHERE AssigneeId = '${sel.Id}'`), {useCache: false}),
-        sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-          encodeURIComponent(
-            `SELECT GroupId FROM GroupMember WHERE UserOrGroupId = '${sel.Id}'`),
-          {useCache: false}).catch(() => ({records: []}))
+        fetchAssignments(sel.Id)
       ]);
       setProfiles((profRes.records || []).map(p => ({id: p.Id, name: p.Name})));
       setRoles((roleRes.records || []).map(r => ({id: r.Id, name: r.Name})));
-      const rows = assignRes.records || [];
-      const direct = rows.filter(a =>
-        a.PermissionSet && a.PermissionSet.IsOwnedByProfile !== true && a.PermissionSetId);
-      let psgIds = new Set();
-      try {
-        const ids = direct.map(a => `'${a.PermissionSetId}'`).join(",");
-        if (ids) {
-          const gRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-            encodeURIComponent(`SELECT Id FROM PermissionSetGroup WHERE Id IN (${ids})`),
-            {useCache: false});
-          psgIds = new Set((gRes.records || []).map(g => g.Id));
-        }
-      } catch (e) { /* treat all as permission sets */ }
-      const ps = [];
-      const psg = [];
-      for (const a of direct) {
-        const entry = {
-          id: a.PermissionSetId,
-          name: (a.PermissionSet && (a.PermissionSet.Label || a.PermissionSet.Name)) || a.PermissionSetId
-        };
-        (psgIds.has(a.PermissionSetId) ? psg : ps).push(entry);
-      }
-      let groups = [];
-      const grpIds = (grpRes.records || []).map(g => g.GroupId).filter(Boolean);
-      if (grpIds.length) {
-        try {
-          const gDetail = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-            encodeURIComponent(
-              `SELECT Id, Name, Type FROM Group WHERE Id IN (${grpIds.map(id => `'${id}'`).join(",")})`),
-            {useCache: false});
-          groups = (gDetail.records || [])
-            .filter(g => g.Type === "Regular" || g.Type === "Queue")
-            .map(g => ({id: g.Id, name: `${g.Name} (${g.Type})`}));
-        } catch (e) { /* skip groups */ }
-      }
+      const {ps, psg, groups} = perms;
       setSrcPerms({ps, psg, groups});
       const rec = srcRec || {};
       setCf({
@@ -4840,18 +5165,26 @@ function UsersTab() {
     }
   };
 
+  const validateClone = () => {
+    if (!cf) return "Still loading the source user — wait a moment.";    if (!cf.lastName.trim()) return "Last Name is required";
+    if (!cf.email.trim()) return "Email is required";
+    if (!cf.username.trim()) return "Username is required (must be globally unique, e.g. name@company.org)";
+    if (!cf.profileId) return compSel.profile
+      ? "Pick a profile"
+      : "Pick a profile (or re-check Profile to copy the source profile)";
+    return null;
+  };
+
   const doClone = async () => {
     if (!sel || !cf) return;
     setCloneResult(null);
-    setActionErr(null);
+    setCloneErr(null);
+    const problem = validateClone();
+    if (problem) { setCloneErr(problem); return; }
     const firstName = cf.firstName.trim();
     const lastName = cf.lastName.trim();
     const email = cf.email.trim();
     const username = cf.username.trim();
-    if (!lastName) { setActionErr("Last Name is required"); return; }
-    if (!email) { setActionErr("Email is required"); return; }
-    if (!username) { setActionErr("Username is required (must be globally unique, e.g. name@company.org)"); return; }
-    if (!cf.profileId) { setActionErr("Pick a profile"); return; }
     setCloning(true);
     const failures = [];
     let newId = null;
@@ -4956,82 +5289,150 @@ function UsersTab() {
     }
   };
 
+  const filteredUsers = users.filter(u =>
+    (!profileFilter || u.ProfileId === profileFilter) &&
+    (!roleFilter || u.RoleId === roleFilter));
+  const usrPageCount = Math.max(1, Math.ceil(filteredUsers.length / USR_PAGE_SIZE));
+  const usrSafePage = Math.min(Math.max(1, page), usrPageCount);
+  const usrPageUsers = filteredUsers.slice(
+    (usrSafePage - 1) * USR_PAGE_SIZE, usrSafePage * USR_PAGE_SIZE);
+  const usrInitials = (u) => String((u && (u.Alias || u.Name)) || "?").slice(0, 2).toUpperCase();
+  const profileNameOf = (pid) => {
+    if (!pid) return "";
+    const f = allProfiles.find(p => p.id === pid) || profiles.find(p => p.id === pid);
+    if (f) return f.name;
+    if (detail && sel && sel.ProfileId === pid) return detail.profile;
+    return "";
+  };
+  const roleNameOf = (rid) => {
+    if (!rid) return "";
+    const f = allRoles.find(r => r.id === rid) || roles.find(r => r.id === rid);
+    if (f) return f.name;
+    if (detail && sel && sel.RoleId === rid) return detail.role;
+    return "";
+  };
+  const USR_TABS = [
+    ["details", "Details"], ["ps", "Permission Sets"], ["groups", "Groups"],
+    ["profile", "Profiles"], ["role", "Roles"], ["settings", "Settings"]
+  ];
+
+  // Clone-wizard component toggles (mapped components only). Unchecking
+  // clears the matching selection so the copy step skips it.
+  const toggleComp = (key) => {
+    const on = !compSel[key];
+    setCompSel({...compSel, [key]: on});
+    if (!cf) return;
+    if (key === "profile")
+      setCf({...cf, profileId: on ? (srcRec && srcRec.ProfileId || sel.ProfileId || "") : ""});
+    if (key === "roles")
+      setCf({...cf, roleId: on ? (srcRec && srcRec.UserRoleId || sel.RoleId || "") : ""});
+    if (key === "ps")
+      setCf({...cf, psIds: on && srcPerms ? [...srcPerms.ps, ...srcPerms.psg].map(p => p.id) : []});
+    if (key === "groups")
+      setCf({...cf, grpIds: on && srcPerms ? srcPerms.groups.map(g => g.id) : []});
+  };
+
   return h("div", {className: "insp-panel"},
-    h("p", {className: "insp-hint-strip"},
-      "Search users, inspect details, log in as a user, or capture debug logs — all without leaving the extension."
-    ),
-    h("div", {className: "insp-cmdbar"},
-      h("input", {
-        value: q,
-        placeholder: "Search by name, username, email or alias…",
-        disabled: loading,
-        onChange: e => setQ(e.target.value),
-        onKeyDown: e => { if (e.key === "Enter") search(); }
-      }),
-      h("button", {
-        className: "btn btn-primary",
-        disabled: loading || !q.trim(),
-        onClick: search
-      }, loading ? "Searching…" : "Search users")
-    ),
-    error && h("div", {className: "insp-error"}, error),
-    users.length > 0 && h(ResultTable, {
-      columns: userCols,
-      rows: users,
-      maxRows: 50,
-      onRowClick: (row) => selectUser(row),
-      rowHint: "Click to select user",
-      cellFmt: {
-        Active: v => h(FFBadge, {kind: ffTruthy(v) ? "ok" : "off"},
-          ffTruthy(v) ? "Active" : "Inactive"),
-        LastLogin: v => v
-          ? h("span", {className: "ff-date", title: String(v)}, fmtDateTime(v))
-          : ""
-      }
-    }),
-    sel && h("div", {className: "user-card"},
-      h("div", {className: "user-head"},
-        h("div", {className: "user-avatar"},
-          (sel.Alias || sel.Name || "?").slice(0, 2).toUpperCase()),
-        h("div", {style: {minWidth: 0}},
-          h("div", {className: "user-name"},
-            sel.Name,
-            sel.Alias ? ` (${sel.Alias})` : "",
-            " ",
-            sel.Active != null && h(FFBadge, {kind: ffTruthy(sel.Active) ? "ok" : "off"},
-              ffTruthy(sel.Active) ? "Active" : "Inactive")
+    h("div", {className: "usr-layout"},
+      h("div", {className: "usr-side"},
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_SLIDERS)),
+            h("span", {className: "sq3-card-t"}, "Users")),
+          h("div", {className: "usr-search"},
+            h("input", {
+              value: q,
+              placeholder: "Search by name, email, or alias…",
+              disabled: loading,
+              onChange: e => setQ(e.target.value),
+              onKeyDown: e => { if (e.key === "Enter") search(); }
+            }),
+            h("button", {
+              className: "btn btn-primary btn-sm",
+              disabled: loading || !q.trim(),
+              title: "Search users",
+              onClick: search
+            }, loading ? "Searching…" : "Search users")
           ),
-          h("div", {className: "user-handle"}, sel.Username)
+          h("div", {className: "sq3-card-sub"}, "Filters"),
+          h("div", {className: "usr-filters"},
+            h("select", {
+              value: profileFilter,
+              title: "Filter by profile",
+              onChange: e => { setProfileFilter(e.target.value); setPage(1); }
+            },
+              h("option", {value: ""}, "All Profiles"),
+              allProfiles.map(p => h("option", {key: p.id, value: p.id}, p.name))),
+            h("select", {
+              value: roleFilter,
+              title: "Filter by role",
+              onChange: e => { setRoleFilter(e.target.value); setPage(1); }
+            },
+              h("option", {value: ""}, "All Roles"),
+              allRoles.map(r => h("option", {key: r.id, value: r.id}, r.name)))
+          ),
+          h("div", {className: "insp-meta"}, `Total Users: ${filteredUsers.length}`),
+          error && h("div", {className: "insp-error"}, error),
+          loading && !users.length && h("div", {className: "insp-meta"}, "Loading users…"),
+          !loading && !filteredUsers.length && !error &&
+            h("div", {className: "insp-meta"}, "No users found — search above."),
+          usrPageUsers.map(u =>
+            h("div", {
+              key: u.Id,
+              className: "usr-row" + (sel && sel.Id === u.Id ? " selected" : ""),
+              role: "button",
+              tabIndex: 0,
+              title: `${u.Name} — click to select user`,
+              onClick: () => selectUser(u),
+              onKeyDown: e => { if (e.key === "Enter") selectUser(u); }
+            },
+              h("span", {className: "usr-avatar", "aria-hidden": "true"}, usrInitials(u)),
+              h("span", {className: "usr-row-tx"},
+                h("span", {className: "usr-row-name"}, u.Name),
+                h("span", {className: "usr-row-sub"}, u.Username || u.Email || ""),
+                h("span", {className: "usr-row-sub"}, profileNameOf(u.ProfileId) || "—")),
+              h("span", {className: "usr-row-end"},
+                h(FFBadge, {kind: ffTruthy(u.Active) ? "ok" : "off"},
+                  ffTruthy(u.Active) ? "Active" : "Inactive"),
+                h("span", {className: "usr-row-chev", "aria-hidden": "true"}, "›")))),
+          usrPageCount > 1 && h("div", {className: "usr-pages"},
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: usrSafePage <= 1,
+              onClick: () => setPage(usrSafePage - 1)
+            }, "‹"),
+            Array.from({length: usrPageCount}, (_, i) =>
+              h("button", {
+                key: i,
+                className: "btn btn-sm" + (usrSafePage === i + 1 ? " btn-primary" : " btn-secondary"),
+                onClick: () => setPage(i + 1)
+              }, String(i + 1))),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: usrSafePage >= usrPageCount,
+              onClick: () => setPage(usrSafePage + 1)
+            }, "›"))
         )
       ),
-      h("div", {className: "user-chips"},
-        h(FFBadge, {kind: "info"},
-          detailLoading ? "Loading profile…" : (detail ? detail.profile : "Profile")),
-        h(FFBadge, {kind: "info"},
-          detailLoading ? "Loading role…" : (detail ? (detail.role || "No role") : "Role")),
-        sel.Language && h(FFBadge, {key: "lang"}, sel.Language)
-      ),
-      h("div", null,
-        h("div", {className: "insp-kv-row"},
-          h("span", {className: "insp-kv-k"}, "Id"),
-          h("span", {className: "insp-kv-v ff-mono"}, sel.Id)),
-        h("div", {className: "insp-kv-row"},
-          h("span", {className: "insp-kv-k"}, "E-mail"),
-          h("span", {className: "insp-kv-v"}, sel.Email || "—")),
-        h("div", {className: "insp-kv-row"},
-          h("span", {className: "insp-kv-k"}, "Last login"),
-          h("span", {
-            className: "insp-kv-v ff-date",
-            title: detail && detail.lastLogin ? String(detail.lastLogin) : ""
-          },
-            detailLoading ? "…" : (detail && detail.lastLogin ? fmtDateTime(detail.lastLogin) : "—")))
-      ),
-      h("div", {className: "user-actions"},
-        h("button", {
-          className: "btn btn-primary btn-sm",
-          disabled: busy === "login",
-          onClick: () => loginAs(false)
-        }, busy === "login" ? "Opening…" : "Login As"),
+      h("div", {className: "usr-main"},
+        sel ? h("div", {className: "sq3-card"},
+          h("div", {className: "usr-dhead"},
+            h("span", {className: "usr-avatar usr-avatar-xl", "aria-hidden": "true"}, usrInitials(sel)),
+            h("div", {className: "usr-dtitle"},
+              h("div", {className: "usr-dname"},
+                sel.Name, " ",
+                sel.Active != null && h(FFBadge, {kind: ffTruthy(sel.Active) ? "ok" : "off"},
+                  ffTruthy(sel.Active) ? "Active" : "Inactive")),
+              h("div", {className: "sq3-card-sub"},
+                sel.Username,
+                h("span", {className: "usr-sep", "aria-hidden": "true"}, " | "),
+                detailLoading ? "Loading profile…" : (detail ? detail.profile : "—")))),
+          h("div", {className: "user-actions"},
+            h("button", {
+              className: "btn btn-primary btn-sm",
+              disabled: busy === "login",
+              onClick: () => loginAs(false)
+            }, busy === "login" ? "Opening…" : "Login As"),
         isCommunityUser(sel) && h("button", {
           className: "btn btn-secondary btn-sm",
           disabled: busy === "expLogin" || !sites.length,
@@ -5053,119 +5454,301 @@ function UsersTab() {
           title: "Create a 30-minute USER_DEBUG trace flag for this user",
           onClick: enableLogs
         }, busy === "logs" ? "Enabling…" : "Enable Logs"),
-        h("button", {
-          className: "btn btn-secondary btn-sm",
-          title: "Create a new user with the same profile, role, permission sets and groups — you provide name, email, username, password",
-          onClick: () => (cloneOpen ? setCloneOpen(false) : openClone())
-        }, cloneOpen ? "Close Clone" : "Clone User"),
-        h("button", {
-          className: "btn btn-secondary btn-sm",
-          onClick: copyId
-        }, "Copy Id"),
-        ffIsSfId(sel.Id) && h("button", {
-          className: "btn btn-secondary btn-sm",
-          title: "Open this user in Salesforce",
-          onClick: (e) => openRecordInSf(sel.Id, e)
-        }, "Open ↗")
-      )
-    ),
-    sel && cloneOpen && h("div", {className: "insp-kv"},
-      h("div", {className: "insp-kv-title"}, `Clone ${sel.Name} → new user`),
-      srcLoading && h("div", {className: "insp-meta"}, "Loading profile, role and assignments…"),
-      !srcLoading && cf && h("div", null,
-        h("div", {className: "insp-meta"},
-          `Source: profile ${detail ? detail.profile : "…"} · ` +
-          `${srcPerms ? `${srcPerms.ps.length} permission set(s), ${srcPerms.psg.length} group(s), ${srcPerms.groups.length} public group(s)` : "…"}`
-        ),
-        h("div", {className: "insp-form-grid"},
-          h("label", {className: "insp-field"},
-            h("span", null, "First Name"),
-            h("input", {
-              value: cf.firstName,
-              onChange: e => setCf({...cf, firstName: e.target.value})
-            })
-          ),
-          h("label", {className: "insp-field"},
-            h("span", null, "Last Name *"),
-            h("input", {
-              value: cf.lastName,
-              onChange: e => setCf({...cf, lastName: e.target.value})
-            })
-          ),
-          h("label", {className: "insp-field"},
-            h("span", null, "Email *"),
-            h("input", {
-              value: cf.email,
-              placeholder: "user@company.com",
-              onChange: e => setCf({...cf, email: e.target.value})
-            })
-          ),
-          h("label", {className: "insp-field"},
-            h("span", null, "Username *"),
-            h("input", {
-              value: cf.username,
-              placeholder: "name@company.org (globally unique)",
-              onChange: e => setCf({...cf, username: e.target.value})
-            })
-          ),
-          h("label", {className: "insp-field"},
-            h("span", null, "Alias (≤8)"),
-            h("input", {
-              value: cf.alias,
-              onChange: e => setCf({...cf, alias: e.target.value})
-            })
-          ),
-          h("label", {className: "insp-field"},
-            h("span", null, "Nickname"),
-            h("input", {
-              value: cf.nick,
-              placeholder: "defaults to username prefix",
-              onChange: e => setCf({...cf, nick: e.target.value})
-            })
-          ),
-          h("label", {className: "insp-field insp-field-grow"},
-            h("span", null, "Password (optional, admin-set)"),
-            h("input", {
-              type: "password",
-              value: cf.password,
-              placeholder: "leave blank to skip",
-              onChange: e => setCf({...cf, password: e.target.value})
-            })
-          ),
-          h("label", {className: "insp-field insp-field-grow"},
-            h("span", null, "Profile * (cloned from source)"),
-            h("select", {
-              value: cf.profileId,
-              onChange: e => setCf({...cf, profileId: e.target.value})
-            },
-              h("option", {value: ""}, "— pick —"),
-              profiles.map(p => h("option", {key: p.id, value: p.id}, p.name))
-            )
-          ),
-          h("label", {className: "insp-field insp-field-grow"},
-            h("span", null, "Role (cloned from source)"),
-            h("select", {
-              value: cf.roleId,
-              onChange: e => setCf({...cf, roleId: e.target.value})
-            },
-              h("option", {value: ""}, "— none —"),
-              roles.map(r => h("option", {key: r.id, value: r.id}, r.name))
-            )
+          h("button", {
+            className: "btn btn-secondary btn-sm",
+            onClick: copyId
+          }, "Copy Id"),
+          ffIsSfId(sel.Id) && h("button", {
+            className: "btn btn-secondary btn-sm",
+            title: "Open this user in Salesforce",
+            onClick: (e) => openRecordInSf(sel.Id, e)
+          }, "View in Salesforce")
+          )
+        ) : h("div", {className: "sq3-card"},
+          h("div", {className: "insp-meta"}, "Select a user on the left to inspect details, permissions and login info.")),
+        sel && h("div", {className: "sq3-card"},
+          h("div", {className: "usr-tabs", role: "tablist"},
+            USR_TABS.map(([id, label]) =>
+              h("button", {
+                key: id,
+                role: "tab",
+                className: "usr-tab" + (userTab === id ? " active" : ""),
+                "aria-selected": userTab === id ? "true" : "false",
+                onClick: () => setUserTab(id)
+              }, label)))),
+        sel && userTab === "details" && h("div", {className: "usr-grid2"},
+          h("div", {className: "sq3-card"},
+            h("div", {className: "sq3-card-h"},
+              h("span", {className: "sq3-card-t"}, "User Information")),
+            h("div", {className: "usr-kv"},
+              [["First Name", srcRec && srcRec.FirstName],
+               ["Last Name", srcRec && srcRec.LastName],
+               ["Email", sel.Email],
+               ["Username", sel.Username],
+               ["Alias", sel.Alias],
+               ["Nickname", srcRec && srcRec.CommunityNickname],
+               ["Phone", srcRec && srcRec.Phone],
+               ["Mobile", srcRec && srcRec.MobilePhone],
+               ["Language", sel.Language],
+               ["Time Zone", srcRec && srcRec.TimeZoneSidKey],
+               ["Locale", srcRec && srcRec.LocaleSidKey],
+               ["Email Encoding", srcRec && srcRec.EmailEncodingKey]
+              ].map(([k, v]) =>
+                h("div", {key: k, className: "usr-kv-row"},
+                  h("span", {className: "usr-kv-k"}, k),
+                  h("span", {className: "usr-kv-v"}, v || "—"))))),
+          h("div", null,
+            h("div", {className: "sq3-card"},
+              h("div", {className: "sq3-card-h"},
+                h("span", {className: "sq3-card-t"}, "Account & Login")),
+              h("div", {className: "usr-kv"},
+                [["User ID", sel.Id],
+                 ["User Type", sel.UserType],
+                 ["Last Login", detail && detail.lastLogin ? fmtDateTime(detail.lastLogin) : null],
+                 ["Created Date", detail && detail.created ? fmtDateTime(detail.created) : null],
+                 ["Last Modified Date", srcRec && srcRec.LastModifiedDate ? fmtDateTime(srcRec.LastModifiedDate) : null],
+                 ["Login IP", loginIp]
+                ].map(([k, v]) =>
+                  h("div", {key: k, className: "usr-kv-row"},
+                    h("span", {className: "usr-kv-k"}, k),
+                    h("span", {className: "usr-kv-v"}, v || "—"))),
+                h("div", {className: "usr-kv-row"},
+                  h("span", {className: "usr-kv-k"}, "Is Active"),
+                  h("span", {className: "usr-kv-v"},
+                    sel.Active != null && h(FFBadge, {kind: ffTruthy(sel.Active) ? "ok" : "off"},
+                      ffTruthy(sel.Active) ? "Yes" : "No"))))),
+            h("div", {className: "sq3-card"},
+              h("div", {className: "sq3-card-h"},
+                h("span", {className: "sq3-card-t"}, "Quick Actions")),
+              h("div", {className: "usr-qa"},
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  disabled: busy === "login",
+                  onClick: () => loginAs(false)
+                }, "Login As"),
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  title: "Create a new user with the same profile, role, permission sets and groups",
+                  onClick: () => (cloneOpen ? setCloneOpen(false) : openClone())
+                }, cloneOpen ? "Close Clone" : "Clone User"),
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  disabled: resetting,
+                  title: "Invalidate the current password and email the user a reset link (also unlocks a locked-out account)",
+                  onClick: resetPassword
+                }, resetting ? "Sending…" : "Reset Password")))
           )
         ),
-        h("div", {className: "insp-toolbar insp-toolbar-wrap", style: {marginTop: "8px"}},
-          srcPerms && h(MultiCheckDropdown, {
-            label: "Permission sets",
-            items: [...srcPerms.ps, ...srcPerms.psg],
-            selected: cf.psIds,
-            onChange: (psIds) => setCf({...cf, psIds})
-          }),
-          srcPerms && h(MultiCheckDropdown, {
-            label: "Public groups",
-            items: srcPerms.groups,
-            selected: cf.grpIds,
-            onChange: (grpIds) => setCf({...cf, grpIds})
-          }),
+        sel && userTab === "ps" && h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-t"}, "Permission Sets")),
+          !srcPerms && h("div", {className: "insp-meta"}, "Loading assignments…"),
+          srcPerms && !(srcPerms.ps.length + srcPerms.psg.length) &&
+            h("div", {className: "insp-meta"}, "No direct permission set assignments (profile permissions still apply)."),
+          srcPerms && [...srcPerms.psg, ...srcPerms.ps].map(p =>
+            h("div", {key: p.id, className: "usr-kv-row"},
+              h("span", {className: "usr-kv-v"}, p.name),
+              h("span", {className: "usr-kv-k"}, srcPerms.psg.some(g => g.id === p.id) ? "Group" : "Set")))),
+        sel && userTab === "groups" && h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-t"}, "Groups")),
+          !srcPerms && h("div", {className: "insp-meta"}, "Loading memberships…"),
+          srcPerms && !srcPerms.groups.length &&
+            h("div", {className: "insp-meta"}, "No public group or queue memberships."),
+          srcPerms && srcPerms.groups.map(g =>
+            h("div", {key: g.id, className: "usr-kv-row"},
+              h("span", {className: "usr-kv-v"}, g.name),
+              h("span", {className: "usr-kv-k ff-mono"}, g.id)))),
+        sel && userTab === "profile" && h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-t"}, "Profiles")),
+          h("div", {className: "usr-kv"},
+            h("div", {className: "usr-kv-row"},
+              h("span", {className: "usr-kv-k"}, "Profile"),
+              h("span", {className: "usr-kv-v"},
+                detailLoading ? "…" : (detail ? detail.profile : "—"))),
+            h("div", {className: "usr-kv-row"},
+              h("span", {className: "usr-kv-k"}, "Profile ID"),
+              h("span", {className: "usr-kv-v ff-mono"}, sel.ProfileId || "—")))),
+        sel && userTab === "role" && h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-t"}, "Roles")),
+          h("div", {className: "usr-kv"},
+            h("div", {className: "usr-kv-row"},
+              h("span", {className: "usr-kv-k"}, "Role"),
+              h("span", {className: "usr-kv-v"},
+                detailLoading ? "…" : (detail ? (detail.role || "No role") : "—"))),
+            h("div", {className: "usr-kv-row"},
+              h("span", {className: "usr-kv-k"}, "Role ID"),
+              h("span", {className: "usr-kv-v ff-mono"}, sel.RoleId || "—")))),
+        sel && userTab === "settings" && h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-t"}, "Settings")),
+          h("div", {className: "usr-kv"},
+            [["Language", sel.Language],
+             ["Time Zone", srcRec && srcRec.TimeZoneSidKey],
+             ["Locale", srcRec && srcRec.LocaleSidKey],
+             ["Email Encoding", srcRec && srcRec.EmailEncodingKey]
+            ].map(([k, v]) =>
+              h("div", {key: k, className: "usr-kv-row"},
+                h("span", {className: "usr-kv-k"}, k),
+                h("span", {className: "usr-kv-v"}, v || "—"))),
+            h("div", {className: "usr-kv-row"},
+              h("span", {className: "usr-kv-k"}, "Active"),
+              h("span", {className: "usr-kv-v"},
+                sel.Active != null && h(FFBadge, {kind: ffTruthy(sel.Active) ? "ok" : "off"},
+                  ffTruthy(sel.Active) ? "Yes" : "No"))))),
+      )),
+    sel && cloneOpen && h("div", {className: "usr-modal-veil",
+      onClick: (e) => { if (e.target === e.currentTarget) setCloneOpen(false); }},
+      h("div", {className: "usr-modal sq3-card", role: "dialog", "aria-label": "Clone User"},
+        h("div", {className: "usr-modal-h"},
+          h("span", {className: "usr-avatar usr-avatar-lg", "aria-hidden": "true"}, usrInitials(sel)),
+          h("div", {className: "usr-modal-t"},
+            h("div", {className: "sq3-card-t"}, "Clone User"),
+            h("div", {className: "sq3-card-sub"},
+              "Create a new user by cloning all settings from the selected user. You can choose which components to include or exclude.")),
+          h("button", {
+            className: "btn btn-secondary btn-sm",
+            title: "Close",
+            onClick: () => setCloneOpen(false)
+          }, "✕")),
+        h("div", {className: "usr-steps"},
+          [["1", "Select User & Details"], ["2", "Review & Clone"]].map(([n, label], i) =>
+            h("div", {key: n, className: "usr-step" + (cloneStep === i + 1 ? " active" : "")},
+              h("span", {className: "usr-step-n"}, n),
+              h("span", {className: "usr-step-t"}, label)))),
+        srcLoading && h("div", {className: "insp-meta"}, "Loading profile, role and assignments…"),
+        !srcLoading && cf && cloneStep === 1 && h("div", null,
+          h("div", {className: "usr-src"},
+            h("span", {className: "usr-avatar usr-avatar-lg", "aria-hidden": "true"}, usrInitials(sel)),
+            h("div", {className: "usr-src-tx"},
+              h("div", {className: "usr-src-name"},
+                sel.Name, " ",
+                sel.Active != null && h(FFBadge, {kind: ffTruthy(sel.Active) ? "ok" : "off"},
+                  ffTruthy(sel.Active) ? "Active" : "Inactive")),
+              h("div", {className: "usr-src-sub"}, sel.Email || sel.Username || ""),
+              h("div", {className: "usr-src-sub"}, detail ? detail.profile : "…")),
+            h("div", {className: "usr-src-meta"},
+              [["User ID", sel.Id],
+               ["Last Login", detail && detail.lastLogin ? fmtDateTime(detail.lastLogin) : null],
+               ["Created Date", detail && detail.created ? fmtDateTime(detail.created) : null]
+              ].map(([k, v]) =>
+                h("div", {key: k, className: "usr-src-mrow"},
+                  h("span", {className: "usr-kv-k"}, k),
+                  h("span", {className: "usr-kv-v"}, v || "—"))))),
+          h("div", {className: "usr-comp-h"},
+            h("span", {className: "sq3-card-t"}, "1. Select Components to Clone"),
+            h("label", {className: "usr-selectall"},
+              h("input", {
+                type: "checkbox",
+                checked: compSel.profile && compSel.ps && compSel.groups && compSel.roles,
+                onChange: (e) => {
+                  const on = e.target.checked;
+                  setCompSel({profile: on, ps: on, groups: on, roles: on});
+                  if (!cf) return;
+                  setCf({...cf,
+                    profileId: on ? (srcRec && srcRec.ProfileId || sel.ProfileId || "") : "",
+                    roleId: on ? (srcRec && srcRec.UserRoleId || sel.RoleId || "") : "",
+                    psIds: on && srcPerms ? [...srcPerms.ps, ...srcPerms.psg].map(p => p.id) : [],
+                    grpIds: on && srcPerms ? srcPerms.groups.map(g => g.id) : []});
+                }
+              }),
+              h("span", null, "Select All"))),
+          h("div", {className: "insp-meta"}, "Choose which settings and data should be copied to the new user."),
+          [["profile", "Profile", "User profile" + (detail ? ` (e.g., ${detail.profile})` : "")],
+           ["ps", "Permission Sets", srcPerms ? `${srcPerms.ps.length + srcPerms.psg.length} assigned permission set(s)` : "Assigned permission sets"],
+           ["groups", "Groups", srcPerms ? `${srcPerms.groups.length} user group(s) and public group(s)` : "User groups and public groups"],
+           ["roles", "Roles", "Role and role hierarchy"]
+          ].map(([key, label, sub]) =>
+            h("label", {key, className: "usr-comp"},
+              h("input", {
+                type: "checkbox",
+                checked: !!compSel[key],
+                onChange: () => toggleComp(key)
+              }),
+              h("span", {className: "usr-comp-tx"},
+                h("span", {className: "usr-comp-t"}, label),
+                h("span", {className: "usr-comp-s"}, sub)))),
+          h("div", {className: "usr-comp-h"},
+            h("span", {className: "sq3-card-t"}, "2. New User Details")),
+          h("div", {className: "insp-meta"}, "Enter the details for the cloned user."),
+          h("div", {className: "insp-form-grid"},
+            h("label", {className: "insp-field"},
+              h("span", null, "First Name"),
+              h("input", {
+                value: cf.firstName,
+                onChange: e => setCf({...cf, firstName: e.target.value})
+              })
+            ),
+            h("label", {className: "insp-field"},
+              h("span", null, "Last Name *"),
+              h("input", {
+                value: cf.lastName,
+                onChange: e => setCf({...cf, lastName: e.target.value})
+              })
+            ),
+            h("label", {className: "insp-field"},
+              h("span", null, "Email *"),
+              h("input", {
+                value: cf.email,
+                placeholder: "user@company.com",
+                onChange: e => setCf({...cf, email: e.target.value})
+              })
+            ),
+            h("label", {className: "insp-field"},
+              h("span", null, "Username *"),
+              h("input", {
+                value: cf.username,
+                placeholder: "name@company.org (globally unique)",
+                onChange: e => setCf({...cf, username: e.target.value})
+              })
+            ),
+            h("label", {className: "insp-field"},
+              h("span", null, "Alias (≤8)"),
+              h("input", {
+                value: cf.alias,
+                onChange: e => setCf({...cf, alias: e.target.value})
+              })
+            ),
+            h("label", {className: "insp-field"},
+              h("span", null, "Nickname"),
+              h("input", {
+                value: cf.nick,
+                placeholder: "defaults to username prefix",
+                onChange: e => setCf({...cf, nick: e.target.value})
+              })
+            ),
+            h("label", {className: "insp-field insp-field-grow"},
+              h("span", null, "Password (optional, admin-set)"),
+              h("input", {
+                type: "password",
+                value: cf.password,
+                placeholder: "leave blank to skip",
+                onChange: e => setCf({...cf, password: e.target.value})
+              })
+            ),
+            h("label", {className: "insp-field insp-field-grow"},
+              h("span", null, "Profile * (cloned from source)"),
+              h("select", {
+                value: cf.profileId,
+                onChange: e => setCf({...cf, profileId: e.target.value})
+              },
+                h("option", {value: ""}, "— pick —"),
+                profiles.map(p => h("option", {key: p.id, value: p.id}, p.name))
+              )
+            ),
+            h("label", {className: "insp-field insp-field-grow"},
+              h("span", null, "Role (cloned from source)"),
+              h("select", {
+                value: cf.roleId,
+                onChange: e => setCf({...cf, roleId: e.target.value})
+              },
+                h("option", {value: ""}, "— none —"),
+                roles.map(r => h("option", {key: r.id, value: r.id}, r.name))
+              )
+            )
+          ),
           h("label", {className: "insp-check"},
             h("input", {
               type: "checkbox",
@@ -5174,12 +5757,68 @@ function UsersTab() {
             }),
             h("span", null, "Active")
           ),
-          h("button", {
-            className: "btn btn-primary btn-sm",
-            disabled: cloning,
-            onClick: doClone
-          }, cloning ? "Creating…" : "Create cloned user")
-        )
+          cloneErr && h("div", {className: "insp-error"}, cloneErr),
+          h("div", {className: "usr-modal-nav"},
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              onClick: () => setCloneOpen(false)
+            }, "Cancel"),
+            h("button", {
+              className: "btn btn-primary btn-sm",
+              onClick: () => {
+                const p = validateClone();
+                if (p) { setCloneErr(p); return; }
+                setCloneErr(null);
+                setCloneStep(2);
+              }
+            }, "Next →"))
+        ),
+        !srcLoading && cf && cloneStep === 2 && h("div", null,
+          h("div", {className: "usr-comp-h"},
+            h("span", {className: "sq3-card-t"}, "3. Review & Clone")),
+          h("div", {className: "insp-meta"}, "Confirm the new user before creating it."),
+          h("div", {className: "usr-kv"},
+            [["Source user", `${sel.Name} (${sel.Username})`],
+             ["New name", `${cf.firstName} ${cf.lastName}`.trim() || "—"],
+             ["Email", cf.email || "—"],
+             ["Username", cf.username || "—"],
+             ["Alias", cf.alias || "—"],
+             ["Profile", compSel.profile
+               ? ((profiles.find(p => p.id === cf.profileId) || {}).name || detail && detail.profile || "—")
+               : "— excluded —"],
+             ["Role", compSel.roles
+               ? ((roles.find(r => r.id === cf.roleId) || {}).name || "— none —")
+               : "— excluded —"],
+             ["Permission sets", compSel.ps ? `${cf.psIds.length} selected` : "— excluded —"],
+             ["Groups", compSel.groups ? `${cf.grpIds.length} selected` : "— excluded —"],
+             ["Active", cf.active ? "Yes" : "No"],
+             ["Password", cf.password ? "Will be set" : "Skipped"]
+              ].map(([k, v]) =>
+                h("div", {key: k, className: "usr-kv-row"},
+                  h("span", {className: "usr-kv-k"}, k),
+                  h("span", {className: "usr-kv-v"}, v || "—")))),
+          cloneErr && h("div", {className: "insp-error"}, cloneErr),
+          cloneResult && h("div", {className: cloneResult.ok ? "insp-ok" : "insp-warn"},
+            cloneResult.summary,
+            cloneResult.failures && cloneResult.failures.length > 0 &&
+              h("div", null, "First issues: " + cloneResult.failures.join("; "))
+          ),
+          h("div", {className: "usr-modal-nav"},
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: cloning,
+              onClick: () => setCloneStep(1)
+            }, "← Previous"),
+            cloneResult && cloneResult.ok
+              ? h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  onClick: () => setCloneOpen(false)
+                }, "Done")
+              : h("button", {
+                  className: "btn btn-primary btn-sm",
+                  disabled: cloning,
+                  onClick: doClone
+                }, cloning ? "Creating…" : "Create cloned user")))
       )
     ),
     cloneResult && h("div", {className: cloneResult.ok ? "insp-ok" : "insp-warn"},
@@ -5246,10 +5885,87 @@ for (Account a : accs) {
 System.debug('Uncomment the line above to run your batch');`}
 ];
 
-async function apexExecute(code) {
+async function apexExecute(code, opts) {
+  const timeoutMs = opts && opts.timeoutMs > 0 ? opts.timeoutMs : 0;
   const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/executeAnonymous/?anonymousBody=` +
-    encodeURIComponent(code), {useCache: false});
+    encodeURIComponent(code), {useCache: false, timeoutMs});
   return res || {};
+}
+
+// Debug log level support: one DebugLevel record per level value
+// (all workflow categories set to that level), then a 30-minute user
+// TraceFlag pointing at it. Best-effort — callers proceed with org
+// defaults when any step fails.
+const _apexDebugLevelCache = {};
+async function apexDebugLevelId(level) {
+  const name = "SaralForce_" + level;
+  if (_apexDebugLevelCache[name]) return _apexDebugLevelCache[name];
+  const found = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
+    encodeURIComponent(`SELECT Id FROM DebugLevel WHERE DeveloperName = '${name}' LIMIT 1`),
+    {useCache: false});
+  if (found.records && found.records.length) {
+    _apexDebugLevelCache[name] = found.records[0].Id;
+    return found.records[0].Id;
+  }
+  const created = await sfConn.rest(`/services/data/v${apiVersion}/tooling/sobjects/DebugLevel`, {
+    method: "POST",
+    body: {
+      DeveloperName: name, MasterLabel: name,
+      ApexCode: level, ApexProfiling: level, Callout: level,
+      Database: level, System: level, Validation: level,
+      Visualforce: level, Workflow: level
+    }
+  });
+  if (!created || !created.id) throw new Error("DebugLevel create returned no id");
+  _apexDebugLevelCache[name] = created.id;
+  return created.id;
+}
+
+async function apexEnsureTraceFlag(logLevel) {
+  const userId = await appTabsResolveCurrentUserId();
+  const existing = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
+    encodeURIComponent(
+      `SELECT Id FROM TraceFlag WHERE TracedEntityId = '${userId}' AND ExpirationDate > ${new Date().toISOString()} LIMIT 1`),
+    {useCache: false});
+  if (existing.records && existing.records.length) return existing.records[0].Id;
+  const levelId = await apexDebugLevelId(logLevel);
+  const start = new Date();
+  const exp = new Date(start.getTime() + 30 * 60000);
+  const created = await sfConn.rest(`/services/data/v${apiVersion}/tooling/sobjects/TraceFlag`, {
+    method: "POST",
+    body: {
+      TracedEntityId: userId, LogType: "USER_DEBUG", DebugLevelId: levelId,
+      StartDate: start.toISOString(), ExpirationDate: exp.toISOString()
+    }
+  });
+  if (!created || !created.id) throw new Error("TraceFlag create returned no id");
+  return created.id;
+}
+
+// Brace-aware Apex indent formatter (best-effort: strings/comments are
+// masked before brace counting so braces inside them can't misalign code).
+function formatApexCode(src) {
+  const lines = String(src == null ? "" : src).split("\n");
+  let depth = 0;
+  const out = [];
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim()) { out.push(""); continue; }
+    const masked = line
+      .replace(/'(?:\\.|[^'\\])*'/g, "''")
+      .replace(/"(?:\\.|[^"\\])*"/g, '""')
+      .replace(/\/\/.*$/, "");
+    let opens = 0, closes = 0;
+    for (const ch of masked) {
+      if (ch === "{") opens++;
+      else if (ch === "}") closes++;
+    }
+    const firstClose = /^\s*\}/.test(line);
+    if (firstClose) depth = Math.max(0, depth - 1);
+    out.push("  ".repeat(depth) + line.trim());
+    depth = Math.max(0, depth + opens - closes + (firstClose ? 1 : 0));
+  }
+  return out.join("\n");
 }
 
 async function apexLatestLog(sinceIso) {
@@ -5304,6 +6020,7 @@ function parseApexLog(text) {
 }
 
 function ApexTab() {
+  useSfTimeZoneTick();
   const [code, setCode] = ffUseSession("apex", "code", "System.debug('Hello from SaralForce');");
   const [running, setRunning] = React.useState(false);
   const [exec, setExec] = ffUseSession("apex", "exec", null);
@@ -5318,6 +6035,20 @@ function ApexTab() {
   const [history, setHistory] = React.useState(() => ffLoadJson("ff_apex_history", []));
   const [saved, setSaved] = React.useState(() => ffLoadJson("ff_apex_saved", []));
   const [saveLabel, setSaveLabel] = React.useState("");
+  const [logLevel, setLogLevel] = ffUseSession("apex", "logLevel", "Debug");
+  const [timeoutSec, setTimeoutSec] = ffUseSession("apex", "timeoutSec", 120);
+  const [durationMs, setDurationMs] = React.useState(null);
+  const [lastRunAt, setLastRunAt] = React.useState(null);
+  const [lastModified, setLastModified] = React.useState(null);
+  const [resultView, setResultView] = React.useState("logs");
+  const [resultsCollapsed, setResultsCollapsed] = React.useState(false);
+  const [showAllHistory, setShowAllHistory] = React.useState(false);
+  const [showAllSaved, setShowAllSaved] = React.useState(false);
+  const firstCode = React.useRef(true);
+  React.useEffect(() => {
+    if (firstCode.current) { firstCode.current = false; return; }
+    setLastModified(Date.now());
+  }, [code]);
   const taRef = React.useRef(null);
   const hlRef = React.useRef(null);
   const gutterRef = React.useRef(null);
@@ -5347,11 +6078,26 @@ function ApexTab() {
     const snippet = String(code || "");
     if (!label || !snippet.trim()) return;
     setSaved(prev => {
-      const next = [{label, code: snippet}, ...prev.filter(t => t.label !== label)].slice(0, 30);
+      const next = [{label, code: snippet, ts: Date.now()},
+        ...prev.filter(t => t.label !== label)].slice(0, 30);
       ffSaveJson("ff_apex_saved", next);
       return next;
     });
     setSaveLabel("");
+  };
+
+  const saveInputRef = React.useRef(null);
+  const focusSaveInput = () => {
+    const el = saveInputRef.current;
+    if (!el) return;
+    try {
+      el.scrollIntoView({behavior: "smooth", block: "nearest"});
+      el.focus({preventScroll: true});
+    } catch (e) { /* ignore */ }
+  };
+  const saveScriptOrFocus = () => {
+    if (saveLabel.trim() && String(code || "").trim()) { saveTemplate(); return; }
+    focusSaveInput();
   };
 
   const deleteTemplate = (label) => {
@@ -5412,6 +6158,11 @@ function ApexTab() {
       setError("Script is too long for URL-based execution — split it into smaller chunks.");
       return;
     }
+    const timeoutMs = Math.round(Number(timeoutSec) * 1000);
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 10000 || timeoutMs > 600000) {
+      setError("Timeout must be between 10 and 600 seconds.");
+      return;
+    }
     setRunning(true);
     setError(null);
     setExec(null);
@@ -5419,8 +6170,17 @@ function ApexTab() {
     setLogNote(null);
     setAiNote(null);
     setAiCheck(null);
+    setDurationMs(null);
     const startedAt = new Date().toISOString();
+    const startMs = Date.now();
     try {
+      // Log level: make sure a TraceFlag points at a matching DebugLevel.
+      // Any failure degrades to org defaults — the run still proceeds.
+      try {
+        await apexEnsureTraceFlag(logLevel);
+      } catch (e) {
+        setLogNote("TraceFlag setup failed (" + e.message + ") — continuing with org defaults.");
+      }
       // Pre-flight: with "Use AI" on, let the model scan for compile errors
       // first — a detected problem BLOCKS the run and shows a suggested fix.
       if (useAi && !skipAiCheck) {
@@ -5439,8 +6199,9 @@ function ApexTab() {
           setAiBusy(false);
         }
       }
-      const r = await apexExecute(snippet);
+      const r = await apexExecute(snippet, {timeoutMs});
       setExec(r);
+      setLastRunAt(new Date().toISOString());
       pushHistory(snippet, r.compiled && r.success);
       // Celebration only on a real success (compiled AND executed OK) —
       // compile problems, runtime failures and errors never trigger it.
@@ -5459,11 +6220,34 @@ function ApexTab() {
       }
       if (openLog) await fetchLog(startedAt);
     } catch (e) {
-      setError(e.message);
+      let msg = e.message;
+      // XHR timeout surfaces as a network error — label it when the run
+      // actually ran past the deadline.
+      if (timeoutMs && Date.now() - startMs >= timeoutMs - 250) {
+        msg += " (stopped: timeout reached)";
+      }
+      setError(msg);
       pushHistory(snippet, false);
     } finally {
+      setDurationMs(Date.now() - startMs);
       setRunning(false);
     }
+  };
+
+  const formatApex = () => {
+    const formatted = formatApexCode(code);
+    if (formatted !== code) setCode(formatted);
+  };
+
+  const clearApex = () => {
+    setCode("");
+    setExec(null);
+    setLog(null);
+    setLogNote(null);
+    setError(null);
+    setDurationMs(null);
+    setLastRunAt(null);
+    setSelRange({start: 0, end: 0});
   };
 
   const runHighlighted = () => {
@@ -5497,76 +6281,152 @@ function ApexTab() {
   const ok = exec && exec.compiled && exec.success;
   const hasSel = selRange.end > selRange.start && selRange.end <= String(code || "").length;
   const lineCount = Math.max(1, String(code || "").split("\n").length);
+  // Parsed once per render for the Logs + Result tabs (same row markup as
+  // before, probe-visible classes preserved).
+  const logRows = log ? parseApexLog(log) : [];
+  const logEvents = [...new Set(logRows.map(r => r.event).filter(Boolean))].sort();
+  const logRf = logFilter.trim().toLowerCase();
+  const logShown = logRows.filter(r =>
+    (!debugOnly || r.event === "USER_DEBUG") &&
+    (!eventFilter || r.event === eventFilter) &&
+    (!logRf || `${r.ts} ${r.event} ${r.details}`.toLowerCase().includes(logRf)));
+  const debugRows = logRows.filter(r => r.event === "USER_DEBUG");
 
   return h("div", {className: "insp-panel"},
-    h("p", {className: "insp-hint-strip"},
-      "Execute Anonymous Apex — same engine as the Developer Console (Debug → Open Execute Anonymous Window). Batch, callouts and queries all work."
-    ),
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("label", {className: "insp-field"},
-        h("span", null, "History"),
-        h("select", {
-          value: "",
-          onChange: e => {
-            const idx = parseInt(e.target.value, 10);
-            if (!isNaN(idx) && history[idx]) {
-              setCode(history[idx].code);
-              setSelRange({start: 0, end: 0});
-            }
-            e.target.value = "";
-          }
-        },
-          h("option", {value: ""}, history.length ? "— recent —" : "No history yet"),
-          history.map((hh, i) =>
-            h("option", {key: i, value: String(i)},
-              `${new Date(hh.ts).toLocaleString()} ${hh.ok ? "✓" : "✗"} — ${hh.code.slice(0, 60).replace(/\s+/g, " ")}`)
-          )
-        )
-      ),
-      h("div", {className: "insp-chips-row"},
-        h("span", {className: "insp-chips-label"}, "Templates:"),
-        APEX_TEMPLATES.map(t =>
+    h("div", {className: "apex-layout"},
+      h("div", {className: "apex-side"},
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_ZAP)),
+            h("span", {className: "sq3-card-t"}, "Apex Execution")),
+          h("div", {className: "sq3-card-sub"},
+            "Execute Apex code, run anonymous scripts, and view logs."),
+          h("div", {className: "apex-mini-row"},
+            h("label", {className: "apex-mini-field"},
+              h("span", null, "Log Level"),
+              h("select", {
+                value: logLevel,
+                onChange: e => setLogLevel(e.target.value)
+              }, APEX_LOG_LEVELS.map(l => h("option", {key: l, value: l}, l)))),
+            h("label", {className: "apex-mini-field"},
+              h("span", null, "Timeout (seconds)"),
+              h("input", {
+                type: "number", min: 10, max: 600,
+                value: timeoutSec,
+                onChange: e => setTimeoutSec(e.target.value)
+              }))),
           h("button", {
-            key: t.label,
-            className: "insp-chip",
-            title: "Insert template",
-            onClick: () => { setCode(t.code); setSelRange({start: 0, end: 0}); }
-          }, t.label)
-        )
-      ),
-      saved.length > 0 && h("div", {className: "insp-chips-row"},
-        h("span", {className: "insp-chips-label"}, "Saved:"),
-        saved.slice(0, 12).map(s =>
-          h("span", {key: s.label, className: "insp-chip-group"},
+            className: "btn btn-primary apex-exec-btn",
+            disabled: running || !String(code || "").trim(),
+            title: "Execute the whole script (Ctrl+Enter)",
+            onClick: () => run()
+          }, ffIcon(FF_I_ZAP), h("span", null, "Execute")),
+          h("span", {className: "sq3-kbd-hint"}, "Ctrl+Enter"),
+          h("button", {
+            className: "btn btn-secondary btn-sm apex-exec-btn apex-hl-btn",
+            disabled: running || !hasSel,
+            title: hasSel ? "Execute only the selected code" : "Select code in the editor first",
+            onClick: runHighlighted
+          }, "Execute Highlighted"),
+          h("div", {className: "sq3-btn-row"},
+            h("button", {className: "btn btn-secondary btn-sm", disabled: running, onClick: clearApex}, "Clear"),
+            h("button", {className: "btn btn-secondary btn-sm", disabled: running || !String(code || "").trim(), onClick: saveScriptOrFocus}, "Save Script"))
+        ),
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_CLOCK)),
+            h("span", {className: "sq3-card-t"}, "Recent Scripts"),
+            (history.length > 5) && h("button", {className: "sq3-viewall", onClick: () => setShowAllHistory(v => !v)},
+              showAllHistory ? "Show less" : `View All (${history.length})`)),
+          (showAllHistory ? history : history.slice(0, 5)).map((hh, i) =>
+            h("div", {
+              key: i,
+              className: "sq3-saved-row",
+              role: "button",
+              tabIndex: 0,
+              title: hh.code,
+              onClick: () => { setCode(hh.code); setSelRange({start: 0, end: 0}); },
+              onKeyDown: e => { if (e.key === "Enter") { setCode(hh.code); setSelRange({start: 0, end: 0}); } }
+            },
+              h("span", {className: "sq3-saved-ico", "aria-hidden": "true"}, ffIcon(FF_I_DOC)),
+              h("span", {className: "sq3-saved-tx"},
+                h("span", {className: "sq3-saved-label"}, apexRecentName(hh)),
+                h("span", {className: "sq3-saved-q"}, `Apex · ${ffFmtRelative(hh.ts)} ${hh.ok ? "✓" : "✗"}`)),
+              h("span", {className: "sq3-saved-chev", "aria-hidden": "true"}, "›"))),
+          !history.length && h("div", {className: "insp-meta"}, "No executions yet · run a script to see it here.")
+        ),
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_BOOKMARK)),
+            h("span", {className: "sq3-card-t"}, "Saved Scripts"),
+            (saved.length > 5) && h("button", {className: "sq3-viewall", onClick: () => setShowAllSaved(v => !v)},
+              showAllSaved ? "Show less" : `View All (${saved.length})`)),
+          h("div", {className: "insp-chips-row"},
+            (showAllSaved ? saved : saved.slice(0, 5)).map(s =>
+              h("span", {key: s.label, className: "insp-chip-group apex-saved-group"},
+                h("button", {
+                  className: "insp-chip apex-saved-chip",
+                  title: s.code.slice(0, 160),
+                  onClick: () => { setCode(s.code); setSelRange({start: 0, end: 0}); }
+                },
+                  h("span", {className: "sq3-saved-ico", "aria-hidden": "true"}, ffIcon(FF_I_DOC)),
+                  h("span", {className: "apex-saved-label"}, s.label),
+                  h("span", {className: "apex-saved-sub"},
+                    s.ts ? `Apex · ${ffFmtRelative(s.ts)}` : s.code.slice(0, 40).replace(/\s+/g, " ")),
+                  h("span", {className: "sq3-saved-chev", "aria-hidden": "true"}, "›")),
+                h("button", {
+                  className: "insp-chip-x",
+                  title: `Delete "${s.label}"`,
+                  onClick: () => deleteTemplate(s.label)
+                }, "×"))),
+          !saved.length && h("div", {className: "insp-meta"}, "Name the code below to save it as a reusable script."),
+          h("div", {className: "insp-toolbar soql-save-row"},
+            h("input", {
+              className: "soql-save-input apex-save-input",
+              ref: saveInputRef,
+              value: saveLabel,
+              placeholder: "Script label",
+              title: "Name the current code and save it as a reusable script",
+              onChange: e => setSaveLabel(e.target.value),
+              onKeyDown: e => { if (e.key === "Enter") saveTemplate(); }
+            }),
             h("button", {
-              className: "insp-chip",
-              title: s.code.slice(0, 160),
-              onClick: () => { setCode(s.code); setSelRange({start: 0, end: 0}); }
-            }, s.label),
-            h("button", {
-              className: "insp-chip-x",
-              title: `Delete "${s.label}"`,
-              onClick: () => deleteTemplate(s.label)
-            }, "×")
-          )
+              className: "btn btn-primary btn-sm",
+              disabled: !String(code || "").trim(),
+              onClick: saveTemplate
+            }, "Save"))
         )
-      ),
-      h("div", {className: "soql-save-row"},
-        h("input", {
-          className: "soql-save-input",
-          value: saveLabel,
-          placeholder: "Save as template…",
-          title: "Name the current code and save it as a reusable template",
-          onChange: e => setSaveLabel(e.target.value),
-          onKeyDown: e => { if (e.key === "Enter") saveTemplate(); }
-        }),
-        h("button", {
-          className: "btn btn-primary btn-sm",
-          disabled: !String(code || "").trim(),
-          onClick: saveTemplate
-        }, "Save")
-      )
-    ),
+      )),
+      h("div", {className: "apex-main"},
+        h("div", {className: "sq3-card sq3-editor-card"},
+          h("div", {className: "insp-card-header sq3-card-head"},
+            h("div", {className: "sq3-title-wrap"},
+              h("span", {className: "sq3-code-ico", "aria-hidden": "true"}, "</>"),
+              h("div", null,
+                h("div", {className: "insp-card-title"}, "Apex Code Editor"),
+                h("div", {className: "sq3-card-sub"},
+                  "Write and execute your Apex code. Use the options below to run, format or save your script."))),
+            h("div", {className: "insp-card-actions"},
+              h("button", {
+                type: "button",
+                role: "switch",
+                className: `apex-ai-toggle${useAi ? " is-on" : ""}`,
+                onClick: () => {
+                  const v = !useAi;
+                  setUseAi(v);
+                  if (!v) { setAiCheck(null); setAiNote(null); }
+                },
+                title: useAi
+                  ? "AI pre-check is ON — code is scanned before each run; compile errors get a suggested fix"
+                  : "Turn on to let AI scan your code before each run and fix compile errors",
+                "aria-checked": useAi ? "true" : "false",
+                "aria-pressed": useAi ? "true" : "false"
+              },
+                h("span", {className: "apex-ai-spark", "aria-hidden": "true"}, "✨"),
+                h("span", {className: "apex-ai-label"}, "Use AI"),
+                h("span", {className: "apex-ai-track", "aria-hidden": "true"},
+                  h("span", {className: "apex-ai-thumb"}))))
+          ),
     h("div", {className: "apex-term"},
       h("div", {className: "apex-gutter", ref: gutterRef, "aria-hidden": "true"},
         Array.from({length: lineCount}, (_, i) =>
@@ -5603,6 +6463,22 @@ function ApexTab() {
       ),
       h(Celebrate, {seq: celeb, onDone: () => setCeleb(0)})
     ),
+        h("div", {className: "apex-meta-row"},
+          h("span", {className: "apex-meta-chip"}, "Language: Apex"),
+          h("span", {className: "apex-meta-chip"}, `Lines: ${lineCount}`),
+          lastModified && h("span", {className: "apex-meta-chip"}, `Last Modified: ${new Date(lastModified).toLocaleString()}`),
+          h("label", {className: "apex-tpl-wrap"},
+            h("span", null, "Quick Templates"),
+            h("select", {
+              value: "",
+              onChange: e => {
+                const tp = APEX_TEMPLATES.find(x => x.label === e.target.value);
+                if (tp) { setCode(tp.code); setSelRange({start: 0, end: 0}); }
+                e.target.value = "";
+              }
+            },
+              h("option", {value: ""}, "Quick Templates"),
+              APEX_TEMPLATES.map(t => h("option", {key: t.label, value: t.label}, t.label))))),
     h("div", {className: "apex-bar"},
       h("label", {className: "insp-check", title: "Fetch the debug log automatically after each run"},
         h("input", {
@@ -5612,47 +6488,12 @@ function ApexTab() {
         }),
         h("span", null, "Open Log")
       ),
-      h("button", {
-        type: "button",
-        className: `apex-ai-toggle${useAi ? " is-on" : ""}`,
-        onClick: () => {
-          const v = !useAi;
-          setUseAi(v);
-          if (!v) {
-            setAiCheck(null);
-            setAiNote(null);
-          }
-        },
-        title: useAi
-          ? "AI pre-check is ON — code is scanned before each run; compile errors get a suggested fix"
-          : "Turn on to let AI scan your code before each run and fix compile errors",
-        "aria-pressed": useAi ? "true" : "false"
-      },
-        h("span", {className: "apex-ai-spark", "aria-hidden": "true"}, "\u2728"),
-        h("span", null, "Use AI"),
-        h("span", {className: "apex-ai-state"}, useAi ? "ON" : "OFF")
-      ),
-      useAi && h("span", {className: "apex-ai-hint"},
-        "pre-checks code before each run"),
       log && h("button", {
         className: "btn btn-secondary btn-sm",
         onClick: downloadLog
-      }, "Download Log"),
-      h("div", {className: "apex-bar-end"},
-        h("button", {
-          className: "btn btn-primary btn-sm",
-          disabled: running || !code.trim(),
-          title: "Execute the whole script (Ctrl+Enter)",
-          onClick: () => run()
-        }, running ? "Executing…" : "Execute"),
-        h("button", {
-          className: "btn btn-secondary btn-sm",
-          disabled: running || !hasSel,
-          title: hasSel ? "Execute only the selected code" : "Select code in the editor first",
-          onClick: runHighlighted
-        }, "Execute Highlighted")
-      )
+      }, "Download Log")
     ),
+        ),
     error && h("div", {className: "insp-error"}, error),
     exec && (ok
       ? h("div", {className: "insp-ok"}, "Apex executed successfully (compiled ✓).")
@@ -5694,6 +6535,34 @@ function ApexTab() {
         }, "Copy")
       )
     ),
+    h("div", {className: "sq3-card sq3-results-card"},
+      h("div", {className: "apex-results-head"},
+        h("div", {className: "sq3-card-h"},
+          h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_DOC)),
+          h("span", {className: "sq3-card-t"}, "Execution Results")),
+        h("div", {className: "apex-results-meta"},
+          running && h("span", {className: "apex-status-pill running"}, "Running"),
+          (!running && exec) && h("span", {className: "apex-status-pill " + (ok ? "ok" : "bad")}, ok ? "Success" : "Failed"),
+          durationMs != null && h("span", {className: "apex-duration"}, `${(durationMs / 1000).toFixed(2)}s`),
+          h("button", {
+            className: "apex-collapse-btn" + (resultsCollapsed ? " collapsed" : ""),
+            title: resultsCollapsed ? "Expand results" : "Collapse results",
+            "aria-expanded": (!resultsCollapsed).toString(),
+            "aria-label": resultsCollapsed ? "Expand results" : "Collapse results",
+            onClick: () => setResultsCollapsed(v => !v)
+          },
+            h("span", {className: "apex-collapse-chev", "aria-hidden": "true"}, resultsCollapsed ? "▸" : "▾"),
+            h("span", null, resultsCollapsed ? "Expand" : "Collapse")))),
+      !resultsCollapsed && h("div", {className: "apex-results-body"},
+        ((!exec && !running && !error) && h("div", {className: "apex-empty"},
+          h("div", {className: "apex-empty-t"}, "No execution yet"),
+          h("div", {className: "insp-meta"}, "Run a script above to see execution results here."))),
+        ((exec || log || logLoading || logNote) && h("div", {className: "apex-result-tabs", role: "tablist"},
+          [["logs", "Logs"], ["result", "Result"], ["debug", "Debug Info"]].map(([id, label]) =>
+            h("button", {key: id, className: "apex-result-tab" + (resultView === id ? " active" : ""),
+              role: "tab", "aria-selected": resultView === id ? "true" : "false",
+              onClick: () => setResultView(id)}, label)))),
+        ((exec || log || logLoading || logNote) && resultView === "logs" && h("div", null,
     (logLoading || log || logNote) && h("div", {className: "insp-meta"},
       logLoading
         ? "Fetching debug log…"
@@ -5783,11 +6652,51 @@ function ApexTab() {
           h("pre", {className: "insp-log"}, log)
         )
       );
-    })()
-  );
+    })(),
+        )),
+        ((exec || log || logLoading || logNote) && resultView === "result" && h("div", null,
+          debugRows.length
+            ? h("div", {className: "insp-table-wrap insp-log-table apex-logview"},
+                h("table", {className: "insp-table"},
+                  h("thead", null, h("tr", null,
+                    h("th", null, "Timestamp"),
+                    h("th", null, "Event"),
+                    h("th", null, "Details"))),
+                  h("tbody", null, debugRows.slice(0, 2000).map((r, i) =>
+                    h("tr", {key: i, className: "insp-row-hl"},
+                      h("td", {className: "insp-nowrap"}, r.ts),
+                      h("td", null, h("span", {className: "ff-log-ev", title: r.event}, r.event)),
+                      h("td", {className: "insp-nowrap", title: r.details}, r.details))))))
+            : h("div", {className: "insp-empty"}, "No System.debug output in this log."))),
+        ((exec || log || logLoading || logNote) && resultView === "debug" && h("div", null,
+          h("dl", {className: "apex-debug-list"},
+            h("div", {className: "apex-debug-row"},
+              h("dt", null, "Status"),
+              h("dd", null, running ? "Running" : exec ? (ok ? "Success" : "Failed") : "No run yet")),
+            h("div", {className: "apex-debug-row"},
+              h("dt", null, "Compiled"),
+              h("dd", null, !exec ? "No run yet" : exec.compiled ? "Yes" : "No")),
+            exec && exec.compileProblem && h("div", {className: "apex-debug-row"},
+              h("dt", null, "Compile problem"),
+              h("dd", null, `${exec.compileProblem}${exec.line ? ` (line ${exec.line}${exec.column ? ", column " + exec.column : ""})` : ""}`)),
+            exec && exec.exceptionMessage && h("div", {className: "apex-debug-row"},
+              h("dt", null, "Exception"),
+              h("dd", null, exec.exceptionMessage)),
+            h("div", {className: "apex-debug-row"},
+              h("dt", null, "Duration"),
+              h("dd", null, durationMs != null ? `${(durationMs / 1000).toFixed(2)}s` : "n/a")),
+            h("div", {className: "apex-debug-row"},
+              h("dt", null, "Log size"),
+              h("dd", null, log ? `${log.length} chars` : "n/a")),
+            h("div", {className: "apex-debug-row"},
+              h("dt", null, "Executed at"),
+              h("dd", null, lastRunAt ? new Date(lastRunAt).toLocaleString() : "n/a"))))),
+      ),
+    ),
+  ),
+  ),
+);
 }
-
-// ─── Logs tab: trace flags + debug log search + AI analysis ──
 function ffDatetimeLocal(d) {
   const p = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
@@ -5796,8 +6705,16 @@ function ffDatetimeLocal(d) {
 
 function ffFmtTs(x) {
   if (!x) return "—";
-  const d = new Date(x);
-  return isNaN(d.getTime()) ? String(x) : d.toLocaleString();
+  kickSfTzFetch();
+  // Salesforce record instants (TraceFlag/Log StartTime) render in the SF
+  // user zone; date-only values pass through; local epoch numbers fall back.
+  if (isDateOnlyString(String(x))) return String(x).slice(0, 10);
+  const d = parseSfInstant(x);
+  if (!d) {
+    const t = new Date(x);
+    return isNaN(t.getTime()) ? String(x) : t.toLocaleString();
+  }
+  return formatSfDateTime(d);
 }
 
 async function logsToolingQuery(soql) {
@@ -6051,6 +6968,7 @@ function AnalysisReport({text, copied, onCopy}) {
 }
 
 function LogsTab() {
+  useSfTimeZoneTick();
   const [entityType, setEntityType] = ffUseSession("logs", "entityType", "User");
   const [lookupText, setLookupText] = React.useState("");
   const [lookupRes, setLookupRes] = React.useState([]);
@@ -7229,6 +8147,7 @@ function CoverageTab() {
 }
 
 export function InspectorPanel() {
+  useSfTimeZoneTick();
   const [tab, setTab] = ffUseSession("inspector", "tab", "records");
   const tabs = [
     {id: "records", label: "Records", icon: "🗂️"},
