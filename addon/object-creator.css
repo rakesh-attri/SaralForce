@@ -5487,6 +5487,7 @@ html.dark .message.message-system::after, html[data-theme="dark"] .message.messa
 .sq3-card-llm {
   min-height: 138px;
   padding: 18px;
+  overflow: hidden;
 }
 
 .sq3-editor-card {
@@ -6145,7 +6146,8 @@ input[type="radio"] {
   margin-left: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .sq3-info-panel {

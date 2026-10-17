@@ -1,6 +1,8 @@
 # SaralForce - AI Object Builder & Org Toolkit
 
-A Chrome browser extension that uses LLM (Large Language Models) to help you design and create Salesforce custom objects and fields from natural language descriptions.
+A Chrome browser extension that pairs an LLM (Large Language Models) object designer with a
+full Salesforce inspector — build custom objects from natural language, then run SOQL, execute
+Apex, manage users, read debug logs and inspect your org without leaving the page.
 
 Session handling builds on ideas from [Salesforce Inspector Reloaded](https://github.com/tprouvot/Salesforce-Inspector-reloaded) (MIT licensed — see `LICENSE` and `THIRD-PARTY-NOTICES.md`). SaralForce is an independent project by Bhajan Mandali and is not affiliated with, sponsored, or endorsed by Salesforce, Inc.
 
@@ -9,20 +11,15 @@ Session handling builds on ideas from [Salesforce Inspector Reloaded](https://gi
 - **Natural Language Object Design**: Describe what data you want to capture in plain English, and the AI proposes a complete Salesforce object with fields
 - **Multi-LLM Support**: Works with OpenAI, Anthropic Claude, Google Gemini, and any OpenAI-compatible API (OpenCodeZen, etc.)
 - **Interactive Refinement**: Chat with the AI to modify the proposal - add fields, change types, adjust properties
-- **Visual Preview**: See the object schema before deploying - labels, API names, types, required flags
-- **One-Click Deploy**: Creates the custom object and all fields directly in your Salesforce org via the Tooling API
+- **Visual Preview (Plan / Build)**: Review the schema before deploying — labels, API names, types, required flags — then refine inline in Plan mode
+- **One-Click Deploy**: Creates the custom object and all fields directly in your Salesforce org via the Tooling API, with profile tab-visibility targets
 - **Relationship Fields**: AI suggests Lookup and Master-Detail relationships when appropriate
 - **Field Permissions**: Configurable field-level security during deployment
 - **AI Query Repair**: SOQL errors are explained and auto-fixed by the LLM with one-click apply
 - **AI Log Analysis**: Debug logs get a plain-English verdict plus per-log AI chat
-- **Inspector Tools**: SOQL runner, record browser, CSV export/import, user management, debug-log viewer with AI analysis, org info, app-tab assignment
+- **Inspector Tools**: Records browser (View / Read / Edit modes), SOQL runner, Apex executor, CSV export/import, user management with clone wizard, debug-log viewer with AI analysis, org info, app-tab assignment, code coverage
 
-## AI Features
-
-Every AI action uses the same LLM configured on the Options page — your API key stays in
-local storage, and only the relevant prompt/log text is sent to the provider you chose.
-
-### Object Builder chat
+## AI Object Builder
 
 Describe what you want in plain English and the AI proposes the complete object — labels,
 API names, data types, required flags, picklist values, and Lookup/Master-Detail
@@ -34,29 +31,86 @@ send it: business purpose, key fields and their data types, expected record volu
 relationships to standard objects, must-have vs. nice-to-have features, and security and
 sharing recommendations — with **Accept** / **Discard** controls.
 
-<img src="docs/screenshots/ai-debug-logs.png" alt="Debug Logs with AI Quick Analysis panel" width="720">
+After the proposal arrives, the **Object Preview** opens in **Plan** mode: edit the object
+label, API name, sharing model and every field inline, pick deployment-target profiles,
+then switch to **Build** to lock the plan and deploy.
 
-### SOQL editor
+<img src="docs/screenshots/ai-object-creator.png" alt="Object Builder preview — Support Ticket plan with editable fields and deployment targets" width="720">
 
-A two-column workspace: LLM provider chip, row limit, run button, query history and
-saved queries on the left; the query editor, colour-coded field explorer and results
-table on the right — no horizontal scrolling.
+## Inspector Tools
+
+Open the **Inspector** from the header (or the sidebar button) to reach every tool below.
+The last opened tab and scroll position are restored the next time you open the panel.
+
+### SOQL
+
+A two-column workspace: LLM assistant chip, row limit, run button, query history and
+saved queries on the left; the syntax-highlighted editor, colour-coded field explorer
+(with category pills) and results table on the right — no horizontal scrolling.
+Tooling API and Recycle Bin toggles switch the backing API per query. Click any **ID**
+cell in the results to open **Show All Data** for that record.
 
 When Salesforce rejects a query, the extension asks the LLM for a **✨ Suggested fix**:
 a plain-English explanation of what went wrong plus the corrected query, with
 **Apply & Run** and **Copy** buttons.
 
-<img src="docs/screenshots/ai-object-creator.png" alt="Object Creator with AI Enhanced Prompt" width="720">
+<img src="docs/screenshots/ai-soql.png" alt="SOQL two-column editor with field explorer and results" width="720">
 
-### Debug logs
+### Run Apex
 
+Execute anonymous Apex with a terminal-style editor: line numbers, syntax highlighting,
+**Quick Templates**, and saved/recent script chips. Choose the **Log Level** and
+**Timeout**, then **Execute** (or Ctrl+Enter) — or select a snippet and **Execute
+Highlighted**. Toggle **Use AI** to pre-check code before each run; compile errors get a
+suggested fix you can apply in one click. After a run, the **Execution Results** panel
+shows the debug log with event filters, a Debug-Only view, and the raw trace.
+
+<img src="docs/screenshots/ai-run-apex.png" alt="Run Apex editor with execution results and debug log" width="720">
+
+### Debug Logs
+
+- Load recent `ApexLog` rows for any user or Apex class in a chosen time window, with
+  trace-flag management built in.
 - **⚡ AI Quick Analysis (Plain English)** — a one-click verdict per log rendered as four
   cards: *What happened*, *Errors*, *Debug highlights*, *Next step*. Results are cached
   per log ID, so clicking **Analyzed** again shows the saved result without another AI
   call; **Re-run** forces a fresh call when you want one.
 - **💬 Ask AI** — a per-log chat for drilling into any line of the trace.
+- Search across every loaded log body, view/download individual logs, or delete them
+  (single or bulk) straight from the panel.
 
-<img src="docs/screenshots/ai-soql.png" alt="SOQL two-column editor with AI suggested fix" width="720">
+<img src="docs/screenshots/ai-debug-logs.png" alt="Debug Logs with AI Quick Analysis panel" width="720">
+
+### Users
+
+Search and filter the org's users by profile or role, then select one to inspect:
+full detail tabs (**Details**, **Permission Sets**, **Groups**, **Profiles**, **Roles**,
+**Settings**), recent **Login IP** addresses, and quick actions — **Login As**, **Enable
+Logs** (30-minute debug trace), **Copy Id**, and **View in Salesforce**. Community users
+get an **Experience-site login** picker when live sites exist.
+
+**Clone User** walks through a two-step wizard — pick the source user and the components
+to copy (permission sets, groups, role), review the summary, then create the new user
+and its assignments. **Reset Password** sends the standard Salesforce password-reset
+email via the User password API.
+
+<img src="docs/screenshots/ai-users.png" alt="Users tab with detail tabs, login IP and quick actions" width="720">
+
+### Records, Export & Import
+
+- **Records** — open any record in View, Read-only or Edit mode with a field summary,
+  related-record lookups, Show-All-Data popup, and CSV export of the current layout.
+- **Export / Import** — query any object and download CSV, or upload a CSV to create or
+  update records with field mapping.
+
+### Org Info, App Tabs & Code Coverage
+
+- **Org Info** — org identity, storage and API limits, recent setup-audit events and
+  login history; an optional AI hygiene audit summarises what to fix first.
+- **App Tabs** — assign custom tabs to console applications so new objects show up where
+  your users work.
+- **Code Coverage** — per-class coverage from `ApexCodeCoverageAggregate`, test-class
+  filtering, and a one-click test run with freshness polling.
 
 ## Installation
 
@@ -150,13 +204,44 @@ The AI will update the proposal accordingly.
 
 ## LLM Provider Configuration
 
-OpenAI, Anthropic Claude, Google Gemini, and any OpenAI-compatible endpoint
+OpenAI, Anthropic Claude, Google Gemini, OpenRouter, and any OpenAI-compatible endpoint
 (OpenCodeZen, etc.) are supported. One configuration drives every AI feature —
-the object-builder chat, Enhance Prompt, SOQL query repair, and debug-log analysis.
+the object-builder chat, Enhance Prompt, SOQL query repair, Apex pre-check, and
+debug-log analysis.
 
 - **API Key**: your provider's key (stored only in your browser's local storage)
 - **Base URL**: only needed for OpenAI-compatible endpoints
 - **Models**: the Options page always lists the currently supported models
+
+## What's New
+
+### v1.4.20
+- **OpenRouter provider** — pick OpenRouter in Settings with its own API-key/base-URL
+  placeholders and vendor/model ID guidance; shares the OpenAI-compatible adapter
+- SOQL LLM chip no longer overlaps the editor title in light theme
+- README refreshed with current screenshots for Object Builder, SOQL, Run Apex,
+  Debug Logs and Users
+
+### v1.4.19
+- **Users tab rebuilt** — auto-loaded user list with profile/role filters, full detail
+  tabs (Permission Sets, Groups, Profiles, Roles, Settings), recent Login IP, **Reset
+  Password**, and a two-step **Clone User** wizard (select components → review → create)
+- **Run-Apex polish** — compact Log Level / Timeout controls, iOS-style **Use AI**
+  pre-check switch, Execute + Execute Highlighted moved to the sidebar, header trimmed
+- **SOQL quality-of-life** — click any result ID to Show All Data, plain `N row(s)`
+  counts, light-theme legibility fixes across the panel
+
+### v1.4.17
+- **Records** rewritten with View / Read-only / Edit modes and summary header
+- **SOQL M3** two-column redesign with field explorer, Tooling API and Recycle Bin
+  toggles, and terminal-style field tools
+- CloudFlow light theme with Inter typography across the inspector
+- Gemini model lineup refresh; last-page restore with a reload guard
+
+### v1.4.15
+- Inspector-in-new-tab option, Show All Data button, full Apex log viewer
+- Code Coverage tab, Experience-site login fix, aggregate LIMIT guard
+- Editor success celebrations (plane / confetti / thor / spidey)
 
 ## Architecture
 
@@ -164,11 +249,13 @@ the object-builder chat, Enhance Prompt, SOQL query repair, and debug-log analys
 sf-object-creator/
 ├── addon/
 │   ├── manifest.json          # Chrome Extension Manifest V3
-│   ├── background.js          # Service worker (session management)
+│   ├── background.js          # Service worker (session + LLM proxy)
 │   ├── inspector.js           # Salesforce API layer (REST/SOAP)
-│   ├── utils.js               # Shared utilities
-│   ├── object-creator.html/js # Main feature page (chat + preview)
+│   ├── inspector-tools.js     # Inspector tabs (Records, SOQL, Run-Apex, Users, Logs, …)
+│   ├── object-creator.html/js # Main feature page (chat, preview, inspector shell)
 │   ├── options.html/js        # LLM provider settings
+│   ├── button.js/css          # Content script (injected into SF pages)
+│   ├── sf-time.js             # Shared time-zone helpers
 │   ├── llm/
 │   │   ├── llm-service.js     # Provider abstraction + config
 │   │   ├── openai.js          # OpenAI adapter
@@ -177,7 +264,6 @@ sf-object-creator/
 │   │   └── openai-compatible.js
 │   ├── prompts/
 │   │   └── system-prompt.js   # AI prompt engineering
-│   ├── button.js/css          # Content script (injected into SF pages)
 │   └── styles/slds/           # Salesforce Lightning Design System CSS
 └── package.json
 ```

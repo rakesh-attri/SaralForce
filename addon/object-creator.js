@@ -992,7 +992,7 @@ class App extends React.Component {
       };
 
       let response;
-      if (config.provider === "openai_compatible") {
+      if (config.provider === "openai_compatible" || config.provider === "openrouter") {
         response = await provider.sendMessage(apiMessages, config.apiKey, config.model, onChunk, config.baseUrl);
       } else {
         response = await provider.sendMessage(apiMessages, config.apiKey, config.model, onChunk);
@@ -1070,7 +1070,7 @@ class App extends React.Component {
       ];
 
       let response;
-      if (config.provider === "openai_compatible") {
+      if (config.provider === "openai_compatible" || config.provider === "openrouter") {
         response = await provider.sendMessage(apiMessages, config.apiKey, config.model, null, config.baseUrl);
       } else {
         response = await provider.sendMessage(apiMessages, config.apiKey, config.model, null);

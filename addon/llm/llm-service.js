@@ -60,6 +60,15 @@ export const LLM_PROVIDERS = {
     requiresBaseUrl: true,
     apiKeyPlaceholder: "Your OpenCode Zen API key",
     baseUrlPlaceholder: "https://opencode.ai/zen/v1"
+  },
+  openrouter: {
+    name: "OpenRouter",
+    models: [],
+    defaultModel: "openai/gpt-4o-mini",
+    requiresApiKey: true,
+    requiresBaseUrl: true,
+    apiKeyPlaceholder: "sk-or-v1-...",
+    baseUrlPlaceholder: "https://openrouter.ai/api/v1"
   }
 };
 
@@ -76,6 +85,8 @@ export function getLLMProvider(providerId) {
     case "gemini":
       return new GeminiProvider();
     case "openai_compatible":
+      return new OpenAICompatibleProvider();
+    case "openrouter":
       return new OpenAICompatibleProvider();
     default:
       throw new Error(`Unknown LLM provider: ${providerId}`);

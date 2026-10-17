@@ -163,6 +163,10 @@ class OptionsApp extends React.Component {
           const {OpenAICompatibleProvider} = await import("./llm/openai-compatible.js");
           providerImpl = new OpenAICompatibleProvider();
           break;
+        case "openrouter":
+          const openrouterMod = await import("./llm/openai-compatible.js");
+          providerImpl = new openrouterMod.OpenAICompatibleProvider();
+          break;
       }
 
       const testMessages = [
@@ -171,7 +175,7 @@ class OptionsApp extends React.Component {
       ];
 
       let result;
-      if (provider === "openai_compatible") {
+      if (provider === "openai_compatible" || provider === "openrouter") {
         result = await providerImpl.sendMessage(testMessages, apiKey, model, null, baseUrl);
       } else {
         result = await providerImpl.sendMessage(testMessages, apiKey, model);
@@ -267,7 +271,10 @@ class OptionsApp extends React.Component {
                 onChange: (e) => this.onModelChange(e),
                 placeholder: "e.g., gpt-4o, claude-sonnet-5, gemini-4-argon"
               }),
-          h("p", {className: "help-text"}, "Recommended: GPT-5.6 Terra, Claude Sonnet 5, or Gemini 3.8 Flash")
+          h("p", {className: "help-text"},
+            provider === "openrouter"
+              ? "Use an OpenRouter model ID (vendor/model), e.g. openai/gpt-4o-mini, anthropic/claude-sonnet-5, google/gemini-3.5-flash, meta-llama/llama-3.3-70b-instruct"
+              : "Recommended: GPT-5.6 Terra, Claude Sonnet 5, or Gemini 3.8 Flash")
         ),
 
         h("div", {className: "button-group"},
@@ -322,7 +329,7 @@ class OptionsApp extends React.Component {
       h("div", {className: "options-section"},
         h("h2", null, "About"),
         h("p", null, "SaralForce is an AI Object Builder & Org Toolkit for Salesforce. Describe the data you want to capture in plain language and it drafts a complete custom object with fields — refine it in chat, improve prompts with one click, then deploy straight to your org."),
-        h("p", null, "The built-in Inspector adds a SOQL runner with AI error fixes, Apex execution, record browser, CSV export and import, user management, debug-log viewer with AI analysis, org info, and app-tab assignment. Works with OpenAI, Anthropic Claude, Google Gemini, or any OpenAI-compatible endpoint using your own API key."),
+        h("p", null, "The built-in Inspector adds a SOQL runner with AI error fixes, Apex execution, record browser, CSV export and import, user management, debug-log viewer with AI analysis, org info, and app-tab assignment. Works with OpenAI, Anthropic Claude, Google Gemini, OpenRouter, or any OpenAI-compatible endpoint using your own API key."),
         h("p", null, "Your API key is stored locally in your browser and never shared. Org data stays between your browser and Salesforce — only the text you type reaches your chosen AI provider."),
         h("p", {style: {fontSize: "12px", color: "#706e6b"}},
           "Developed by Er.Bhajan Mandali © · Independent project, not affiliated with Salesforce. ",
