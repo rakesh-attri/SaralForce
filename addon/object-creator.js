@@ -3642,7 +3642,7 @@ class App extends React.Component {
         h(InspectorPanel),
         h("div", {className: "app-footer"},
           h("a", {
-            href: "https://rakesh-attri.github.io/BhajanMandali/",
+            href: "https://rakesh-attri.github.io/ErBhajanMandali/",
             target: "_blank",
             rel: "noopener noreferrer"
           },
@@ -4275,7 +4275,7 @@ class App extends React.Component {
 
       h("div", {className: "app-footer"},
         h("a", {
-          href: "https://rakesh-attri.github.io/BhajanMandali/",
+          href: "https://rakesh-attri.github.io/ErBhajanMandali/",
           target: "_blank",
           rel: "noopener noreferrer"
         },

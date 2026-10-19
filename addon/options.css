@@ -54,6 +54,7 @@ textarea {
   max-width: 430px;
   height: auto;
   margin: 0 auto 14px;
+  cursor: pointer;
 }
 
 .options-header h1 {

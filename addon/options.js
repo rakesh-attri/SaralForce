@@ -197,7 +197,8 @@ class OptionsApp extends React.Component {
 
     return h("div", {className: "options-container"},
       h("div", {className: "options-header"},
-        h("img", {className: "options-logo", src: "logo-full.png", alt: "SaralForce"}),
+        h("a", {href: "https://rakesh-attri.github.io/SaralForce/", target: "_blank", rel: "noopener noreferrer", title: "SaralForce home"},
+          h("img", {className: "options-logo", src: "logo-full.png", alt: "SaralForce"})),
         h("h1", null, "Settings"),
         h("p", {className: "subtitle"}, "Configure your AI provider for generating Salesforce objects and fields")
       ),

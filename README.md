@@ -1,5 +1,10 @@
 # SaralForce - AI Object Builder & Org Toolkit
 
+<p align="center">
+  <a href="https://microsoftedge.microsoft.com/addons/detail/saralforce/nabomjoibaaoialocfpphgcmfldjmeik"><img src="https://img.shields.io/badge/Microsoft%20Edge-Get%20it%20now-0C59A4?logo=microsoft-edge&logoColor=white" alt="Get SaralForce from the Microsoft Edge Add-ons store"></a>
+  <img src="https://img.shields.io/badge/Google%20Chrome-Coming%20Soon-4285F4?logo=google-chrome&logoColor=white" alt="Chrome Web Store - coming soon">
+</p>
+
 A Chrome browser extension that pairs an LLM (Large Language Models) object designer with a
 full Salesforce inspector — build custom objects from natural language, then run SOQL, execute
 Apex, manage users, read debug logs and inspect your org without leaving the page.
@@ -9,7 +14,7 @@ Session handling builds on ideas from [Salesforce Inspector Reloaded](https://gi
 ## Features
 
 - **Natural Language Object Design**: Describe what data you want to capture in plain English, and the AI proposes a complete Salesforce object with fields
-- **Multi-LLM Support**: Works with OpenAI, Anthropic Claude, Google Gemini, and any OpenAI-compatible API (OpenCodeZen, etc.)
+- **Multi-LLM Support**: Works with OpenAI, Anthropic Claude, Google Gemini, OpenRouter, and any OpenAI-compatible API (OpenCodeZen, etc.)
 - **Interactive Refinement**: Chat with the AI to modify the proposal - add fields, change types, adjust properties
 - **Visual Preview (Plan / Build)**: Review the schema before deploying — labels, API names, types, required flags — then refine inline in Plan mode
 - **One-Click Deploy**: Creates the custom object and all fields directly in your Salesforce org via the Tooling API, with profile tab-visibility targets
@@ -30,6 +35,8 @@ Priority required") and deploy when the visual preview looks right.
 send it: business purpose, key fields and their data types, expected record volume,
 relationships to standard objects, must-have vs. nice-to-have features, and security and
 sharing recommendations — with **Accept** / **Discard** controls.
+
+<img src="docs/screenshots/ai-enhance-prompt.png" alt="Enhance Prompt — rough one-liner expanded into a structured design brief with Accept and Discard" width="720">
 
 After the proposal arrives, the **Object Preview** opens in **Plan** mode: edit the object
 label, API name, sharing model and every field inline, pick deployment-target profiles,
@@ -103,6 +110,8 @@ email via the User password API.
 - **Export / Import** — query any object and download CSV, or upload a CSV to create or
   update records with field mapping.
 
+<img src="docs/screenshots/ai-records.png" alt="Records tab in Read-only mode with field summary and CSV export" width="720">
+
 ### Org Info, App Tabs & Code Coverage
 
 - **Org Info** — org identity, storage and API limits, recent setup-audit events and
@@ -112,11 +121,20 @@ email via the User password API.
 - **Code Coverage** — per-class coverage from `ApexCodeCoverageAggregate`, test-class
   filtering, and a one-click test run with freshness polling.
 
+<img src="docs/screenshots/ai-coverage.png" alt="Code Coverage tab with per-class percentages and test-class filter" width="720">
+
 ## Installation
+
+### Quick install (Microsoft Edge)
+
+Install directly from the Edge Add-ons store:
+**[SaralForce on Microsoft Edge](https://microsoftedge.microsoft.com/addons/detail/saralforce/nabomjoibaaoialocfpphgcmfldjmeik)**.
+
+The Chrome Web Store version is coming soon.
 
 ### Prerequisites
 
-- Google Chrome browser (v88 or later)
+- Google Chrome (v88+) or Microsoft Edge browser
 - Node.js with npm (for React dependencies)
 - A Salesforce org where you have System Administrator permissions
 - An API key from at least one LLM provider
@@ -141,7 +159,7 @@ email via the User password API.
 4. **Configure your LLM provider**:
    - Click the extension icon on any Salesforce page
    - Click **Options** (or open `options.html` from the extension)
-   - Select your LLM provider (OpenAI, Claude, Gemini, or OpenAI-compatible)
+   - Select your LLM provider (OpenAI, Claude, Gemini, OpenRouter, or OpenAI-compatible)
    - Enter your API key
    - Select a model
    - Click **Save Settings** then **Test Connection**
@@ -210,10 +228,18 @@ the object-builder chat, Enhance Prompt, SOQL query repair, Apex pre-check, and
 debug-log analysis.
 
 - **API Key**: your provider's key (stored only in your browser's local storage)
-- **Base URL**: only needed for OpenAI-compatible endpoints
+- **Base URL**: only needed for OpenAI-compatible endpoints and OpenRouter
 - **Models**: the Options page always lists the currently supported models
 
 ## What's New
+
+### v1.4.21
+- **Chrome Web Store readiness** — packaged goodbye page moved to an external script
+  (MV3 CSP compliance), manifest description refreshed
+- SaralForce logo on the Settings page links to the project site
+- Footer credit links to the ErBhajanMandali site
+- README: Edge Add-ons "Get it now" badge (Chrome coming soon) plus new screenshots for
+  Enhance Prompt, Records and Code Coverage
 
 ### v1.4.20
 - **OpenRouter provider** — pick OpenRouter in Settings with its own API-key/base-URL
