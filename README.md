@@ -1,4 +1,4 @@
-# SaralForce - AI Object Builder & Org Toolkit
+# SaralForce — AI Salesforce Inspector, Admin & Developer Toolkit
 
 <p align="center">
   <a href="https://microsoftedge.microsoft.com/addons/detail/saralforce/nabomjoibaaoialocfpphgcmfldjmeik"><img src="https://img.shields.io/badge/Microsoft%20Edge-Get%20it%20now-0C59A4?logo=microsoft-edge&logoColor=white" alt="Get SaralForce from the Microsoft Edge Add-ons store"></a>
@@ -7,9 +7,27 @@
 
 A Chrome browser extension that pairs an LLM (Large Language Models) object designer with a
 full Salesforce inspector — build custom objects from natural language, then run SOQL, execute
-Apex, manage users, read debug logs and inspect your org without leaving the page.
+Apex, manage users, read debug logs, export data to CSV and inspect your org without leaving
+the page.
 
 Session handling builds on ideas from [Salesforce Inspector Reloaded](https://github.com/tprouvot/Salesforce-Inspector-reloaded) (MIT licensed — see `LICENSE` and `THIRD-PARTY-NOTICES.md`). SaralForce is an independent project by Bhajan Mandali and is not affiliated with, sponsored, or endorsed by Salesforce, Inc.
+
+## FAQ
+
+**What is SaralForce?**
+SaralForce is a free, AI-powered Salesforce inspector extension for Microsoft Edge and Google Chrome. A sidebar on every Salesforce page gives you an AI object builder, a SOQL runner with CSV data export, an Apex executor, a debug-log analyzer, user management, org info and code coverage.
+
+**How is SaralForce different from other Salesforce inspector tools?**
+It covers the classic inspector workflows — SOQL queries, CSV data export, record lookup, user management — and adds an AI layer on top: build custom objects from plain-English descriptions, get failing SOQL auto-repaired, understand debug logs in plain English, and turn rough ideas into structured design briefs with Enhance Prompt.
+
+**Is SaralForce free? Does it send my data anywhere?**
+The extension is free. AI features use your own provider API key (OpenAI, Anthropic Claude, Google Gemini, OpenRouter, or any OpenAI-compatible endpoint), stored only in your browser. Org data is sent to your chosen AI provider only when you explicitly ask. No accounts, no analytics, no tracking.
+
+**Do I need an AI API key to use it?**
+No. Everything except the AI features works with just your Salesforce login — SOQL, CSV data export and import, Apex execution, debug logs, users, org info and code coverage.
+
+**Which browsers are supported?**
+Microsoft Edge (install from the Edge Add-ons store) and Google Chrome (Chrome Web Store version coming soon; or load the `addon` folder as an unpacked extension).
 
 ## Features
 
