@@ -251,6 +251,24 @@ debug-log analysis.
 
 ## What's New
 
+### v1.4.23
+- **App Tab Manager** (replaces App Tabs) — a full three-step manager for Lightning
+  app navigation: searchable app picker with an info card (name, developer name,
+  type, status) plus the exact-app pin by App Manager URL / record Id; a tab picker
+  with org suggestions and a "recently created" highlight; and a Current App Tabs
+  table with type, your profile's visibility, position and per-row actions
+- **Reorder & remove** — move tabs up/down and remove tabs with confirmation, each
+  change written as a full read-modify-write round-trip and verified by re-reading
+  the app metadata; console workspace mappings and standard-app `standard__` writes
+  are handled automatically
+- **Honest visibility controls** — Visible to me (your profile), plus batch writes
+  to selected profiles and permission sets (Default On / Default Off / Hidden) —
+  the places Salesforce actually stores tab visibility, with clear guidance when
+  object-level access is also required
+- **AI Object Builder handoff** — after a successful object deploy, "Add to
+  Lightning App" preselects the new object's tab in the App Tab Manager; nothing is
+  written until you pick the app and approve
+
 ### v1.4.22
 - **Optional AI network access** — AI provider hosts moved out of the install-time
   permissions; SaralForce now asks permission to reach the chosen provider (OpenAI,

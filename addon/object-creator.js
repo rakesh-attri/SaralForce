@@ -2,7 +2,7 @@ import {sfConn, apiVersion, XML, startSalesforceLogin} from "./inspector.js";
 import {hasValidConfig, getSavedConfig, getLLMProvider, getProviderConfig} from "./llm/llm-service.js";
 import {SYSTEM_PROMPT, REFINEMENT_PROMPT, USER_MESSAGE_TEMPLATE, ENHANCE_SYSTEM_PROMPT} from "./prompts/system-prompt.js";
 import {createSpinForMethod, UserInfoModel, Constants, safeCopyText} from "./utils.js";
-import {InspectorPanel, ffApplyRestore, ffTakeSnapshot} from "./inspector-tools.js";
+import {InspectorPanel, ffApplyRestore, ffTakeSnapshot, ffSetAppTabPrefill} from "./inspector-tools.js";
 
 let h = React.createElement;
 
@@ -764,7 +764,7 @@ class App extends React.Component {
       this._autoSaveChat();
     }
     // Warm the profile picker as soon as a proposal exists (Deployment Targets).
-    // NOTE: app assignment lives in Inspector → App Tabs now; the builder no
+    // NOTE: app assignment lives in Inspector → App Tab Manager now; the builder no
     // longer loads apps or auto-assigns.
     if (this.state.currentProposal && prevState.currentProposal !== this.state.currentProposal) {
       this.loadProfiles().catch(e => console.warn("[SaralForce] proposal loadProfiles:", e.message));
@@ -863,6 +863,25 @@ class App extends React.Component {
       return;
     }
     this.setState({uiMode: "inspector"});
+  }
+
+  // Post-create handoff: offer the freshly created object tab to a
+  // Lightning app via Inspector → App Tab Manager. Writes nothing here —
+  // the manager shows an approval card and the user picks the app +
+  // visibility; no app is modified without that explicit click.
+  addToLightningApp() {
+    const {deploymentResults} = this.state;
+    const objectResult = deploymentResults.find(r => r.type === "object" && r.status === "success");
+    const tabResult = deploymentResults.find(r => r.type === "tab" && r.status === "success");
+    if (!objectResult && !tabResult) return;
+    const objectApiName = objectResult ? objectResult.name : null;
+    // Object tabs carry the object's API name as their metadata fullName
+    // (see buildTabXml); the tab result's `name` is "<object>_tab".
+    const tabApiName = objectApiName ||
+      (tabResult && tabResult.name ? String(tabResult.name).replace(/_tab$/, "") : null);
+    if (!tabApiName) return;
+    ffSetAppTabPrefill(tabApiName, objectApiName);
+    this.openInspector();
   }
 
   goBackFromInspector() {
@@ -1018,7 +1037,7 @@ class App extends React.Component {
             visibilityMode: this.state.visibilityMode || "all"
           }, () => {
             // Ask targets up front: load profiles for Deployment Targets.
-            // (App assignment lives in Inspector → App Tabs now.)
+            // (App assignment lives in Inspector → App Tab Manager now.)
             this.loadProfiles().catch(() => {});
           });
         }
@@ -4252,9 +4271,16 @@ class App extends React.Component {
 
               deploymentStatus === "complete" && deploymentResults.some(r => r.type === "tab" && r.status === "success") && h("div", {className: "deploy-hint"},
                 visibilityMode === "selected"
-                  ? `Tab visibility is Default On for ${selectedProfiles?.length || 0} selected profile(s). The tab is ready — open it from App Launcher search, Setup → Tabs, or the object's Salesforce URL. To pin it onto an app's navigation bar, use the header Inspector → App Tabs tool.`
-                  : "Tab visibility is Default On on all profiles. The tab is ready — open it from App Launcher search, Setup → Tabs, or the object's Salesforce URL. To pin it onto an app's navigation bar, use the header Inspector → App Tabs tool."
+                  ? `Tab visibility is Default On for ${selectedProfiles?.length || 0} selected profile(s). The tab is ready — open it from App Launcher search, Setup → Tabs, or the object's Salesforce URL. To pin it onto a Lightning app's navigation bar (and set visibility per profile / permission set), use the button below.`
+                  : "Tab visibility is Default On on all profiles. The tab is ready — open it from App Launcher search, Setup → Tabs, or the object's Salesforce URL. To pin it onto a Lightning app's navigation bar (and set visibility per profile / permission set), use the button below."
               ),
+
+              deploymentStatus === "complete" && deploymentResults.some(r => r.type === "tab" && r.status === "success") && h("button", {
+                className: "setup-link",
+                style: {display: "block", cursor: "pointer", border: "none", fontFamily: "inherit"},
+                title: "Open the App Tab Manager with this object's tab preselected — you pick the app and approve the change",
+                onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.addToLightningApp(); }
+              }, "＋ Add to Lightning App →"),
 
               deploymentStatus === "complete" && setupLink && h("a", {
                 className: "setup-link",
