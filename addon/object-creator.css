@@ -4791,6 +4791,84 @@ html.dark .soql-editor-box, html[data-theme="dark"] .soql-editor-box {
   margin-top: 6px;
 }
 
+/* ─── Records: "No object selected" empty state (v1.4.22) ──────────────── */
+.rec-nosel {
+  text-align: center;
+  border: 1px solid #e5e9f2;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8faff 0%, #ffffff 100%);
+  padding: 40px 24px;
+  margin-top: 16px;
+  color: #7c3aed;
+}
+
+.rec-nosel-art {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+
+.rec-nosel-t {
+  font-size: 18px;
+  font-weight: 800;
+  color: #1e1b4b;
+}
+
+.rec-nosel-s {
+  font-size: 13px;
+  color: #64748b;
+  margin: 6px auto 0;
+  max-width: 420px;
+}
+
+.rec-nosel-box {
+  max-width: 420px;
+  margin: 18px auto 0;
+  text-align: left;
+  background: #f4f1ff;
+  border: 1px solid #e3dbff;
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.rec-nosel-box-t {
+  font-size: 13px;
+  font-weight: 800;
+  color: #1e1b4b;
+  margin-bottom: 6px;
+}
+
+.rec-nosel-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.7;
+}
+
+.rec-nosel-load {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.rec-nosel-input {
+  flex: 0 1 260px;
+  padding: 7px 10px;
+  font-size: 13px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #1e1b4b;
+}
+
+.rec-nosel-input:focus {
+  outline: none;
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.15);
+}
+
 /* ─── Show-all-data modal refresh (SS3) ──────────────────────────────────── */
 .ff-modal-head.sad-head {
   background: linear-gradient(135deg, #0b1f4d 0%, #14306e 60%, #1e3a8a 100%);

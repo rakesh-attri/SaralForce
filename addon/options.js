@@ -1,4 +1,4 @@
-import {LLM_PROVIDERS, getProviderConfig, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant} from "./llm/llm-service.js";
+import {LLM_PROVIDERS, getProviderConfig, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant, getLLMProvider, providerPermissionOrigin, checkProviderNetworkAccess} from "./llm/llm-service.js";
 
 let h = React.createElement;
 
@@ -55,13 +55,30 @@ class OptionsApp extends React.Component {
       saved: false,
       testStatus: null,
       testMessage: "",
-      appVersion: ""
+      appVersion: "",
+      permMissing: false,
+      permDenied: false,
+      permHost: ""
     };
   }
 
   componentDidMount() {
     this.loadAppVersion();
+    this.refreshPermStatus();
   }
+
+  // Permission state for the selected provider's host (optional host
+  // permissions, v1.4.22). No-op in the fixture harness (no chrome.permissions).
+  refreshPermStatus = async () => {
+    const {provider, baseUrl} = this.state;
+    const origin = providerPermissionOrigin(provider, baseUrl);
+    const allowed = await checkProviderNetworkAccess(provider, baseUrl);
+    this.setState({
+      permMissing: !allowed,
+      permDenied: false,
+      permHost: origin ? origin.replace(/^https?:\/\//, "").replace(/\/\*$/, "") : ""
+    });
+  };
 
   // Manifest version shown next to Privacy Policy. Prefers the extension
   // API; falls back to reading manifest.json (harness shim has no
@@ -103,7 +120,7 @@ class OptionsApp extends React.Component {
         : prev.model,
       saved: false,
       testStatus: null
-    }));
+    }), () => this.refreshPermStatus());
   }
 
   onApiKeyChange(e) {
@@ -115,7 +132,8 @@ class OptionsApp extends React.Component {
   }
 
   onBaseUrlChange(e) {
-    this.setState({baseUrl: e.target.value, saved: false, testStatus: null});
+    this.setState({baseUrl: e.target.value, saved: false, testStatus: null},
+      () => this.refreshPermStatus());
   }
 
   onCelebrateChange(e) {
@@ -135,9 +153,38 @@ class OptionsApp extends React.Component {
 
   saveConfig() {
     const {provider, apiKey, model, baseUrl} = this.state;
-    saveConfig({provider, apiKey, model, baseUrl});
-    this.setState({saved: true});
-    setTimeout(() => this.setState({saved: false}), 2000);
+    const origin = providerPermissionOrigin(provider, baseUrl);
+    // chrome.permissions.request must be kicked off synchronously inside
+    // the Save click (user gesture). It is a silent no-op when the origin
+    // is already granted or needs no permission (loopback / fixture).
+    const request = (origin && typeof chrome !== "undefined" &&
+      chrome.permissions && chrome.permissions.request)
+      ? new Promise((resolve) => {
+          try { chrome.permissions.request({origins: [origin]}, (ok) => resolve(!!ok)); }
+          catch (e) { resolve(false); }
+        })
+      : Promise.resolve(true);
+    request.then((granted) => {
+      saveConfig({provider, apiKey, model, baseUrl});
+      this.setState({
+        saved: true,
+        permDenied: !granted,
+        permMissing: false,
+        permHost: origin ? origin.replace(/^https?:\/\//, "").replace(/\/\*$/, "") : ""
+      });
+      setTimeout(() => this.setState({saved: false}), 2000);
+    });
+  }
+
+  grantPermission() {
+    const origin = providerPermissionOrigin(this.state.provider, this.state.baseUrl);
+    if (!origin || typeof chrome === "undefined" || !chrome.permissions || !chrome.permissions.request) return;
+    const host = origin.replace(/^https?:\/\//, "").replace(/\/\*$/, "");
+    try {
+      chrome.permissions.request({origins: [origin]}, (ok) => {
+        this.setState({permDenied: !ok, permMissing: !ok, permHost: host});
+      });
+    } catch (e) { /* ignore */ }
   }
 
   async testConnection() {
@@ -145,29 +192,7 @@ class OptionsApp extends React.Component {
     this.setState({testStatus: "testing", testMessage: "Testing connection..."});
 
     try {
-      let providerImpl;
-      switch (provider) {
-        case "openai":
-          const {OpenAIProvider} = await import("./llm/openai.js");
-          providerImpl = new OpenAIProvider();
-          break;
-        case "claude":
-          const {ClaudeProvider} = await import("./llm/claude.js");
-          providerImpl = new ClaudeProvider();
-          break;
-        case "gemini":
-          const {GeminiProvider} = await import("./llm/gemini.js");
-          providerImpl = new GeminiProvider();
-          break;
-        case "openai_compatible":
-          const {OpenAICompatibleProvider} = await import("./llm/openai-compatible.js");
-          providerImpl = new OpenAICompatibleProvider();
-          break;
-        case "openrouter":
-          const openrouterMod = await import("./llm/openai-compatible.js");
-          providerImpl = new openrouterMod.OpenAICompatibleProvider();
-          break;
-      }
+      const providerImpl = getLLMProvider(provider);
 
       const testMessages = [
         {role: "system", content: "Reply with exactly: OK"},
@@ -292,7 +317,15 @@ class OptionsApp extends React.Component {
 
         testStatus && h("div", {
           className: `test-result test-${testStatus}`
-        }, testMessage)
+        }, testMessage),
+
+        this.state.permDenied && h("div", {className: "test-result test-error"},
+          `Network access to ${this.state.permHost} was not granted — AI calls to this provider will fail until access is granted. `,
+          h("button", {className: "btn btn-secondary btn-grant", onClick: () => this.grantPermission()}, "Grant access")),
+
+        this.state.permMissing && !this.state.permDenied && h("div", {className: "test-result test-error"},
+          `SaralForce needs your permission to reach ${this.state.permHost}. It is requested when you click Save Settings. `,
+          h("button", {className: "btn btn-secondary btn-grant", onClick: () => this.grantPermission()}, "Grant access"))
       ),
 
       h("div", {className: "options-section"},

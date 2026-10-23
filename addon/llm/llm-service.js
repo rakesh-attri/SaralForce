@@ -76,18 +76,74 @@ export function getProviderConfig(providerId) {
   return LLM_PROVIDERS[providerId] || null;
 }
 
+// ── Optional AI host permissions ──────────────────────────────
+// AI provider endpoints are OPTIONAL host permissions (v1.4.22): the
+// exact origin is requested from the user at Settings-save time, inside
+// the Save click's user gesture. Loopback URLs (localhost proxies, the
+// dev fixture) need no permission; pages without chrome.permissions
+// (the fixture harness) always pass.
+const FIXED_PROVIDER_ORIGINS = {
+  openai: "https://api.openai.com/*",
+  claude: "https://api.anthropic.com/*",
+  gemini: "https://generativelanguage.googleapis.com/*"
+};
+
+// Match pattern for the origin a provider will call, or null when no
+// permission is needed (loopback / unparseable / not configured).
+export function providerPermissionOrigin(providerId, baseUrl) {
+  const fixed = FIXED_PROVIDER_ORIGINS[providerId];
+  if (fixed) return fixed;
+  let raw = String(baseUrl || "").trim();
+  if (!raw && providerId === "openrouter") raw = "https://openrouter.ai/api/v1";
+  if (!raw) return null;
+  let u;
+  try { u = new URL(raw); } catch (e) { return null; }
+  if (u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "[::1]" || u.hostname === "::1") return null;
+  if (u.protocol !== "https:") return null;
+  return u.origin + "/*";
+}
+
+export function checkProviderNetworkAccess(providerId, baseUrl) {
+  const origin = providerPermissionOrigin(providerId, baseUrl);
+  if (!origin) return Promise.resolve(true);
+  if (typeof chrome === "undefined" || !chrome.permissions || !chrome.permissions.contains) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    try {
+      chrome.permissions.contains({origins: [origin]}, (ok) => resolve(!!ok));
+    } catch (e) {
+      resolve(true);
+    }
+  });
+}
+
+// Without the grant a cross-origin AI call fails as an opaque "Failed to
+// fetch" (CORS). Check the permission first and explain the fix.
+function wrapProviderAccess(providerId, impl) {
+  const origSend = impl.sendMessage.bind(impl);
+  impl.sendMessage = async (messages, apiKey, model, onChunk, baseUrl) => {
+    const allowed = await checkProviderNetworkAccess(providerId, baseUrl);
+    if (!allowed) {
+      throw new Error("SaralForce needs network access to this AI provider. Open Settings and click Save Settings to grant access, then try again.");
+    }
+    return origSend(messages, apiKey, model, onChunk, baseUrl);
+  };
+  return impl;
+}
+
 export function getLLMProvider(providerId) {
   switch (providerId) {
     case "openai":
-      return new OpenAIProvider();
+      return wrapProviderAccess(providerId, new OpenAIProvider());
     case "claude":
-      return new ClaudeProvider();
+      return wrapProviderAccess(providerId, new ClaudeProvider());
     case "gemini":
-      return new GeminiProvider();
+      return wrapProviderAccess(providerId, new GeminiProvider());
     case "openai_compatible":
-      return new OpenAICompatibleProvider();
+      return wrapProviderAccess(providerId, new OpenAICompatibleProvider());
     case "openrouter":
-      return new OpenAICompatibleProvider();
+      return wrapProviderAccess(providerId, new OpenAICompatibleProvider());
     default:
       throw new Error(`Unknown LLM provider: ${providerId}`);
   }

@@ -251,6 +251,17 @@ debug-log analysis.
 
 ## What's New
 
+### v1.4.22
+- **Optional AI network access** — AI provider hosts moved out of the install-time
+  permissions; SaralForce now asks permission to reach the chosen provider (OpenAI,
+  Claude, Gemini, OpenRouter or a custom endpoint) when you click Save Settings
+- **Records: "No object selected" screen** — pages that are neither a record nor a
+  list view show a getting-started empty state with a manual object loader, instead
+  of silently re-opening the last explored object
+- **Users: Freeze / Unfreeze** — toggle a user's login access in one click from the
+  Quick Actions (below Clone User); the frozen state also shows in Account & Login
+- Hardened record-page detection so non-Salesforce URLs can never fake a record context
+
 ### v1.4.21
 - **Chrome Web Store readiness** — packaged goodbye page moved to an external script
   (MV3 CSP compliance), manifest description refreshed
@@ -323,7 +334,10 @@ sf-object-creator/
 
 - `cookies`: Read Salesforce session cookies for API authentication
 - `storage`: Store LLM configuration and extension settings
-- Host permissions for Salesforce domains and LLM API endpoints
+- Host permissions for Salesforce domains (needed to inject the inspector on your pages)
+- **Optional** host permission for `https://*/*`: requested only when you save an AI
+  provider in Settings — it covers the chosen AI endpoint (or a custom OpenAI-compatible
+  URL). Without it, everything except AI calls works as before
 
 ## Development
 

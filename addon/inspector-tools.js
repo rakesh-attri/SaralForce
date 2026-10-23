@@ -3370,9 +3370,11 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
 //   VIEW R — open Salesforce record page: record header (name/meta/chips),
 //     Quick Overview + Quick Actions, empty panel. Show All Data opens the
 //     full-field modal (VIEW M) for THAT record.
-//   VIEW O — object / object-list page (or remembered object): object
-//     header, Quick overview, empty panel. Show All Data stays disabled.
+//   VIEW O — object / list page: object header, Quick overview, empty
+//     panel. Show All Data stays disabled.
 //   VIEW M — the shared RecordDetailPanel modal (see Shared section).
+//   No context — the "No object selected" empty state with guidance and
+//     a manual object-name loader.
 // Context comes from the open page: button.js answers sfoc-query-open-record
 // with {obj, id} (id null on list pages). There is no object picker, no
 // field list, no rows table and no row-click detail.
@@ -3400,18 +3402,6 @@ function RecordsTab() {
       return null;
     }
   };
-  const lastObjKey = () => {
-    try { return (sfConn.instanceHostname || "default") + "_records_last_obj"; }
-    catch (e) { return "records_last_obj"; }
-  };
-  const rememberLast = (obj) => {
-    try { if (obj) localStorage.setItem(lastObjKey(), obj); } catch (e) { /* ignore */ }
-  };
-  const readLast = () => {
-    try { return localStorage.getItem(lastObjKey()) || ""; }
-    catch (e) { return ""; }
-  };
-
   const describe = async (objName) => {
     const obj = String(objName || "").trim();
     if (!obj) return null;
@@ -3425,7 +3415,6 @@ function RecordsTab() {
     setDescFields(d.fields || []);
     setRecordCount(total);
     setLastRefresh(Date.now());
-    rememberLast(obj);
     return d;
   };
 
@@ -3528,8 +3517,16 @@ function RecordsTab() {
         if (cancelled) return;
         if (rec && rec.obj && rec.id) { await loadRecordContext(rec); return; }
         if (rec && rec.obj) { await loadObjectContext(rec.obj); return; }
-        const seed = objInput.trim() || readLast();
-        if (seed) { await loadObjectContext(seed); return; }
+        // No record/list context on this page: drop any object left over
+        // from an earlier page in this tab (SPA navigation keeps the panel
+        // alive) and show the empty state instead of silently re-opening
+        // a stale object.
+        setObjInput("");
+        setObjMeta(null);
+        setRecordCount(null);
+        setLastRefresh(null);
+        setRecDetail(null);
+        setDetail(null);
         setPageRec(null);
       } catch (e) {
         if (!cancelled) setError(e.message);
@@ -3548,9 +3545,24 @@ function RecordsTab() {
       if (pageRec && pageRec.obj && pageRec.id) {
         await loadRecordContext(pageRec);
       } else {
-        const obj = (pageRec && pageRec.obj) || objInput.trim() || readLast();
+        const obj = (pageRec && pageRec.obj) || objInput.trim();
         if (obj) await loadObjectContext(obj);
       }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setCtxLoading(false);
+    }
+  };
+
+  // Manual object load from the empty state (explicit user action).
+  const loadManualObject = async () => {
+    const obj = objInput.trim();
+    if (!obj || ctxLoading) return;
+    setCtxLoading(true);
+    setError(null);
+    try {
+      await loadObjectContext(obj);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -3653,6 +3665,16 @@ function RecordsTab() {
       strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true"},
       h("path", {d: "M3 8l3.5 3L12 5l5.5 6L21 8l-1.6 9H4.6z"}),
       h("path", {d: "M4 20h16"}));
+  // Empty-state art: a browser/data window (CloudFlow style).
+  const noselSvg = () => h("svg", {width: 104, height: 78, viewBox: "0 0 104 78",
+      fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round",
+      strokeLinejoin: "round", "aria-hidden": "true"},
+      h("rect", {x: 8, y: 6, width: 88, height: 66, rx: 7}),
+      h("path", {d: "M8 21h88"}),
+      h("circle", {cx: 18, cy: 13.5, r: 1.7, fill: "currentColor", stroke: "none"}),
+      h("circle", {cx: 25.5, cy: 13.5, r: 1.7, fill: "currentColor", stroke: "none"}),
+      h("path", {d: "M22 60l14-16 10 12 7-8 17 12"}),
+      h("circle", {cx: 68, cy: 35, r: 4.5}));
   // Mini (13px) glyphs for the summary meta rows and chips.
   const P_DOC = [h("path", {d: "M7 3h7l4 4v14H7z"}), h("path", {d: "M14 3v4h4"})];
   const P_SLIDERS = [h("path", {d: "M4 7h16"}), h("circle", {cx: 9, cy: 7, r: 2}),
@@ -3789,8 +3811,33 @@ function RecordsTab() {
           "Choose Show All Data to load records, or select fields to customize the table.")
       )
     )),
-    (!isRecord && !showObject && h("div", {className: "insp-meta"},
-      ctxLoading ? "Loading…" : "Open a Salesforce record or list page to browse it here.")),
+    (!isRecord && !showObject && (ctxLoading
+      ? h("div", {className: "insp-meta"}, "Loading…")
+      : h("div", {className: "rec-nosel"},
+          h("div", {className: "rec-nosel-art", "aria-hidden": "true"}, noselSvg()),
+          h("div", {className: "rec-nosel-t"}, "No object selected"),
+          h("div", {className: "rec-nosel-s"},
+            "Open a Salesforce record or list view to explore and analyze its data here."),
+          h("div", {className: "rec-nosel-box"},
+            h("div", {className: "rec-nosel-box-t"}, "How to get started?"),
+            h("ul", {className: "rec-nosel-list"},
+              h("li", null, "Open any record page - its object, fields and record count load here automatically."),
+              h("li", null, "Open a list view (for example Accounts) to inspect that object."),
+              h("li", null, "Or type an object API name below (for example Account or Invoice__c)."))),
+          h("div", {className: "rec-nosel-load"},
+            h("input", {
+              className: "rec-nosel-input",
+              placeholder: "Object API name (e.g. Account)",
+              "aria-label": "Object API name",
+              value: objInput,
+              onChange: (e) => setObjInput(e.target.value),
+              onKeyDown: (e) => { if (e.key === "Enter") loadManualObject(); }
+            }),
+            h("button", {
+              className: "btn btn-primary btn-sm",
+              disabled: !objInput.trim() || ctxLoading,
+              onClick: loadManualObject
+            }, "Load Object"))))),
     error && h("div", {className: "insp-error"}, error),
     (detailLoading || detail) && h(RecordDetailPanel, {
       detail,
@@ -4791,6 +4838,9 @@ function UsersTab() {
   const [cloneErr, setCloneErr] = React.useState(null);
   const [compSel, setCompSel] = React.useState({profile: true, ps: true, groups: true, roles: true});
   const [resetting, setResetting] = React.useState(false);
+  const [freezing, setFreezing] = React.useState(false);
+  const [frozenLogin, setFrozenLogin] = React.useState(null);
+  const [meId, setMeId] = React.useState(null);
   const USR_PAGE_SIZE = 8;
 
   const mapUserRows = (records) => (records || []).map(r => ({
@@ -4925,6 +4975,36 @@ function UsersTab() {
   };
 
   const isCommunityUser = (u) => !!u && ffTruthy(u.Active) && !!u.UserType && u.UserType !== "Standard";
+  // Frozen state lives on the UserLogin row — User.IsFrozen is rejected by
+  // REST/Apex (INVALID_FIELD). null until loaded, and when unavailable.
+  const frozen = !!(frozenLogin && ffTruthy(frozenLogin.IsFrozen));
+
+  // Current user Id — guards the Freeze action against locking yourself out.
+  React.useEffect(() => {
+    let cancelled = false;
+    sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/me`, {useCache: false})
+      .then(me => { if (!cancelled && me && me.Id) setMeId(me.Id); })
+      .catch(() => { /* guard simply stays inactive */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Load the user's UserLogin row (requires the Manage Users permission) —
+  // it drives the Is Frozen badge and the Freeze/Unfreeze action.
+  React.useEffect(() => {
+    let cancelled = false;
+    setFrozenLogin(null);
+    if (!sel || !sel.Id) return () => { cancelled = true; };
+    sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+      encodeURIComponent(`SELECT Id, IsFrozen FROM UserLogin WHERE UserId = '${sel.Id}'`),
+      {useCache: false})
+      .then(res => {
+        if (!cancelled && res && res.records && res.records[0]) {
+          setFrozenLogin(res.records[0]);
+        }
+      })
+      .catch(() => { /* frozen state unavailable without Manage Users */ });
+    return () => { cancelled = true; };
+  }, [sel && sel.Id]);
 
   React.useEffect(() => {
     if (!isCommunityUser(sel)) { setSites([]); setExpSite(""); return; }
@@ -5037,6 +5117,40 @@ function UsersTab() {
       setActionErr(e.message);
     } finally {
       setResetting(false);
+    }
+  };
+
+  // Freeze / unfreeze: the flag lives on the UserLogin row — User.IsFrozen
+  // is rejected by the REST API (INVALID_FIELD: no such column). Requires
+  // the "Freeze and unfreeze users" (Manage Users) permission — a missing
+  // grant surfaces the API error in the action-error line. The button label
+  // flips from the local UserLogin update, and again from the server on the
+  // next selection.
+  const toggleFreeze = async () => {
+    if (!sel || !frozenLogin) return;
+    if (meId && sel.Id === meId) {
+      setActionMsg(null);
+      setActionErr("You cannot freeze or unfreeze your own user.");
+      return;
+    }
+    const next = !ffTruthy(frozenLogin.IsFrozen);
+    setActionMsg(null);
+    setActionErr(null);
+    setFreezing(true);
+    try {
+      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/UserLogin/${encodeURIComponent(frozenLogin.Id)}`, {
+        method: "PATCH",
+        useCache: false,
+        body: {IsFrozen: next}
+      });
+      setFrozenLogin(prev => (prev ? {...prev, IsFrozen: next} : prev));
+      setActionMsg(next
+        ? `${sel.Username} is now frozen — they cannot log in until unfrozen.`
+        : `${sel.Username} has been unfrozen and can log in again.`);
+    } catch (e) {
+      setActionErr(e.message);
+    } finally {
+      setFreezing(false);
     }
   };
 
@@ -5516,7 +5630,12 @@ function UsersTab() {
                   h("span", {className: "usr-kv-k"}, "Is Active"),
                   h("span", {className: "usr-kv-v"},
                     sel.Active != null && h(FFBadge, {kind: ffTruthy(sel.Active) ? "ok" : "off"},
-                      ffTruthy(sel.Active) ? "Yes" : "No"))))),
+                      ffTruthy(sel.Active) ? "Yes" : "No"))),
+                frozenLogin && h("div", {className: "usr-kv-row"},
+                  h("span", {className: "usr-kv-k"}, "Is Frozen"),
+                  h("span", {className: "usr-kv-v"},
+                    h(FFBadge, {kind: frozen ? "off" : "ok"},
+                      frozen ? "Yes" : "No"))))),
             h("div", {className: "sq3-card"},
               h("div", {className: "sq3-card-h"},
                 h("span", {className: "sq3-card-t"}, "Quick Actions")),
@@ -5531,6 +5650,18 @@ function UsersTab() {
                   title: "Create a new user with the same profile, role, permission sets and groups",
                   onClick: () => (cloneOpen ? setCloneOpen(false) : openClone())
                 }, cloneOpen ? "Close Clone" : "Clone User"),
+                h("button", {
+                  className: "btn btn-secondary btn-sm",
+                  disabled: freezing || !frozenLogin,
+                  title: !frozenLogin
+                    ? "Frozen state unavailable (requires the Manage Users permission)"
+                    : frozen
+                      ? "Unfreeze this user so they can log in again"
+                      : "Freeze this user — they cannot log in until unfrozen",
+                  onClick: toggleFreeze
+                }, freezing
+                  ? (frozen ? "Unfreezing…" : "Freezing…")
+                  : (frozen ? "Unfreeze User" : "Freeze User")),
                 h("button", {
                   className: "btn btn-secondary btn-sm",
                   disabled: resetting,

@@ -580,7 +580,12 @@
     for (const p of parts) {
       const m = p.match(/\/(?:r|sObject)\/([A-Za-z0-9_]+)\/([a-zA-Z0-9]{15,18})(?:\/|$)/);
       if (m) return {obj: m[1], id: m[2]};
-      const m2 = p.match(/\/([A-Za-z0-9_]+)\/([a-zA-Z0-9]{15,18})(?:\/view)?\/?$/);
+      // Generic end-of-path fallback — only inside Salesforce UI paths
+      // (Lightning, one.app, community /s/), so a home/setup/dashboard page
+      // whose URL happens to end /Word/<15-18 chars> can never fake a
+      // record context.
+      const m2 = /^\/(?:lightning\/one|one|s)\//.test(p)
+        ? p.match(/\/([A-Za-z0-9_]+)\/([a-zA-Z0-9]{15,18})(?:\/view)?\/?$/) : null;
       if (m2) return {obj: m2[1], id: m2[2]};
       // Object / list page (Records tab VIEW O): object known, no record.
       const m3 = p.match(/\/o\/([A-Za-z0-9_]+)\/(?:list|home)(?:\/|$)/);
