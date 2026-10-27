@@ -1,258 +1,1586 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jai Shri Ram</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Goodbye for Now · SaralForce · Jai Shri Ram</title>
+<meta name="description" content="Thank you for trying SaralForce – AI-Powered Salesforce Toolkit. Making Salesforce Life Easy.">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#3b1300">
+<link rel="icon" type="image/svg+xml" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32"%3E  %3Cdefs%3E    %3ClinearGradient id="tile" x1="0" y1="0" x2="1" y2="1"%3E%3Cstop offset="0" stop-color="%231c2452"/%3E%3Cstop offset="1" stop-color="%230a0f26"/%3E%3C/linearGradient%3E    %3ClinearGradient id="cloud" x1="0.1" y1="0" x2="0.9" y2="1"%3E%3Cstop offset="0" stop-color="%23ffd36e"/%3E%3Cstop offset="0.5" stop-color="%23ff9a1f"/%3E%3Cstop offset="1" stop-color="%23f05a0e"/%3E%3C/linearGradient%3E  %3C/defs%3E  %3Crect x="0" y="0" width="32" height="32" rx="7" fill="url%28%23tile%29"/%3E  %3Cg transform="translate%280 -1.5%29"%3E%3Cpath d="M8 26 H24 A5 5 0 0 0 25 16 A8 8 0 0 0 9.6 14.6 A5.8 5.8 0 0 0 8 26 Z" fill="url%28%23cloud%29"/%3E  %3Cg fill="none" stroke="%23141a3c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"%3E    %3Cpath d="M12.5 17.5 L10 20.5 L12.5 23.5"/%3E    %3Cpath d="M17.5 16.5 L14.8 24.5"/%3E    %3Cpath d="M20 17.5 L22.5 20.5 L20 23.5"/%3E  %3C/g%3E  %3C/g%3E  %3Cpath d="M26 3 Q26.6 6.4 29 7 Q26.6 7.6 26 11 Q25.4 7.6 23 7 Q25.4 6.4 26 3 Z" fill="%23fff3c4"/%3E%3C/svg%3E'>
 <!--
-  SaralForce farewell page.
-  Fully self-contained (inline CSS + inline SVG, zero external assets).
+  ═══════════════════════════════════════════════════════════════════════
+  SaralForce – Farewell (uninstall) page · v2
+  Fully self-contained: inline CSS, inline SVG, inline JS. Zero external
+  assets, fonts, libraries, analytics or trackers.
 
-  HOSTING (required — Chrome only allows http/https uninstall URLs):
-    1. Push this repo to GitHub.
-    2. GitHub repo → Settings → Pages → "Deploy from a branch" →
-       Branch: main, Folder: / (or /docs if you move this file there).
-    3. Copy your Pages URL, e.g. https://<user>.github.io/<repo>/addon/goodbye.html
-    4. Paste it into addon/background.js → setUninstallURL("...") and reload
-       the extension on chrome://extensions.
+  ▶ EDIT THE CONFIG BLOCK  (search for "SARALFORCE_CONFIG" below) to set:
+      • feedbackEndpoint   – where uninstall feedback is POSTed
+      • chromeStoreUrl / edgeStoreUrl – your official store listings
+      • websiteUrl         – your official SaralForce website
+
+  HOSTING (Chrome/Edge only allow http/https uninstall URLs):
+    1. Push this file to GitHub (e.g. addon/goodbye.html).
+    2. Repo → Settings → Pages → "Deploy from a branch" → main, / (root).
+    3. Copy the Pages URL, e.g. https://<user>.github.io/<repo>/addon/goodbye.html
+    4. In addon/background.js:
+         chrome.runtime.setUninstallURL(
+           "https://<user>.github.io/<repo>/addon/goodbye.html?v=" +
+           chrome.runtime.getManifest().version);
+       (the ?v= part is optional; it only fills in the version shown/sent)
+  ═══════════════════════════════════════════════════════════════════════
 -->
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body {
-    font-family: "Noto Sans Devanagari", "Mangal", Georgia, serif;
-    background: linear-gradient(180deg, #3b1300 0%, #7a2a00 22%, #e06a00 48%, #ff9a2e 66%, #ffd27a 100%);
-    min-height: 100vh;
-    overflow-x: hidden;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-end;
-    position: relative;
-    color: #fff;
-  }
+/* ───────────────────────── Design tokens ───────────────────────── */
+:root {
+  --saffron: #ff8a1f;
+  --saffron-deep: #e85d04;
+  --gold: #ffd36e;
+  --gold-soft: #ffe9c4;
+  --maroon: #3b1300;
+  --navy: #141a3c;
 
-  /* Sun */
-  .sun {
-    position: absolute;
-    top: 8%;
-    left: 50%;
-    width: 180px;
-    height: 180px;
-    margin-left: -90px;
-    border-radius: 50%;
-    background: radial-gradient(circle, #fff8e1 0%, #ffe082 35%, #ff9800 70%, rgba(255,152,0,0) 72%);
-    box-shadow: 0 0 120px 60px rgba(255, 183, 77, 0.55);
-    animation: sunPulse 6s ease-in-out infinite;
-    z-index: 1;
-  }
-  @keyframes sunPulse {
-    0%, 100% { transform: scale(1); opacity: 0.95; }
-    50% { transform: scale(1.06); opacity: 1; }
-  }
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-deva: "Nirmala UI", "Noto Sans Devanagari", "Kohinoor Devanagari", Mangal, var(--font-display);
 
-  /* Floating petals / diya sparks */
-  .petal {
-    position: absolute;
-    bottom: -20px;
-    border-radius: 60% 0 60% 0;
-    background: radial-gradient(circle at 30% 30%, #ffe0b2, #ff7043);
-    opacity: 0.85;
-    animation: rise linear infinite;
-    z-index: 3;
-  }
-  @keyframes rise {
-    0% { transform: translateY(0) rotate(0deg); opacity: 0; }
-    10% { opacity: 0.9; }
-    100% { transform: translateY(-110vh) rotate(320deg); opacity: 0; }
-  }
+  --radius-lg: 28px;
+  --radius-md: 18px;
+  --radius-sm: 12px;
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+}
 
-  /* Temple + flags scene */
-  .scene {
-    position: relative;
-    width: min(920px, 96vw);
-    z-index: 2;
-    margin-top: 24vh;
-  }
-  .scene svg { display: block; width: 100%; height: auto; }
+/* Dark (dusk) – default */
+:root,
+:root[data-theme="dark"] {
+  --bg: #170904;
+  --bg-2: #22100a;
+  --surface: rgba(255, 196, 140, 0.06);
+  --surface-strong: rgba(255, 196, 140, 0.10);
+  --border: rgba(255, 196, 140, 0.16);
+  --border-strong: rgba(255, 170, 90, 0.45);
+  --text: #fff4e6;
+  --text-muted: #e9cfb2;
+  --text-faint: #c8a586;
+  --accent: #ffa64d;
+  --accent-text: #ffb870;
+  --accent-ink: #2a0f00;
+  --shadow: 0 20px 60px -20px rgba(0, 0, 0, 0.65), 0 2px 0 rgba(255, 255, 255, 0.03) inset;
+  --glow: rgba(255, 138, 31, 0.28);
+  --danger: #ff9b8a;
+  --danger-bg: rgba(255, 90, 60, 0.12);
+  --ok: #9be7a8;
+  --hero-filter: none;
+}
 
-  .flag-wave {
-    transform-box: fill-box;
-    transform-origin: left center;
-    animation: wave 2.6s ease-in-out infinite;
-  }
-  .flag-wave.d2 { animation-delay: -0.9s; }
-  .flag-wave.d3 { animation-delay: -1.7s; }
-  @keyframes wave {
-    0%, 100% { transform: skewY(0deg) scaleX(1); }
-    50% { transform: skewY(4deg) scaleX(0.96); }
-  }
+/* Light (dawn) */
+:root[data-theme="light"] {
+  --bg: #fff8ef;
+  --bg-2: #fff0dc;
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-strong: rgba(255, 255, 255, 0.92);
+  --border: rgba(180, 90, 20, 0.16);
+  --border-strong: rgba(214, 98, 0, 0.55);
+  --text: #2b1205;
+  --text-muted: #5d3a22;
+  --text-faint: #7d5a40;
+  --accent: #e86a00;
+  --accent-text: #b04600;
+  --accent-ink: #fff;
+  --shadow: 0 24px 60px -28px rgba(140, 60, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  --glow: rgba(255, 138, 31, 0.22);
+  --danger: #b3261e;
+  --danger-bg: rgba(179, 38, 30, 0.08);
+  --ok: #1e7b34;
+  --hero-filter: saturate(1.05) brightness(1.06);
+}
 
-  .flame {
-    transform-box: fill-box;
-    transform-origin: 50% 100%;
-    animation: flick 1.6s ease-in-out infinite;
-  }
-  @keyframes flick {
-    0%, 100% { transform: scaleY(1) scaleX(1); opacity: 0.95; }
-    30% { transform: scaleY(1.12) scaleX(0.94); opacity: 1; }
-    60% { transform: scaleY(0.94) scaleX(1.05); opacity: 0.9; }
-  }
+/* ───────────────────────── Base ───────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; padding: 0; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.6;
+  background: var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
+  transition: background-color .5s ease, color .5s ease;
+}
+img, svg { display: block; max-width: 100%; }
+a { color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; border-radius: 10px; }
+[hidden] { display: none !important; }
+.sr-only {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.skip-link {
+  position: fixed; left: 16px; top: -60px; z-index: 100;
+  background: var(--gold); color: var(--accent-ink, #2a0f00); color: #2a0f00;
+  padding: 10px 16px; border-radius: 12px; font-weight: 600; text-decoration: none;
+  transition: top .2s ease;
+}
+.skip-link:focus { top: 16px; }
 
-  /* Greeting */
-  .greeting {
-    position: absolute;
-    top: 24%;
-    left: 0;
-    right: 0;
-    text-align: center;
-    z-index: 4;
-    padding: 0 16px;
-    animation: fadeUp 2.2s ease-out both;
-  }
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(26px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .greeting .om {
-    font-size: clamp(28px, 5vw, 54px);
-    color: #ffe9c4;
-    text-shadow: 0 0 24px rgba(255, 200, 90, 0.9), 0 2px 6px rgba(60, 20, 0, 0.6);
-    letter-spacing: 0.35em;
-    margin-bottom: 10px;
-  }
-  .greeting h1 {
-    font-size: clamp(44px, 9vw, 96px);
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    color: #fff7e6;
-    text-shadow:
-      0 0 18px rgba(255, 220, 150, 0.95),
-      0 0 70px rgba(255, 140, 0, 0.8),
-      0 3px 8px rgba(60, 20, 0, 0.65);
-  }
-  .greeting .en {
-    margin-top: 8px;
-    font-size: clamp(16px, 3vw, 26px);
-    letter-spacing: 0.5em;
-    text-indent: 0.5em;
-    color: #ffedd2;
-    text-shadow: 0 2px 6px rgba(60, 20, 0, 0.6);
-    font-family: Georgia, serif;
-  }
+.deva { font-family: var(--font-deva); }
+.container { width: min(1120px, 100% - 32px); margin-inline: auto; }
 
-  /* Ground glow */
-  .ground {
-    width: 100%;
-    height: 90px;
-    background: radial-gradient(ellipse at 50% 0%, rgba(255, 214, 140, 0.5), rgba(60, 20, 0, 0.55) 70%);
-    z-index: 2;
+/* ───────────────────────── Top bar ───────────────────────── */
+.progress {
+  position: fixed; inset: 0 0 auto 0; height: 3px; z-index: 60;
+  background: linear-gradient(90deg, var(--gold), var(--saffron), var(--saffron-deep));
+  transform-origin: 0 50%; transform: scaleX(0);
+  box-shadow: 0 0 12px rgba(255, 160, 60, .8);
+}
+.topbar {
+  position: fixed; inset: 12px 0 auto 0; z-index: 50;
+  pointer-events: none;
+}
+.topbar .container {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.brand-chip, .theme-toggle {
+  pointer-events: auto;
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 6px 14px 6px 6px;
+  border-radius: 999px;
+  background: rgba(30, 12, 4, 0.38);
+  border: 1px solid rgba(255, 220, 170, 0.22);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  color: #fff4e6;
+  text-decoration: none;
+  font-weight: 650; letter-spacing: .01em;
+  box-shadow: 0 8px 24px -12px rgba(0,0,0,.5);
+  transition: background-color .3s ease, transform .3s var(--ease-out);
+}
+.brand-chip svg { width: 30px; height: 30px; border-radius: 9px; }
+.brand-chip small { font-weight: 500; opacity: .75; font-size: 12px; margin-left: 2px; }
+:root[data-theme="light"] .brand-chip, :root[data-theme="light"] .theme-toggle {
+  background: rgba(255, 250, 242, .78); color: #3a1806; border-color: rgba(200, 100, 20, .22);
+}
+:root[data-theme="light"] .theme-toggle:hover, :root[data-theme="light"] .brand-chip:hover { background: rgba(255, 255, 255, .95); }
+.theme-toggle {
+  padding: 0; width: 44px; height: 44px; justify-content: center; cursor: pointer;
+}
+.theme-toggle:hover, .brand-chip:hover { transform: translateY(-1px); background: rgba(30, 12, 4, 0.55); }
+.theme-toggle svg { width: 20px; height: 20px; }
+.theme-toggle .moon { display: none; }
+:root[data-theme="light"] .theme-toggle .sun-i { display: none; }
+:root[data-theme="light"] .theme-toggle .moon { display: block; }
+
+/* Journey rail (farewell timeline) */
+.journey {
+  position: fixed; right: 22px; top: 50%; transform: translateY(-50%);
+  z-index: 40; display: none;
+}
+.journey ol { list-style: none; position: relative; display: grid; gap: 18px; }
+.journey ol::before {
+  content: ""; position: absolute; right: 7px; top: 8px; bottom: 8px; width: 2px;
+  background: var(--border);
+}
+.journey .fill {
+  position: absolute; right: 7px; top: 8px; width: 2px; height: calc(100% - 16px);
+  background: linear-gradient(var(--gold), var(--saffron));
+  transform-origin: top; transform: scaleY(0);
+  transition: transform .5s var(--ease-out);
+}
+.journey a {
+  display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+  text-decoration: none; color: var(--text-faint); font-size: 13px; font-weight: 600;
+}
+.journey a span.lbl {
+  opacity: 0; transform: translateX(6px);
+  transition: opacity .25s ease, transform .25s var(--ease-out);
+  background: var(--surface-strong); border: 1px solid var(--border);
+  padding: 2px 10px; border-radius: 999px;
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.journey a:hover span.lbl, .journey a:focus-visible span.lbl, .journey a[aria-current="step"] span.lbl {
+  opacity: 1; transform: none;
+}
+.journey a[aria-current="step"] { color: var(--text); }
+.journey .dot {
+  position: relative; z-index: 1;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--border-strong);
+  transition: background-color .3s ease, transform .3s var(--ease-spring), box-shadow .3s ease;
+}
+.journey a.done .dot { background: var(--saffron); border-color: var(--saffron); }
+.journey a[aria-current="step"] .dot {
+  background: var(--gold); border-color: var(--gold); transform: scale(1.25);
+  box-shadow: 0 0 0 6px var(--glow);
+}
+.journey.on-hero .dot { background: rgba(60, 20, 0, .4); }
+.journey.on-hero a, .journey.on-hero a[aria-current="step"] { color: #fff4e6; }
+@media (min-width: 1100px) { .journey { display: block; } }
+
+/* ───────────────────────── 1 · HERO ───────────────────────── */
+.hero {
+  position: relative; isolation: isolate;
+  min-height: 0;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 70% at 50% 18%, rgba(255, 236, 190, .35), transparent 60%),
+    linear-gradient(180deg, #2a0b00 0%, #5e1f00 14%, #a83b00 32%, #e06a00 50%, #ff9a2e 68%, #ffc76b 86%, #ffd98a 100%);
+  filter: var(--hero-filter);
+  color: #fff;
+}
+:root[data-theme="light"] .hero {
+  background:
+    radial-gradient(120% 70% at 50% 18%, rgba(255, 246, 220, .5), transparent 60%),
+    linear-gradient(180deg, #7a2c00 0%, #b84800 16%, #ea7a10 36%, #ff9f3a 56%, #ffc679 76%, #ffe2a8 100%);
+}
+.hero::after { /* fade into page */
+  content: ""; position: absolute; inset: auto 0 0 0; height: 90px; z-index: 6;
+  background: linear-gradient(180deg, transparent, var(--bg));
+  pointer-events: none;
+}
+#sky-particles { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+
+.sun-wrap {
+  position: absolute; left: 50%; top: 0; width: 0; height: 0; z-index: -1;
+  animation: sunrise 3.2s var(--ease-out) both;
+}
+@keyframes sunrise { from { transform: translateY(120px); opacity: .3; } to { transform: none; opacity: 1; } }
+.sun-rays {
+  position: absolute; width: 900px; height: 900px; left: -450px; top: -375px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, rgba(255, 238, 190, .16) 0deg 5deg, transparent 5deg 15deg);
+  -webkit-mask: radial-gradient(circle, #000 12%, transparent 62%);
+  mask: radial-gradient(circle, #000 12%, transparent 62%);
+  animation: spin 120s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.sun {
+  position: absolute; width: 200px; height: 200px; left: -100px; top: -25px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fffbea 0%, #fff0b8 26%, #ffd166 48%, #ff9800 70%, rgba(255,152,0,0) 72%);
+  box-shadow: 0 0 120px 60px rgba(255, 183, 77, .55), 0 0 260px 120px rgba(255, 140, 0, .25);
+  animation: sunPulse 6s ease-in-out infinite;
+}
+@keyframes sunPulse { 0%,100% { transform: scale(1); opacity: .95; } 50% { transform: scale(1.06); opacity: 1; } }
+
+.cloud {
+  position: absolute; z-index: 1; height: 40px; border-radius: 40px;
+  background: rgba(255, 230, 200, .22);
+  filter: blur(6px);
+  animation: drift linear infinite;
+}
+.cloud::before, .cloud::after {
+  content: ""; position: absolute; background: inherit; border-radius: 50%;
+}
+.cloud::before { width: 60%; height: 150%; left: 15%; top: -60%; }
+.cloud::after { width: 40%; height: 120%; right: 12%; top: -40%; }
+.cloud.c1 { width: 220px; top: 22%; left: -260px; animation-duration: 90s; }
+.cloud.c2 { width: 160px; top: 34%; left: -200px; animation-duration: 120s; animation-delay: -60s; opacity: .7; }
+.cloud.c3 { width: 260px; top: 14%; left: -300px; animation-duration: 140s; animation-delay: -30s; opacity: .5; }
+@keyframes drift { to { transform: translateX(calc(100vw + 600px)); } }
+
+.greeting {
+  position: relative; z-index: 5; text-align: center;
+  padding: 72px 16px 0;
+  margin-bottom: auto; margin-top: 0;
+}
+.greeting .om {
+  font-size: clamp(26px, 4.6vw, 50px);
+  color: #ffe9c4; letter-spacing: .35em; text-indent: .35em;
+  text-shadow: 0 0 24px rgba(255, 200, 90, .9), 0 2px 6px rgba(60, 20, 0, .6);
+  animation: fadeUp 1.6s var(--ease-out) .2s both;
+}
+.greeting h1 {
+  font-size: clamp(40px, min(7.5vw, 9vh), 84px);
+  font-weight: 700; line-height: 1.15; letter-spacing: .02em;
+  color: #fff7e6;
+  text-shadow: 0 0 18px rgba(255, 220, 150, .95), 0 0 70px rgba(255, 140, 0, .8), 0 3px 8px rgba(60, 20, 0, .65);
+  animation: fadeUp 1.8s var(--ease-out) .5s both, haloPulse 5s ease-in-out 2.4s infinite;
+}
+@keyframes haloPulse {
+  0%,100% { text-shadow: 0 0 18px rgba(255,220,150,.95), 0 0 70px rgba(255,140,0,.8), 0 3px 8px rgba(60,20,0,.65); }
+  50% { text-shadow: 0 0 26px rgba(255,236,190,1), 0 0 100px rgba(255,150,20,.95), 0 3px 8px rgba(60,20,0,.65); }
+}
+.greeting .en {
+  margin-top: 6px;
+  font-family: var(--font-display);
+  font-size: clamp(15px, 2.6vw, 24px);
+  letter-spacing: .5em; text-indent: .5em;
+  color: #ffedd2; text-shadow: 0 2px 6px rgba(60, 20, 0, .6);
+  animation: fadeUp 1.8s var(--ease-out) .9s both;
+}
+.greeting .bridge {
+  display: inline-flex; align-items: center; gap: 10px;
+  margin-top: 14px; padding: 8px 16px;
+  font-size: 14px; letter-spacing: .02em; color: #fff4e6;
+  background: rgba(60, 20, 0, .32); border: 1px solid rgba(255, 230, 190, .28);
+  border-radius: 999px;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  animation: fadeUp 1.8s var(--ease-out) 1.3s both;
+}
+.greeting .bridge svg { width: 22px; height: 22px; border-radius: 6px; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
+
+.scene {
+  position: relative; z-index: 4; isolation: isolate;
+  width: min(100%, max(440px, min(780px, calc((73vh - 316px) * 2.33))));
+  width: min(100%, max(440px, min(780px, calc((73svh - 316px) * 2.33))));
+  margin-top: 12px;
+}
+.scene > svg { width: 100%; height: auto; overflow: visible; }
+
+/* SVG animation hooks */
+.flame { transform-box: fill-box; transform-origin: 50% 100%; animation: flick 1.6s ease-in-out infinite; }
+.flame.f2 { animation-duration: 1.9s; animation-delay: -.6s; }
+.flame.f3 { animation-duration: 1.4s; animation-delay: -1.1s; }
+@keyframes flick {
+  0%,100% { transform: scale(1, 1) rotate(0); opacity: .95; }
+  25% { transform: scale(.95, 1.12) rotate(-2deg); opacity: 1; }
+  55% { transform: scale(1.05, .94) rotate(2deg); opacity: .9; }
+  80% { transform: scale(.97, 1.06) rotate(-1deg); }
+}
+.flame-glow { transform-box: fill-box; transform-origin: center; animation: glow 2.2s ease-in-out infinite; }
+@keyframes glow { 0%,100% { opacity: .55; transform: scale(1); } 50% { opacity: .9; transform: scale(1.15); } }
+.door-glow { animation: doorGlow 4s ease-in-out infinite; }
+@keyframes doorGlow { 0%,100% { opacity: .75; } 50% { opacity: 1; } }
+.om-on-flag { animation: omSway 2.6s ease-in-out infinite; transform-box: fill-box; transform-origin: left center; }
+@keyframes omSway { 0%,100% { transform: translateY(0) skewY(0); } 50% { transform: translateY(1.5px) skewY(3deg); } }
+.bob { transform-box: fill-box; transform-origin: center; animation: bob 6s ease-in-out infinite; }
+.bob.b2 { animation-duration: 7.5s; animation-delay: -2s; }
+.bob.b3 { animation-duration: 8.5s; animation-delay: -4s; }
+.bob.b4 { animation-duration: 6.8s; animation-delay: -1s; }
+@keyframes bob { 0%,100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-12px) rotate(2deg); } }
+.bird { animation: fly 26s linear infinite; }
+.bird.k2 { animation-duration: 34s; animation-delay: -12s; }
+@keyframes fly { from { transform: translate(-80px, 0); } to { transform: translate(1000px, -40px); } }
+.wing { transform-box: fill-box; transform-origin: center bottom; animation: flap .7s ease-in-out infinite alternate; }
+@keyframes flap { to { transform: scaleY(.3); } }
+
+/* "Continue" pill — tells visitors there's more below the hero */
+.next-pill {
+  position: fixed; left: 0; right: 0; margin-inline: auto; width: max-content; max-width: calc(100% - 32px);
+  bottom: max(18px, env(safe-area-inset-bottom)); z-index: 45;
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 10px 18px 10px 14px; border-radius: 999px;
+  background: linear-gradient(135deg, #ffd36e, #ff8a1f); color: #2a0f00;
+  font-weight: 700; font-size: 14.5px; text-decoration: none; white-space: nowrap;
+  box-shadow: 0 12px 30px -10px rgba(255, 122, 18, .8);
+  transition: opacity .4s ease, transform .4s var(--ease-out);
+  animation: fadeUp 1s var(--ease-out) 1.6s both;
+}
+.next-pill svg { width: 18px; height: 18px; animation: nudge 1.6s ease-in-out infinite; }
+@keyframes nudge { 0%,100% { transform: translateY(0); } 50% { transform: translateY(4px); } }
+.next-pill:hover { transform: translateY(-2px); }
+.next-pill.gone { opacity: 0; transform: translateY(20px); pointer-events: none; }
+.next-pill.settled { animation: none; }
+
+/* Rising petals (from original goodbye.js) */
+.petal {
+  position: fixed; bottom: -24px; z-index: 30; pointer-events: none;
+  border-radius: 60% 0 60% 0;
+  opacity: .85;
+  animation: rise linear forwards;
+  will-change: transform, opacity;
+}
+@keyframes rise {
+  0% { transform: translate3d(0,0,0) rotate(0); opacity: 0; }
+  10% { opacity: .9; }
+  50% { transform: translate3d(var(--sway, 30px), -55vh, 0) rotate(160deg); }
+  100% { transform: translate3d(0, -110vh, 0) rotate(320deg); opacity: 0; }
+}
+
+/* ───────────────────────── Sections (shared) ───────────────────────── */
+main section { position: relative; padding: clamp(72px, 10vw, 128px) 0; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-size: 13px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--accent-text);
+}
+.eyebrow::before { content: ""; width: 28px; height: 2px; border-radius: 2px; background: currentColor; }
+.section-title {
+  font-family: var(--font-display);
+  font-size: clamp(30px, 4.6vw, 52px);
+  line-height: 1.12; letter-spacing: -.01em; font-weight: 700;
+  margin: 14px 0 14px;
+}
+.lead { font-size: clamp(16px, 1.6vw, 19px); color: var(--text-muted); max-width: 62ch; }
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  backdrop-filter: blur(16px) saturate(1.3);
+}
+.ambient {
+  position: absolute; z-index: -1; border-radius: 50%; filter: blur(80px); opacity: .55; pointer-events: none;
+}
+.mandala-divider { display: flex; align-items: center; gap: 16px; justify-content: center; color: var(--accent-text); opacity: .8; }
+.mandala-divider::before, .mandala-divider::after { content: ""; height: 1px; flex: 0 1 140px; background: linear-gradient(90deg, transparent, currentColor); }
+.mandala-divider::after { transform: scaleX(-1); }
+.mandala-divider svg { width: 28px; height: 28px; animation: spin 40s linear infinite; }
+
+/* Reveal on scroll */
+.js .reveal { opacity: 0; transform: translateY(28px); transition: opacity .9s var(--ease-out), transform .9s var(--ease-out); transition-delay: var(--d, 0s); }
+.js .reveal.in { opacity: 1; transform: none; }
+
+/* Word-by-word text reveal */
+.words .w { display: inline-block; white-space: pre; }
+.js .words .w { opacity: 0; transform: translateY(.5em); filter: blur(6px); transition: opacity .7s var(--ease-out), transform .7s var(--ease-out), filter .7s var(--ease-out); transition-delay: calc(var(--i) * 70ms + var(--d, 0s)); }
+.js .words.in .w { opacity: 1; transform: none; filter: none; }
+
+/* ───────────────────────── 2 · GOODBYE ───────────────────────── */
+#goodbye { padding-top: 8px; }
+.goodbye-grid { display: grid; gap: 28px; grid-template-columns: 1fr; align-items: stretch; }
+@media (min-width: 920px) { .goodbye-grid { grid-template-columns: 1.35fr 1fr; } }
+
+.farewell-card { padding: clamp(28px, 4.5vw, 52px); position: relative; overflow: hidden; }
+.farewell-card .ambient { width: 320px; height: 320px; background: var(--saffron); top: -140px; right: -120px; opacity: .25; }
+.wave-wrap { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+.wave-btn {
+  width: 72px; height: 72px; flex: none; border-radius: 22px; border: 1px solid var(--border);
+  background: linear-gradient(145deg, rgba(255, 211, 110, .22), rgba(255, 138, 31, .14));
+  display: grid; place-items: center; cursor: pointer; font-size: 38px; line-height: 1;
+  transition: transform .3s var(--ease-spring), box-shadow .3s ease;
+}
+.wave-btn:hover { transform: translateY(-3px) rotate(-3deg); box-shadow: 0 12px 30px -10px var(--glow); }
+.hand { display: inline-block; transform-origin: 70% 75%; animation: wave 2.4s ease-in-out 1s infinite; }
+.hand.go { animation: waveFast .9s ease-in-out 2; }
+@keyframes wave { 0%,60%,100% { transform: rotate(0); } 10%,30% { transform: rotate(16deg); } 20%,40% { transform: rotate(-10deg); } 50% { transform: rotate(10deg); } }
+@keyframes waveFast { 0%,100% { transform: rotate(0); } 20%,60% { transform: rotate(22deg); } 40%,80% { transform: rotate(-14deg); } }
+.wave-caption { font-size: 13px; color: var(--text-faint); }
+.farewell-card h2 { font-family: var(--font-display); font-size: clamp(34px, 4.4vw, 54px); line-height: 1.05; letter-spacing: -.015em; }
+.farewell-card h2 .grad {
+  background: linear-gradient(100deg, var(--gold), var(--saffron) 55%, var(--saffron-deep));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+:root[data-theme="light"] .farewell-card h2 .grad { background: linear-gradient(100deg, #c85a00, #e85d04 55%, #b03a00); -webkit-background-clip: text; background-clip: text; }
+.farewell-card .sub { font-size: clamp(18px, 2vw, 22px); font-weight: 600; margin: 16px 0 14px; color: var(--text); }
+.farewell-card .msg { color: var(--text-muted); font-size: 17px; max-width: 58ch; }
+.farewell-card .msg strong { color: var(--accent-text); font-weight: 700; }
+.signature { display: flex; align-items: center; gap: 12px; margin-top: 28px; color: var(--text-faint); font-size: 14px; }
+.signature .line { height: 1px; width: 40px; background: var(--border-strong); }
+
+/* Product identity card */
+.identity {
+  padding: 30px; position: relative; overflow: hidden;
+  display: flex; flex-direction: column; gap: 18px;
+  background:
+    radial-gradient(140% 80% at 100% 0%, rgba(255, 138, 31, .22), transparent 55%),
+    linear-gradient(160deg, #1b2250 0%, #0e1330 100%);
+  color: #eef1ff;
+  border: 1px solid rgba(160, 175, 255, .18);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 30px 70px -30px rgba(10, 15, 40, .8);
+  transition: transform .5s var(--ease-out);
+  transform-style: preserve-3d;
+}
+.identity::after { /* sheen */
+  content: ""; position: absolute; inset: -40% -60%;
+  background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, .09) 50%, transparent 60%);
+  transform: translateX(-60%); transition: transform 1.2s var(--ease-out); pointer-events: none;
+}
+.identity:hover::after { transform: translateX(60%); }
+.identity .head { display: flex; gap: 16px; align-items: center; }
+.identity .logo { width: 72px; height: 72px; flex: none; filter: drop-shadow(0 10px 22px rgba(255, 138, 31, .35)); animation: logoFloat 6s ease-in-out infinite; }
+@keyframes logoFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+.identity h3 { font-size: 26px; letter-spacing: -.01em; line-height: 1.1; }
+.identity .tag { color: #ffc27a; font-weight: 600; font-size: 15px; margin-top: 4px; }
+.identity p { color: #c9cff0; font-size: 15px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  font-size: 12.5px; font-weight: 600; padding: 5px 11px; border-radius: 999px;
+  background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .12); color: #dfe3ff;
+}
+.chip.hot { background: rgba(255, 138, 31, .16); border-color: rgba(255, 166, 77, .4); color: #ffd2a1; }
+.identity .meta { margin-top: auto; display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: #9aa3d6; border-top: 1px dashed rgba(255,255,255,.14); padding-top: 14px; }
+.identity kbd {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px;
+  padding: 2px 6px; border-radius: 6px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); border-bottom-width: 2px;
+}
+
+.trail { margin-top: 4px; }
+.trail-title { font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #9aa3d6; margin-bottom: 14px; }
+.trail ol { list-style: none; display: grid; grid-template-columns: repeat(4, 1fr); position: relative; }
+.trail ol::before, .trail ol::after {
+  content: ""; position: absolute; top: 9px; left: 12.5%; height: 2px; border-radius: 2px;
+}
+.trail ol::before { right: 12.5%; background: repeating-linear-gradient(90deg, rgba(255,255,255,.22) 0 6px, transparent 6px 11px); }
+.trail ol::after { width: 50%; background: linear-gradient(90deg, #ffd36e, #ff8a1f); transform-origin: left; transform: scaleX(0); transition: transform 1.6s var(--ease-out) .6s; }
+.identity.in .trail ol::after, html:not(.js) .trail ol::after { transform: scaleX(1); }
+.trail li { position: relative; z-index: 1; display: grid; justify-items: center; gap: 8px; text-align: center; font-size: 12.5px; font-weight: 600; color: #c9cff0; }
+.trail .node { width: 20px; height: 20px; border-radius: 50%; background: #0e1330; border: 2px solid rgba(255,255,255,.3); }
+.trail .ok .node { background: #ff8a1f; border-color: #ffd36e; }
+.trail .now .node { background: #ffd36e; border-color: #fff3c4; box-shadow: 0 0 0 0 rgba(255, 211, 110, .6); animation: ping 2s ease-out infinite; }
+.trail .now { color: #ffd2a1; }
+.trail .next { color: #8f97c8; }
+.trail .next .node { border-style: dashed; }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(255, 211, 110, .6); } 100% { box-shadow: 0 0 0 12px rgba(255, 211, 110, 0); } }
+
+/* ───────────────────────── 3 · FEEDBACK ───────────────────────── */
+#feedback .ambient.a1 { width: 420px; height: 420px; background: #ff7a00; left: -200px; top: 10%; opacity: .14; }
+.feedback-shell { padding: clamp(24px, 4vw, 48px); margin-top: 32px; position: relative; overflow: hidden; }
+.optional-pill {
+  display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .06em;
+  padding: 4px 10px; border-radius: 999px; background: var(--surface-strong); border: 1px solid var(--border); color: var(--text-muted);
+  vertical-align: middle; margin-left: 8px;
+}
+fieldset { border: 0; min-width: 0; }
+legend { font-weight: 700; font-size: 18px; margin-bottom: 4px; }
+.hint { color: var(--text-faint); font-size: 14px; margin-bottom: 18px; }
+.reasons { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); }
+.reason { position: relative; }
+.reason input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.reason label {
+  display: flex; align-items: flex-start; gap: 12px; height: 100%;
+  padding: 16px 16px 16px 14px; border-radius: var(--radius-md);
+  background: var(--surface); border: 1.5px solid var(--border);
+  cursor: pointer; user-select: none;
+  transition: border-color .25s ease, background-color .25s ease, transform .25s var(--ease-out), box-shadow .25s ease;
+}
+.reason label:hover { transform: translateY(-2px); border-color: var(--border-strong); box-shadow: 0 10px 24px -14px var(--glow); }
+.reason .ico {
+  flex: none; width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
+  background: var(--surface-strong); border: 1px solid var(--border); font-size: 19px;
+  transition: transform .35s var(--ease-spring), background-color .25s ease;
+}
+.reason .txt { font-size: 15px; font-weight: 550; line-height: 1.4; padding-top: 8px; flex: 1; }
+.reason .tick {
+  flex: none; width: 22px; height: 22px; margin-top: 8px; border-radius: 7px; border: 1.5px solid var(--border-strong);
+  display: grid; place-items: center; transition: background-color .2s ease, border-color .2s ease;
+}
+.reason .tick svg { width: 14px; height: 14px; stroke: var(--accent-ink); stroke-width: 3; fill: none; stroke-dasharray: 20; stroke-dashoffset: 20; transition: stroke-dashoffset .3s ease .05s; }
+.reason input:checked + label {
+  border-color: var(--saffron); background: linear-gradient(145deg, rgba(255, 166, 77, .18), rgba(255, 138, 31, .06));
+  box-shadow: 0 0 0 4px var(--glow);
+}
+.reason input:checked + label .ico { transform: scale(1.1) rotate(-6deg); background: rgba(255, 166, 77, .25); }
+.reason input:checked + label .tick { background: var(--saffron); border-color: var(--saffron); }
+.reason input:checked + label .tick svg { stroke-dashoffset: 0; }
+.reason input:focus-visible + label { outline: 3px solid var(--gold); outline-offset: 3px; }
+
+.comment-wrap { margin-top: 26px; }
+.comment-wrap label { display: block; font-weight: 700; margin-bottom: 8px; }
+textarea {
+  width: 100%; min-height: 128px; resize: vertical;
+  padding: 14px 16px; border-radius: var(--radius-md);
+  background: var(--surface); border: 1.5px solid var(--border); color: var(--text);
+  line-height: 1.55; transition: border-color .2s ease, box-shadow .2s ease;
+}
+textarea::placeholder { color: var(--text-faint); opacity: .85; }
+textarea:focus { outline: none; border-color: var(--saffron); box-shadow: 0 0 0 4px var(--glow); }
+.comment-foot { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 13px; color: var(--text-faint); flex-wrap: wrap; }
+.privacy { display: flex; gap: 10px; align-items: flex-start; margin-top: 22px; padding: 14px 16px; border-radius: var(--radius-sm); background: var(--surface); border: 1px dashed var(--border); font-size: 14px; color: var(--text-muted); }
+.privacy svg { width: 20px; height: 20px; flex: none; margin-top: 2px; stroke: var(--accent-text); }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+.form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; margin-top: 26px; }
+.status { font-size: 14.5px; min-height: 1.5em; }
+.status.error {
+  color: var(--danger); background: var(--danger-bg); border: 1px solid currentColor;
+  padding: 10px 14px; border-radius: var(--radius-sm); width: 100%;
+}
+.skip { color: var(--text-faint); font-size: 14px; text-underline-offset: 3px; }
+.skip:hover { color: var(--text); }
+
+/* Buttons */
+.btn {
+  --bh: 52px;
+  position: relative; overflow: hidden; isolation: isolate;
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  height: var(--bh); padding: 0 26px; border-radius: 999px;
+  font-weight: 700; font-size: 16px; letter-spacing: .01em; text-decoration: none;
+  border: 0; cursor: pointer;
+  transition: transform .3s var(--ease-spring), box-shadow .3s ease, opacity .2s ease, background-color .3s ease;
+}
+.btn svg { width: 20px; height: 20px; flex: none; }
+.btn-primary {
+  color: #2a0f00;
+  background: linear-gradient(135deg, #ffd36e 0%, #ffa23a 45%, #ff7a12 100%);
+  box-shadow: 0 10px 28px -10px rgba(255, 122, 18, .75), inset 0 1px 0 rgba(255,255,255,.5);
+}
+.btn-primary::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,.55) 50%, transparent 70%);
+  transform: translateX(-120%); transition: transform .8s var(--ease-out);
+}
+.btn-primary:hover::before { transform: translateX(120%); }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 16px 36px -12px rgba(255, 122, 18, .9), inset 0 1px 0 rgba(255,255,255,.5); }
+.btn-primary:active { transform: translateY(0) scale(.98); }
+.btn-ghost { color: var(--text); background: var(--surface-strong); border: 1.5px solid var(--border-strong); }
+.btn-ghost:hover { transform: translateY(-2px); background: var(--surface); box-shadow: 0 12px 30px -16px var(--glow); }
+.btn[disabled], .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; transform: none !important; box-shadow: none; }
+.btn .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(42,15,0,.25); border-top-color: #2a0f00; animation: spin .8s linear infinite; display: none; }
+.btn.loading .spinner { display: inline-block; }
+.btn.loading .btn-ico { display: none; }
+.btn .arrow { transition: transform .3s var(--ease-out); }
+.btn:hover .arrow { transform: translateX(4px); }
+
+/* Success state */
+.thanks { display: none; text-align: center; padding: clamp(20px, 4vw, 40px) 0; }
+.feedback-shell.sent form { display: none; }
+.feedback-shell.sent .thanks { display: block; animation: pop .8s var(--ease-spring) both; }
+@keyframes pop { from { opacity: 0; transform: scale(.92) translateY(10px); } to { opacity: 1; transform: none; } }
+.check-badge { width: 112px; height: 112px; margin: 0 auto 22px; position: relative; }
+.check-badge::before {
+  content: ""; position: absolute; inset: -14px; border-radius: 50%;
+  background: radial-gradient(circle, var(--glow), transparent 70%);
+  animation: glow 2.4s ease-in-out infinite;
+}
+.check-badge svg { position: relative; width: 100%; height: 100%; }
+.check-badge .ring { stroke-dasharray: 302; stroke-dashoffset: 302; }
+.check-badge .mark { stroke-dasharray: 60; stroke-dashoffset: 60; }
+.sent .check-badge .ring { animation: draw .9s var(--ease-out) .15s forwards; }
+.sent .check-badge .mark { animation: draw .5s var(--ease-out) .85s forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+.thanks h3 { font-family: var(--font-display); font-size: clamp(28px, 4vw, 40px); }
+.thanks p { color: var(--text-muted); max-width: 52ch; margin: 10px auto 0; }
+
+/* ───────────────────────── 4 · HIGHLIGHTS ───────────────────────── */
+#highlights { background: linear-gradient(180deg, transparent, var(--bg-2) 30%, var(--bg-2) 70%, transparent); }
+.features { display: grid; gap: 18px; margin-top: 40px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.feature {
+  padding: 26px; position: relative; overflow: hidden;
+  transition: transform .45s var(--ease-out), border-color .3s ease, box-shadow .45s ease;
+}
+.feature::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; opacity: 0;
+  background: radial-gradient(400px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 166, 77, .16), transparent 45%);
+  transition: opacity .3s ease;
+}
+.feature:hover { transform: translateY(-6px); border-color: var(--border-strong); box-shadow: 0 30px 60px -30px var(--glow); }
+.feature:hover::before { opacity: 1; }
+.feature .fi {
+  width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; margin-bottom: 18px;
+  background: linear-gradient(145deg, rgba(255, 211, 110, .25), rgba(255, 122, 18, .18));
+  border: 1px solid var(--border-strong);
+  transition: transform .5s var(--ease-spring);
+}
+.feature:hover .fi { transform: rotate(-8deg) scale(1.08); }
+.feature .fi svg { width: 26px; height: 26px; stroke: var(--accent-text); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.feature h3 { font-size: 19px; margin-bottom: 6px; }
+.feature p { color: var(--text-muted); font-size: 15px; }
+.ai-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.ai-row span { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-strong); color: var(--text-muted); }
+
+/* ───────────────────────── 5 · RETURN ───────────────────────── */
+.return-card {
+  position: relative; overflow: hidden; text-align: center;
+  padding: clamp(40px, 7vw, 88px) clamp(22px, 5vw, 72px);
+  border-radius: 36px;
+  background:
+    radial-gradient(70% 90% at 50% 120%, rgba(255, 196, 90, .55), transparent 60%),
+    linear-gradient(160deg, #4a1700 0%, #8a3000 45%, #c75000 100%);
+  color: #fff6ea;
+  box-shadow: 0 40px 90px -40px rgba(200, 80, 0, .7);
+}
+.return-card .sunrise-arc {
+  position: absolute; left: 50%; bottom: -260px; width: 520px; height: 520px; margin-left: -260px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 240, 190, .9) 0%, rgba(255, 200, 100, .5) 30%, transparent 62%);
+  animation: sunPulse 7s ease-in-out infinite;
+  pointer-events: none;
+}
+.return-card .rays {
+  position: absolute; left: 50%; bottom: -460px; width: 920px; height: 920px; margin-left: -460px; border-radius: 50%;
+  background: repeating-conic-gradient(rgba(255, 230, 180, .10) 0 4deg, transparent 4deg 12deg);
+  -webkit-mask: radial-gradient(circle, #000 20%, transparent 60%); mask: radial-gradient(circle, #000 20%, transparent 60%);
+  animation: spin 160s linear infinite; pointer-events: none;
+}
+.return-card > * { position: relative; }
+.return-card .eyebrow { color: #ffd9a8; justify-content: center; }
+.return-card h2 { font-family: var(--font-display); font-size: clamp(30px, 5vw, 58px); line-height: 1.1; max-width: 18ch; margin: 16px auto; }
+.return-card p { color: #ffe6c8; font-size: clamp(16px, 1.7vw, 19px); max-width: 60ch; margin: 0 auto; }
+.cta-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin-top: 34px; }
+.return-card .btn-ghost { color: #fff6ea; background: rgba(255, 255, 255, .1); border-color: rgba(255, 230, 190, .45); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.return-card .btn-ghost:hover { background: rgba(255, 255, 255, .18); }
+.return-card p.store-note { margin-top: 16px; font-size: 13px; color: #fff3e0; text-shadow: 0 1px 6px rgba(90, 30, 0, .7); }
+
+/* ───────────────────────── 6 · FOOTER ───────────────────────── */
+.site-footer { position: relative; padding: 72px 0 40px; text-align: center; overflow: hidden; }
+.site-footer .om-big { font-family: var(--font-deva); font-size: clamp(30px, 4vw, 44px); color: var(--accent-text); filter: drop-shadow(0 0 14px var(--glow)); letter-spacing: .3em; text-indent: .3em; }
+.site-footer .jsr { font-family: var(--font-deva); font-size: clamp(26px, 3.6vw, 38px); font-weight: 700; margin-top: 6px; }
+.site-footer .jsr-en { font-family: var(--font-display); letter-spacing: .45em; text-indent: .45em; font-size: 13px; color: var(--text-faint); margin-top: 2px; }
+
+.diya-game { margin: 36px auto 10px; max-width: 560px; }
+.diya-game p.prompt { color: var(--text-muted); font-size: 15px; margin-bottom: 14px; }
+.diya-row { display: flex; justify-content: center; gap: clamp(8px, 3vw, 22px); }
+.diya-btn {
+  width: 64px; height: 76px; border: 0; background: transparent; cursor: pointer; border-radius: 16px;
+  display: grid; place-items: end center; padding-bottom: 6px;
+  transition: transform .3s var(--ease-spring);
+}
+.diya-btn:hover { transform: translateY(-4px); }
+.diya-btn svg { width: 56px; height: 64px; overflow: visible; }
+.diya-btn .fl, .diya-btn .fl-glow { opacity: 0; transition: opacity .5s ease; }
+.diya-btn[aria-pressed="true"] .fl, .diya-btn[aria-pressed="true"] .fl-glow { opacity: 1; }
+.diya-msg { min-height: 1.6em; margin-top: 12px; font-weight: 600; color: var(--accent-text); }
+
+.footer-meta { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; font-size: 14px; color: var(--text-faint); }
+.footer-meta .made { color: var(--text-muted); }
+.footer-meta .heart { display: inline-block; animation: beat 1.6s ease-in-out infinite; }
+@keyframes beat { 0%,100% { transform: scale(1); } 15% { transform: scale(1.25); } 30% { transform: scale(1); } 45% { transform: scale(1.15); } }
+.footer-meta .fbrand { display: inline-flex; align-items: center; gap: 8px; }
+.footer-meta .fbrand svg { width: 22px; height: 22px; }
+
+/* ───────────────────────── Responsive tweaks ───────────────────────── */
+@media (max-width: 640px) {
+  .brand-chip small { display: none; }
+  .greeting { padding-top: 80px; }
+  .greeting .bridge { font-size: 13px; }
+  .scene { width: 135%; max-width: none; flex: none; }
+  .hero { min-height: 0; }
+  .sun { width: 150px; height: 150px; left: -75px; top: -20px; }
+    .identity { padding: 24px; }
+  .btn { width: 100%; }
+  .cta-row { flex-direction: column; }
+  .form-actions .btn { width: 100%; }
+}
+
+/* ───────────────────────── Reduced motion ───────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important; scroll-behavior: auto !important;
   }
+  html { scroll-behavior: auto; }
+  .js .reveal, .js .words .w { opacity: 1; transform: none; filter: none; }
+  .petal, .cloud, .bird { display: none; }
+}
+
+@media print {
+  .topbar, .journey, .progress, .next-pill, #sky-particles, .petal, .diya-game { display: none !important; }
+}
 </style>
 </head>
 <body>
-  <div class="sun"></div>
+<a class="skip-link" href="#goodbye">Skip to message</a>
+
+<!-- ═════════ CONFIG — edit these values ═════════ -->
+<script>
+window.SARALFORCE_CONFIG = {
+  /* Where feedback is sent (HTTPS URL that accepts POST and returns 2xx).
+     Works with e.g. Formspree, a Google Apps Script web app, a Cloudflare
+     Worker or your own API. Leave "" to disable sending (users will see an
+     honest "not available" message — never a fake success). */
+  feedbackEndpoint: "",
+
+  /* "json"  → Content-Type: application/json   (Formspree, Workers, most APIs)
+     "form"  → application/x-www-form-urlencoded (Google Apps Script, no CORS preflight) */
+  feedbackFormat: "json",
+
+  /* Official store listings. Fill these in with your published listing URLs.
+     If left "", the Reinstall button opens a store search for "SaralForce". */
+  chromeStoreUrl: "",   // e.g. https://chromewebstore.google.com/detail/<slug>/<extension-id>
+  edgeStoreUrl: "",     // e.g. https://microsoftedge.microsoft.com/addons/detail/<slug>/<extension-id>
+
+  /* Official SaralForce website. If "", the Explore button is hidden. */
+  websiteUrl: "",
+
+  /* Shown on the identity card; overridden by ?v=x.y.z in the uninstall URL. */
+  version: "1.6.0"
+};
+</script>
+
+<!-- Logo symbol (reused everywhere) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="lg-tile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1c2452"/><stop offset="1" stop-color="#0a0f26"/></linearGradient>
+    <linearGradient id="lg-cloud" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#ffd36e"/><stop offset="0.5" stop-color="#ff9a1f"/><stop offset="1" stop-color="#f05a0e"/></linearGradient>
+    <radialGradient id="lg-halo" cx="0.5" cy="0.55" r="0.5"><stop offset="0" stop-color="#ff9a1f" stop-opacity="0.45"/><stop offset="1" stop-color="#ff9a1f" stop-opacity="0"/></radialGradient>
+    <symbol id="sf-logo" viewBox="0 0 128 128">
+      <rect x="2" y="2" width="124" height="124" rx="28" fill="url(#lg-tile)"/>
+      <rect x="2.5" y="2.5" width="123" height="123" rx="27.5" fill="none" stroke="#fff" stroke-opacity="0.08"/>
+      <circle cx="64" cy="66" r="54" fill="url(#lg-halo)"/>
+      <g transform="translate(0 -4)">
+        <path d="M36 98 H94 A19 19 0 0 0 97.5 60.4 A30 30 0 0 0 40.6 56.6 A21 21 0 0 0 36 98 Z" fill="url(#lg-cloud)"/>
+        <path d="M43 64 A16 16 0 0 1 57 50" fill="none" stroke="#fff6dc" stroke-opacity="0.55" stroke-width="3" stroke-linecap="round"/>
+        <g fill="none" stroke="#141a3c" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M51 69 L41 78.5 L51 88"/><path d="M71 64 L61 93"/><path d="M81 69 L91 78.5 L81 88"/>
+        </g>
+      </g>
+      <path d="M101 14 Q103 25 112 27 Q103 29 101 40 Q99 29 90 27 Q99 25 101 14 Z" fill="#fff3c4"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="progress" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="container">
+    <a class="brand-chip" href="#goodbye" aria-label="SaralForce — go to farewell message">
+      <svg aria-hidden="true"><use href="#sf-logo"/></svg>
+      SaralForce <small>· Making Salesforce Life Easy</small>
+    </a>
+    <button class="theme-toggle" type="button" aria-pressed="false" aria-label="Switch to light appearance">
+      <svg class="sun-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/></svg>
+    </button>
+  </div>
+</header>
+
+<nav class="journey on-hero" aria-label="Farewell journey">
+  <span class="fill" aria-hidden="true"></span>
+  <ol>
+    <li><a href="#namaste" data-step="namaste"><span class="lbl">Namaste</span><span class="dot"></span></a></li>
+    <li><a href="#goodbye" data-step="goodbye"><span class="lbl">Goodbye</span><span class="dot"></span></a></li>
+    <li><a href="#feedback" data-step="feedback"><span class="lbl">Feedback</span><span class="dot"></span></a></li>
+    <li><a href="#highlights" data-step="highlights"><span class="lbl">Highlights</span><span class="dot"></span></a></li>
+    <li><a href="#return" data-step="return"><span class="lbl">Meet again</span><span class="dot"></span></a></li>
+    <li><a href="#farewell" data-step="farewell"><span class="lbl">Shubh yatra</span><span class="dot"></span></a></li>
+  </ol>
+</nav>
+
+<!-- ═════════ 1 · SPIRITUAL HERO ═════════ -->
+<section class="hero" id="namaste" aria-labelledby="hero-title">
+  <canvas id="sky-particles" aria-hidden="true"></canvas>
+  <div class="cloud c1" aria-hidden="true"></div>
+  <div class="cloud c2" aria-hidden="true"></div>
+  <div class="cloud c3" aria-hidden="true"></div>
 
   <div class="greeting">
-    <div class="om">॥ ॐ ॥</div>
-    <h1>जय श्री राम</h1>
+    <div class="om deva" aria-hidden="true">॥ ॐ ॥</div>
+    <h1 id="hero-title" class="deva" lang="hi">जय श्री राम</h1>
     <div class="en">JAI SHRI RAM</div>
+    <div class="bridge">
+      <svg aria-hidden="true"><use href="#sf-logo"/></svg>
+      <span>A heartfelt farewell from the SaralForce family</span>
+    </div>
   </div>
 
   <div class="scene">
-    <svg viewBox="0 0 920 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Temple with saffron flags at sunrise">
+    <div class="sun-wrap" aria-hidden="true"><div class="sun-rays"></div><div class="sun"></div></div>
+    <svg viewBox="0 0 980 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A temple with waving saffron flags and glowing diyas at sunrise">
       <defs>
-        <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stop-color="#8a4b16"/>
-          <stop offset="1" stop-color="#4a2408"/>
-        </linearGradient>
-        <linearGradient id="stoneLight" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stop-color="#b06a24"/>
-          <stop offset="1" stop-color="#5e2f0c"/>
-        </linearGradient>
-        <linearGradient id="flag" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stop-color="#ff7b00"/>
-          <stop offset="1" stop-color="#e04e00"/>
-        </linearGradient>
-        <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
-          <stop offset="0" stop-color="#ffe9b0" stop-opacity="0.9"/>
-          <stop offset="1" stop-color="#ffe9b0" stop-opacity="0"/>
-        </radialGradient>
+        <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8f4e18"/><stop offset="1" stop-color="#4a2408"/></linearGradient>
+        <linearGradient id="stoneLight" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c27a30"/><stop offset="1" stop-color="#6a3610"/></linearGradient>
+        <linearGradient id="stoneSide" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#5a2c0a"/><stop offset=".45" stop-color="#b8702a"/><stop offset="1" stop-color="#4a2408"/></linearGradient>
+        <linearGradient id="shikhara" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#6e370e"/><stop offset=".42" stop-color="#d08a3c"/><stop offset=".58" stop-color="#b8702a"/><stop offset="1" stop-color="#5a2c0a"/></linearGradient>
+        <linearGradient id="flag" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff8a00"/><stop offset=".6" stop-color="#ff6a00"/><stop offset="1" stop-color="#e04e00"/></linearGradient>
+        <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff0b0"/><stop offset=".5" stop-color="#ffcf6e"/><stop offset="1" stop-color="#c98a1c"/></linearGradient>
+        <linearGradient id="hills" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c25a10" stop-opacity=".55"/><stop offset="1" stop-color="#7a2e05" stop-opacity=".2"/></linearGradient>
+        <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#ffe9b0" stop-opacity="0.9"/><stop offset="1" stop-color="#ffe9b0" stop-opacity="0"/></radialGradient>
+        <radialGradient id="fglow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#ffd27a" stop-opacity=".95"/><stop offset=".4" stop-color="#ffa000" stop-opacity=".45"/><stop offset="1" stop-color="#ff8000" stop-opacity="0"/></radialGradient>
+        <radialGradient id="doorLight" cx="0.5" cy="0.65" r="0.6"><stop offset="0" stop-color="#fff2c4"/><stop offset=".45" stop-color="#ffbf5a"/><stop offset="1" stop-color="#7a3200"/></radialGradient>
+        <linearGradient id="flameG" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ff6d00"/><stop offset=".55" stop-color="#ffb300"/><stop offset="1" stop-color="#fff3c4"/></linearGradient>
+        <linearGradient id="clay" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b5521b"/><stop offset="1" stop-color="#4a1d06"/></linearGradient>
+
+        <!-- reusable diya -->
+        <g id="diya">
+          <ellipse cx="0" cy="-14" rx="26" ry="26" fill="url(#fglow)" class="flame-glow"/>
+          <path d="M-22 -2 Q-20 12 0 13 Q20 12 22 -2 Q26 -5 30 -8 Q24 -2 22 -2 Q0 4 -22 -2 Z" fill="url(#clay)"/>
+          <ellipse cx="0" cy="-2" rx="22" ry="4.5" fill="#e0782c"/>
+          <ellipse cx="0" cy="-2" rx="16" ry="2.8" fill="#5a2208"/>
+          <path class="flame" d="M0 -26 C6 -17 7.5 -9 0 -3 C-7.5 -9 -6 -17 0 -26 Z" fill="url(#flameG)"/>
+          <path class="flame f2" d="M0 -16 C3 -11 3.4 -7 0 -4 C-3.4 -7 -3 -11 0 -16 Z" fill="#fffbe6"/>
+        </g>
+        <!-- small floating lantern / lotus orb -->
+        <g id="lantern">
+          <circle r="16" fill="url(#fglow)"/>
+          <path d="M-7 -6 Q0 -14 7 -6 L5 7 Q0 10 -5 7 Z" fill="#ff8a1f" stroke="#ffd36e" stroke-width="1"/>
+          <path d="M-7 -6 Q0 -2 7 -6" fill="none" stroke="#ffd36e" stroke-width="1"/>
+          <circle r="2.2" cy="1" fill="#fff3c4"/>
+        </g>
       </defs>
 
+      <!-- distant hills -->
+      <path d="M-700 290 Q-560 250 -420 276 T-140 268 T0 300 Q90 250 180 282 T360 268 T560 262 T760 276 T980 258 T1260 270 T1540 262 T1700 280 V430 H-700 Z" fill="url(#hills)"/>
+
+      <!-- birds -->
+      <g class="bird" fill="none" stroke="#5a1e00" stroke-width="2" stroke-linecap="round" opacity=".55">
+        <path class="wing" d="M0 60 Q7 52 14 60 Q21 52 28 60"/>
+      </g>
+      <g class="bird k2" fill="none" stroke="#5a1e00" stroke-width="1.6" stroke-linecap="round" opacity=".45">
+        <path class="wing" d="M40 30 Q45 24 50 30 Q55 24 60 30"/>
+      </g>
+
       <!-- ground aura -->
-      <ellipse cx="460" cy="352" rx="430" ry="30" fill="url(#glow)"/>
+      <ellipse cx="490" cy="384" rx="760" ry="40" fill="url(#glow)"/>
 
-      <!-- base platform -->
-      <rect x="120" y="318" width="680" height="26" rx="4" fill="url(#stone)"/>
-      <rect x="150" y="298" width="620" height="24" rx="4" fill="url(#stoneLight)"/>
-
-      <!-- main shrine -->
-      <rect x="380" y="210" width="160" height="92" fill="url(#stone)"/>
-      <rect x="410" y="238" width="100" height="64" rx="46" fill="#1d0d02"/>
-      <ellipse cx="460" cy="270" rx="26" ry="30" fill="#ffca7a" opacity="0.85"/>
-      <rect x="360" y="198" width="200" height="16" rx="4" fill="url(#stoneLight)"/>
-
-      <!-- shikhara tiers -->
-      <rect x="392" y="170" width="136" height="30" rx="4" fill="url(#stoneLight)"/>
-      <rect x="406" y="142" width="108" height="30" rx="4" fill="url(#stone)"/>
-      <rect x="420" y="114" width="80" height="30" rx="4" fill="url(#stoneLight)"/>
-      <rect x="434" y="88" width="52" height="28" rx="4" fill="url(#stone)"/>
-      <!-- kalash -->
-      <circle cx="460" cy="74" r="10" fill="#ffcf6e"/>
-      <rect x="457" y="30" width="6" height="36" fill="#5e2f0c"/>
-      <!-- main flag -->
-      <g class="flag-wave">
-        <polygon points="463,32 548,46 463,62" fill="url(#flag)"/>
-        <text x="492" y="54" font-size="16" fill="#fff3d6" text-anchor="middle">ॐ</text>
+      <!-- base platform / steps -->
+      <rect x="110" y="354" width="760" height="24" rx="4" fill="url(#stone)"/>
+      <rect x="140" y="334" width="700" height="24" rx="4" fill="url(#stoneLight)"/>
+      <rect x="170" y="316" width="640" height="22" rx="4" fill="url(#stone)"/>
+      <path d="M140 336 H840 M170 318 H810 M110 356 H870" stroke="#ffd59a" stroke-opacity=".35" stroke-width="1.5"/>
+      <!-- central stairs -->
+      <g fill="#7a3d10" stroke="#ffd59a" stroke-opacity=".25">
+        <rect x="448" y="320" width="84" height="10"/><rect x="440" y="330" width="100" height="10"/><rect x="432" y="340" width="116" height="10"/>
       </g>
 
-      <!-- left dome -->
-      <rect x="230" y="252" width="110" height="50" fill="url(#stone)"/>
-      <path d="M230 252 Q285 190 340 252 Z" fill="url(#stoneLight)"/>
-      <circle cx="285" cy="212" r="7" fill="#ffcf6e"/>
-      <rect x="283" y="182" width="4" height="24" fill="#5e2f0c"/>
-      <g class="flag-wave d2">
-        <polygon points="287,184 340,192 287,202" fill="url(#flag)"/>
+      <!-- LEFT mandapa -->
+      <g>
+        <rect x="232" y="252" width="128" height="64" fill="url(#stone)"/>
+        <rect x="224" y="246" width="144" height="10" rx="3" fill="url(#stoneLight)"/>
+        <path d="M232 246 Q296 172 360 246 Z" fill="url(#stoneSide)"/>
+        <path d="M250 230 Q296 190 342 230" fill="none" stroke="#ffd59a" stroke-opacity=".3" stroke-width="2"/>
+        <g fill="#5a2c0a"><rect x="244" y="262" width="10" height="54"/><rect x="338" y="262" width="10" height="54"/></g>
+        <path d="M266 316 V286 Q296 258 326 286 V316 Z" fill="#2a1003"/>
+        <path d="M274 316 V290 Q296 268 318 290 V316 Z" fill="url(#doorLight)" opacity=".55" class="door-glow"/>
+        <circle cx="296" cy="200" r="8" fill="url(#gold)"/>
+        <rect x="294" y="160" width="4" height="34" fill="#5e2f0c"/>
+        <path fill="url(#flag)">
+          <animate attributeName="d" dur="2.8s" repeatCount="indefinite" calcMode="spline" keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1"
+            values="M298 162 C315 159 334 168 352 172 C334 176 315 184 298 186 Z;
+                    M298 162 C316 167 333 164 350 175 C332 177 314 190 298 186 Z;
+                    M298 162 C313 162 336 172 353 170 C336 180 318 182 298 186 Z;
+                    M298 162 C315 159 334 168 352 172 C334 176 315 184 298 186 Z"/>
+        </path>
       </g>
 
-      <!-- right dome -->
-      <rect x="580" y="252" width="110" height="50" fill="url(#stone)"/>
-      <path d="M580 252 Q635 190 690 252 Z" fill="url(#stoneLight)"/>
-      <circle cx="635" cy="212" r="7" fill="#ffcf6e"/>
-      <rect x="633" y="182" width="4" height="24" fill="#5e2f0c"/>
-      <g class="flag-wave d3">
-        <polygon points="637,184 690,192 637,202" fill="url(#flag)"/>
+      <!-- RIGHT mandapa -->
+      <g>
+        <rect x="620" y="252" width="128" height="64" fill="url(#stone)"/>
+        <rect x="612" y="246" width="144" height="10" rx="3" fill="url(#stoneLight)"/>
+        <path d="M620 246 Q684 172 748 246 Z" fill="url(#stoneSide)"/>
+        <path d="M638 230 Q684 190 730 230" fill="none" stroke="#ffd59a" stroke-opacity=".3" stroke-width="2"/>
+        <g fill="#5a2c0a"><rect x="632" y="262" width="10" height="54"/><rect x="726" y="262" width="10" height="54"/></g>
+        <path d="M654 316 V286 Q684 258 714 286 V316 Z" fill="#2a1003"/>
+        <path d="M662 316 V290 Q684 268 706 290 V316 Z" fill="url(#doorLight)" opacity=".55" class="door-glow"/>
+        <circle cx="684" cy="200" r="8" fill="url(#gold)"/>
+        <rect x="682" y="160" width="4" height="34" fill="#5e2f0c"/>
+        <path fill="url(#flag)">
+          <animate attributeName="d" dur="3.1s" begin="-1s" repeatCount="indefinite" calcMode="spline" keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1"
+            values="M686 162 C703 159 722 168 740 172 C722 176 703 184 686 186 Z;
+                    M686 162 C704 167 721 164 738 175 C720 177 702 190 686 186 Z;
+                    M686 162 C701 162 724 172 741 170 C724 180 706 182 686 186 Z;
+                    M686 162 C703 159 722 168 740 172 C722 176 703 184 686 186 Z"/>
+        </path>
+      </g>
+
+      <!-- MAIN shrine -->
+      <g>
+        <!-- garbhagriha body -->
+        <rect x="400" y="214" width="180" height="104" fill="url(#stone)"/>
+        <g fill="#5a2c0a">
+          <rect x="408" y="222" width="12" height="96"/><rect x="560" y="222" width="12" height="96"/>
+          <rect x="428" y="232" width="8" height="86"/><rect x="544" y="232" width="8" height="86"/>
+        </g>
+        <!-- arched door -->
+        <path d="M446 318 V262 Q490 218 534 262 V318 Z" fill="#1d0d02"/>
+        <path d="M454 318 V266 Q490 230 526 266 V318 Z" fill="url(#doorLight)" class="door-glow"/>
+        <ellipse cx="490" cy="290" rx="16" ry="20" fill="#fff6d8" opacity=".55" class="door-glow"/>
+        <!-- toran (marigold garland) -->
+        <path d="M440 244 Q465 262 490 244 Q515 262 540 244" fill="none" stroke="#ff9800" stroke-width="5" stroke-linecap="round" stroke-dasharray="1 7"/>
+        <path d="M440 244 Q465 262 490 244 Q515 262 540 244" fill="none" stroke="#ffd54f" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 7" stroke-dashoffset="4"/>
+        <!-- cornice -->
+        <rect x="380" y="202" width="220" height="16" rx="4" fill="url(#stoneLight)"/>
+        <path d="M384 210 H596" stroke="#ffd59a" stroke-opacity=".35" stroke-width="1.5"/>
+        <!-- curved shikhara -->
+        <path d="M402 204 C406 150 432 104 470 76 H510 C548 104 574 150 578 204 Z" fill="url(#shikhara)"/>
+        <g fill="none" stroke="#4a2408" stroke-opacity=".55" stroke-width="2">
+          <path d="M408 184 H572"/><path d="M413 164 H567"/><path d="M421 144 H559"/><path d="M432 124 H548"/><path d="M446 104 H534"/><path d="M460 88 H520"/>
+        </g>
+        <path d="M490 78 V204" stroke="#ffe0a8" stroke-opacity=".28" stroke-width="6"/>
+        <!-- amalaka + kalash -->
+        <ellipse cx="490" cy="74" rx="26" ry="7" fill="url(#stoneLight)"/>
+        <ellipse cx="490" cy="66" rx="12" ry="8" fill="url(#gold)"/>
+        <path d="M484 60 Q490 46 496 60 Z" fill="url(#gold)"/>
+        <circle cx="490" cy="46" r="3.5" fill="#fff0b0"/>
+        <!-- pole + main flag -->
+        <rect x="488" y="6" width="4" height="40" fill="#5e2f0c"/>
+        <path fill="url(#flag)">
+          <animate attributeName="d" dur="2.6s" repeatCount="indefinite" calcMode="spline" keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1"
+            values="M492 8 C519 4 549 16 585 24 C551 30 521 40 492 46 Z;
+                    M492 8 C521 14 549 12 581 28 C549 32 519 48 492 46 Z;
+                    M492 8 C517 8 551 22 585 22 C553 34 523 38 492 46 Z;
+                    M492 8 C519 4 549 16 585 24 C551 30 521 40 492 46 Z"/>
+        </path>
+        <text class="om-on-flag" x="520" y="32" font-size="17" fill="#fff3d6" text-anchor="middle" font-family="Nirmala UI, Noto Sans Devanagari, Mangal, serif">ॐ</text>
       </g>
 
       <!-- side flag poles -->
-      <rect x="120" y="180" width="6" height="122" fill="#5e2f0c"/>
-      <g class="flag-wave d2">
-        <polygon points="126,182 196,194 126,208" fill="url(#flag)"/>
-        <text x="152" y="202" font-size="13" fill="#fff3d6" text-anchor="middle">ॐ</text>
-      </g>
-      <rect x="794" y="180" width="6" height="122" fill="#5e2f0c"/>
-      <g class="flag-wave d3">
-        <polygon points="794,182 724,194 794,208" fill="url(#flag)"/>
-        <text x="768" y="202" font-size="13" fill="#fff3d6" text-anchor="middle">ॐ</text>
-      </g>
+      <rect x="120" y="186" width="6" height="168" rx="2" fill="#5e2f0c"/>
+      <circle cx="123" cy="184" r="5" fill="url(#gold)"/>
+      <path fill="url(#flag)">
+        <animate attributeName="d" dur="2.9s" begin="-.7s" repeatCount="indefinite" calcMode="spline" keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1"
+          values="M126 190 C150 186 176 197 206 204 C177 210 151 219 126 226 Z;
+                  M126 190 C152 196 176 194 202 208 C175 212 150 228 126 226 Z;
+                  M126 190 C148 190 178 202 206 202 C179 214 153 218 126 226 Z;
+                  M126 190 C150 186 176 197 206 204 C177 210 151 219 126 226 Z"/>
+      </path>
+      <text class="om-on-flag" x="152" y="213" font-size="14" fill="#fff3d6" text-anchor="middle" font-family="Nirmala UI, Noto Sans Devanagari, Mangal, serif">ॐ</text>
+
+      <rect x="854" y="186" width="6" height="168" rx="2" fill="#5e2f0c"/>
+      <circle cx="857" cy="184" r="5" fill="url(#gold)"/>
+      <path fill="url(#flag)">
+        <animate attributeName="d" dur="3.2s" begin="-1.6s" repeatCount="indefinite" calcMode="spline" keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1"
+          values="M854 190 C830 186 804 197 774 204 C803 210 829 219 854 226 Z;
+                  M854 190 C828 196 804 194 778 208 C805 212 830 228 854 226 Z;
+                  M854 190 C832 190 802 202 774 202 C801 214 827 218 854 226 Z;
+                  M854 190 C830 186 804 197 774 204 C803 210 829 219 854 226 Z"/>
+      </path>
+      <text class="om-on-flag" x="828" y="213" font-size="14" fill="#fff3d6" text-anchor="middle" font-family="Nirmala UI, Noto Sans Devanagari, Mangal, serif">ॐ</text>
+
+      <!-- floating lanterns around the temple -->
+      <use href="#lantern" x="200" y="120" class="bob"/>
+      <use href="#lantern" x="790" y="100" class="bob b2"/>
+      <use href="#lantern" x="360" y="70" class="bob b3" opacity=".8"/>
+      <use href="#lantern" x="630" y="60" class="bob b4" opacity=".8"/>
 
       <!-- diyas -->
-      <g>
-        <ellipse cx="200" cy="330" rx="16" ry="6" fill="#3a1a05"/>
-        <ellipse class="flame" cx="200" cy="320" rx="6" ry="11" fill="#ffb300"/>
-        <ellipse class="flame" cx="200" cy="322" rx="3" ry="6" fill="#fff3c4"/>
-        <ellipse cx="720" cy="330" rx="16" ry="6" fill="#3a1a05"/>
-        <ellipse class="flame" cx="720" cy="320" rx="6" ry="11" fill="#ffb300"/>
-        <ellipse class="flame" cx="720" cy="322" rx="3" ry="6" fill="#fff3c4"/>
-        <ellipse cx="460" cy="336" rx="20" ry="7" fill="#3a1a05"/>
-        <ellipse class="flame" cx="460" cy="324" rx="7" ry="13" fill="#ffb300"/>
-        <ellipse class="flame" cx="460" cy="327" rx="3.5" ry="7" fill="#fff3c4"/>
-      </g>
+      <use href="#diya" x="200" y="352"/>
+      <use href="#diya" x="340" y="332"/>
+      <use href="#diya" x="490" y="376"/>
+      <use href="#diya" x="640" y="332"/>
+      <use href="#diya" x="780" y="352"/>
     </svg>
   </div>
-  <div class="ground"></div>
 
-  <script src="goodbye.js"></script>
+</section>
+
+<a class="next-pill" href="#goodbye" id="next-pill">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+  <span>Read our farewell message</span>
+</a>
+
+<main>
+  <!-- ═════════ 2 · GOODBYE ═════════ -->
+  <section id="goodbye" aria-labelledby="goodbye-title" tabindex="-1">
+    <div class="container">
+      <div class="goodbye-grid">
+        <article class="farewell-card glass reveal">
+          <div class="ambient" aria-hidden="true"></div>
+          <div class="wave-wrap">
+            <button class="wave-btn" type="button" aria-label="Wave goodbye"><span class="hand" aria-hidden="true">👋</span></button>
+            <span class="wave-caption">Tap to wave back</span>
+          </div>
+          <h2 id="goodbye-title" class="words" data-split><span class="grad">Goodbye for Now!</span> 👋</h2>
+          <p class="sub words" data-split style="--d:.35s">Thank you for being part of the SaralForce journey.</p>
+          <p class="msg reveal" style="--d:.5s">
+            We're sad to see you go, but grateful you gave SaralForce a try. Our mission has always been simple —
+            <strong>Making Salesforce Life Easy.</strong> We hope to welcome you back someday!
+          </p>
+          <div class="signature reveal" style="--d:.7s"><span class="line" aria-hidden="true"></span>With gratitude, Team SaralForce 🙏</div>
+        </article>
+
+        <aside class="identity reveal" style="--d:.15s" aria-label="About SaralForce" data-tilt>
+          <div class="head">
+            <svg class="logo" aria-hidden="true"><use href="#sf-logo"/></svg>
+            <div>
+              <h3>SaralForce</h3>
+              <div class="tag">Making Salesforce Life Easy.</div>
+            </div>
+          </div>
+          <p>An AI-powered Salesforce toolkit that lives right inside your browser — so querying, building and moving data in your org feels <em>saral</em>: simple.</p>
+          <div class="chips">
+            <span class="chip hot">AI Assistant</span>
+            <span class="chip">SOQL &amp; Apex</span>
+            <span class="chip">Custom Objects</span>
+            <span class="chip">CSV Import / Export</span>
+            <span class="chip">Org Info</span>
+          </div>
+          <div class="trail" aria-label="Your SaralForce journey">
+            <div class="trail-title">Your SaralForce journey</div>
+            <ol>
+              <li class="ok"><span class="node" aria-hidden="true"></span>Installed</li>
+              <li class="ok"><span class="node" aria-hidden="true"></span>Explored</li>
+              <li class="now" aria-current="step"><span class="node" aria-hidden="true"></span>Taking a break</li>
+              <li class="next"><span class="node" aria-hidden="true"></span>Welcome back?</li>
+            </ol>
+          </div>
+          <div class="meta">
+            <span>Version <strong id="sf-version">1.6.0</strong></span>
+            <span><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd></span>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════ 3 · FEEDBACK ═════════ -->
+  <section id="feedback" aria-labelledby="feedback-title">
+    <div class="ambient a1" aria-hidden="true"></div>
+    <div class="container">
+      <span class="eyebrow reveal">Your voice shapes SaralForce</span>
+      <h2 id="feedback-title" class="section-title reveal" style="--d:.08s">Before you go, could you tell us why?<span class="optional-pill">Optional</span></h2>
+      <p class="lead reveal" style="--d:.16s">It takes less than a minute and helps us make SaralForce better for every Salesforce professional. Skip it if you'd rather — no hard feelings.</p>
+
+      <div class="feedback-shell glass reveal" style="--d:.2s" id="feedback-shell">
+        <form id="feedback-form" novalidate>
+          <fieldset>
+            <legend>What made you uninstall?</legend>
+            <p class="hint" id="reasons-hint">Choose any that apply.</p>
+            <div class="reasons" aria-describedby="reasons-hint">
+              <div class="reason"><input type="checkbox" id="r1" name="reason" value="no_longer_needed"><label for="r1"><span class="ico" aria-hidden="true">🧭</span><span class="txt">I no longer need the extension.</span><span class="tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5"/></svg></span></label></div>
+              <div class="reason"><input type="checkbox" id="r2" name="reason" value="bugs"><label for="r2"><span class="ico" aria-hidden="true">🐞</span><span class="txt">I encountered bugs or technical issues.</span><span class="tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5"/></svg></span></label></div>
+              <div class="reason"><input type="checkbox" id="r3" name="reason" value="hard_to_use"><label for="r3"><span class="ico" aria-hidden="true">🧩</span><span class="txt">The extension was difficult to use.</span><span class="tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5"/></svg></span></label></div>
+              <div class="reason"><input type="checkbox" id="r4" name="reason" value="missing_feature"><label for="r4"><span class="ico" aria-hidden="true">✨</span><span class="txt">I was looking for a feature that was missing.</span><span class="tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5"/></svg></span></label></div>
+              <div class="reason"><input type="checkbox" id="r5" name="reason" value="performance"><label for="r5"><span class="ico" aria-hidden="true">🐢</span><span class="txt">Performance or loading issues.</span><span class="tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5"/></svg></span></label></div>
+              <div class="reason"><input type="checkbox" id="r6" name="reason" value="privacy_security"><label for="r6"><span class="ico" aria-hidden="true">🔒</span><span class="txt">Privacy or security concerns.</span><span class="tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5"/></svg></span></label></div>
+              <div class="reason"><input type="checkbox" id="r7" name="reason" value="temporary"><label for="r7"><span class="ico" aria-hidden="true">⏳</span><span class="txt">I'm temporarily uninstalling it.</span><span class="tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5"/></svg></span></label></div>
+              <div class="reason"><input type="checkbox" id="r8" name="reason" value="other"><label for="r8"><span class="ico" aria-hidden="true">💬</span><span class="txt">Other reason.</span><span class="tick" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5"/></svg></span></label></div>
+            </div>
+          </fieldset>
+
+          <div class="comment-wrap">
+            <label for="comment">Anything else you'd like to share? <span class="optional-pill">Optional</span></label>
+            <textarea id="comment" name="comment" maxlength="1000" placeholder="What could we have done better? Which feature were you hoping for?" aria-describedby="comment-help comment-count"></textarea>
+            <div class="comment-foot">
+              <span id="comment-help">Please don't include passwords, session IDs, API keys or org data.</span>
+              <span id="comment-count" aria-live="polite">0 / 1000</span>
+            </div>
+          </div>
+
+          <!-- honeypot (spam trap, hidden from people) -->
+          <div class="hp" aria-hidden="true"><label for="hp-website">Website</label><input id="hp-website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
+
+          <div class="privacy">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+            <span>We only send what you choose here, plus the extension version and browser name (Chrome or Edge). No Salesforce credentials, tokens, org data, cookies or tracking — ever. Anything that looks like a key or session ID is removed before sending.</span>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" id="submit-btn" disabled aria-describedby="submit-help">
+              <span class="spinner" aria-hidden="true"></span>
+              <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
+              <span class="btn-label">Submit Feedback</span>
+            </button>
+            <a class="skip" href="#highlights">Skip feedback</a>
+            <span id="submit-help" class="sr-only">Select a reason or write a comment to enable submitting.</span>
+            <div id="form-status" class="status" role="status" aria-live="polite"></div>
+          </div>
+        </form>
+
+        <div class="thanks" id="thanks" tabindex="-1">
+          <div class="check-badge" aria-hidden="true">
+            <svg viewBox="0 0 112 112" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <circle class="ring" cx="56" cy="56" r="48" stroke="url(#lg-cloud)" stroke-width="6"/>
+              <path class="mark" d="M36 58l13 13 27-29" stroke="var(--accent-text)" stroke-width="7"/>
+            </svg>
+          </div>
+          <h3><span class="deva" lang="hi">धन्यवाद</span> — Thank you!</h3>
+          <p>Your feedback reached us safely. Every word helps us make Salesforce life a little easier for everyone.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════ 4 · HIGHLIGHTS ═════════ -->
+  <section id="highlights" aria-labelledby="highlights-title">
+    <div class="container">
+      <span class="eyebrow reveal">What SaralForce brings</span>
+      <h2 id="highlights-title" class="section-title reveal" style="--d:.08s">Built to make every Salesforce day simpler.</h2>
+      <p class="lead reveal" style="--d:.16s">A quick look at the toolkit you tried — and everything that'll be waiting if you return.</p>
+
+      <div class="features">
+        <article class="feature glass reveal" style="--d:.05s">
+          <div class="fi" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.6L18.5 9l-4.7 1.5L12 15l-1.8-4.5L5.5 9l4.7-1.4z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg></div>
+          <h3>AI Assistant</h3>
+          <p>Ask in plain language and let AI help with queries, Apex and org questions — bring your own model.</p>
+          <div class="ai-row"><span>OpenAI</span><span>Claude</span><span>Gemini</span><span>OpenRouter</span></div>
+        </article>
+        <article class="feature glass reveal" style="--d:.12s">
+          <div class="fi" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5"/><path d="M16 7l5 5-5 5"/><path d="M13.5 4l-3 16"/></svg></div>
+          <h3>SOQL &amp; Apex Runner</h3>
+          <p>Run SOQL queries and anonymous Apex right from the page you're on — results in seconds, no tab-hopping.</p>
+        </article>
+        <article class="feature glass reveal" style="--d:.19s">
+          <div class="fi" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg></div>
+          <h3>Custom Object Creator</h3>
+          <p>Design custom objects and fields quickly with a guided builder instead of clicking through Setup.</p>
+        </article>
+        <article class="feature glass reveal" style="--d:.05s">
+          <div class="fi" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13l3 3 3-3M12 16V10"/></svg></div>
+          <h3>CSV Import &amp; Export</h3>
+          <p>Move records in and out of your org with simple CSV import and export — perfect for quick data fixes.</p>
+        </article>
+        <article class="feature glass reveal" style="--d:.12s">
+          <div class="fi" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></svg></div>
+          <h3>Org Info at a Glance</h3>
+          <p>See key details about the org you're working in — instance, limits and more — without digging.</p>
+        </article>
+        <article class="feature glass reveal" style="--d:.19s">
+          <div class="fi" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></div>
+          <h3>One Shortcut Away</h3>
+          <p>Open SaralForce on any Salesforce page with <strong>Ctrl + Shift + S</strong> (⌘ + Shift + S on Mac).</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════ 5 · RETURN ═════════ -->
+  <section id="return" aria-labelledby="return-title">
+    <div class="container">
+      <div class="return-card reveal">
+        <div class="rays" aria-hidden="true"></div>
+        <div class="sunrise-arc" aria-hidden="true"></div>
+        <span class="eyebrow">Maybe we'll meet again</span>
+        <h2 id="return-title" class="words" data-split>Every Goodbye Is a Chance for a New Beginning.</h2>
+        <p>SaralForce is constantly evolving with smarter AI tools, powerful Salesforce utilities, and an even better developer experience. Whenever you're ready, we'll be here.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" id="reinstall-btn" href="https://chromewebstore.google.com/search/SaralForce" target="_blank" rel="noopener noreferrer">
+            <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></svg>
+            <span>Reinstall SaralForce</span>
+          </a>
+          <a class="btn btn-ghost" id="explore-btn" href="#" target="_blank" rel="noopener noreferrer" hidden>
+            <span>Explore SaralForce</span>
+            <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+        </div>
+        <p class="store-note" id="store-note">Opens the official <span id="store-name">Chrome Web Store</span> in a new tab.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ═════════ 6 · SPIRITUAL FOOTER ═════════ -->
+<footer class="site-footer" id="farewell" aria-labelledby="farewell-title">
+  <div class="container">
+    <div class="om-big reveal" aria-hidden="true">॥ ॐ ॥</div>
+    <h2 id="farewell-title" class="jsr reveal" style="--d:.1s" lang="hi">जय श्री राम</h2>
+    <div class="jsr-en reveal" style="--d:.2s">JAI SHRI RAM · SHUBH YATRA</div>
+
+    <div class="diya-game reveal" style="--d:.25s">
+      <p class="prompt" id="diya-prompt">Light a diya for your next beginning 🪔</p>
+      <div class="diya-row" role="group" aria-labelledby="diya-prompt">
+        <!-- 5 diyas, generated identical -->
+        <button class="diya-btn" type="button" aria-pressed="false" aria-label="Light diya 1"><svg viewBox="-30 -40 60 60" aria-hidden="true"><ellipse class="fl-glow flame-glow" cx="0" cy="-14" rx="26" ry="26" fill="url(#fglow)"/><path d="M-22 -2 Q-20 12 0 13 Q20 12 22 -2 Q26 -5 30 -8 Q24 -2 22 -2 Q0 4 -22 -2 Z" fill="url(#clay)"/><ellipse cx="0" cy="-2" rx="22" ry="4.5" fill="#e0782c"/><ellipse cx="0" cy="-2" rx="16" ry="2.8" fill="#5a2208"/><path d="M0 -3 V-8" stroke="#3a1a05" stroke-width="1.6" stroke-linecap="round"/><g class="fl"><path class="flame" d="M0 -26 C6 -17 7.5 -9 0 -3 C-7.5 -9 -6 -17 0 -26 Z" fill="url(#flameG)"/><path class="flame f2" d="M0 -16 C3 -11 3.4 -7 0 -4 C-3.4 -7 -3 -11 0 -16 Z" fill="#fffbe6"/></g></svg></button>
+      </div>
+      <p class="diya-msg" id="diya-msg" aria-live="polite"></p>
+    </div>
+
+    <div class="footer-meta">
+      <span class="fbrand"><svg aria-hidden="true"><use href="#sf-logo"/></svg>SaralForce — Making Salesforce Life Easy.</span>
+      <span class="made">Made with <span class="heart" role="img" aria-label="love">❤️</span> for the Salesforce Community</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+/* SaralForce farewell page — vanilla JS, no dependencies, no tracking. */
+(function () {
+  "use strict";
+  var CFG = window.SARALFORCE_CONFIG || {};
+  var doc = document, root = doc.documentElement;
+  var mqReduce = window.matchMedia ? matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+  var reduceMotion = mqReduce.matches;
+  root.classList.add("js");
+
+  function $(s, c) { return (c || doc).querySelector(s); }
+  function $all(s, c) { return Array.prototype.slice.call((c || doc).querySelectorAll(s)); }
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+
+  /* ── Environment ── */
+  var params; try { params = new URLSearchParams(location.search); } catch (e) { params = { get: function () { return null; } }; }
+  var version = (params.get("v") || CFG.version || "").replace(/[^0-9A-Za-z.\-]/g, "").slice(0, 20);
+  var isEdge = (function () {
+    try {
+      var b = navigator.userAgentData && navigator.userAgentData.brands;
+      if (b && b.some(function (x) { return /Edge/i.test(x.brand); })) return true;
+    } catch (e) {}
+    return /\bEdg\//.test(navigator.userAgent);
+  })();
+  var browserName = isEdge ? "Edge" : (/Chrome\//.test(navigator.userAgent) ? "Chrome" : "Other");
+  if (version) $("#sf-version").textContent = version;
+
+  /* ── Theme toggle ── */
+  var toggle = $(".theme-toggle");
+  function applyTheme(t) {
+    root.setAttribute("data-theme", t);
+    toggle.setAttribute("aria-pressed", t === "light" ? "true" : "false");
+    toggle.setAttribute("aria-label", t === "light" ? "Switch to dark appearance" : "Switch to light appearance");
+    var meta = $('meta[name="theme-color"]'); if (meta) meta.content = t === "light" ? "#b84800" : "#3b1300";
+  }
+  var saved = store("sf-goodbye-theme");
+  applyTheme(saved === "light" || saved === "dark" ? saved
+    : (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+  toggle.addEventListener("click", function () {
+    var next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
+    applyTheme(next); store("sf-goodbye-theme", next);
+  });
+
+  /* ── Store + website links (configurable, never invented) ── */
+  (function () {
+    var btn = $("#reinstall-btn"), name = $("#store-name");
+    var url = isEdge ? (CFG.edgeStoreUrl || CFG.chromeStoreUrl) : (CFG.chromeStoreUrl || CFG.edgeStoreUrl);
+    if (!url) { // fall back to an official store search for the product name
+      url = isEdge ? "https://microsoftedge.microsoft.com/addons/search/SaralForce" : "https://chromewebstore.google.com/search/SaralForce";
+    }
+    btn.href = url;
+    name.textContent = /microsoftedge/.test(url) ? "Microsoft Edge Add-ons store" : "Chrome Web Store";
+    var ex = $("#explore-btn");
+    if (CFG.websiteUrl && /^https:\/\//.test(CFG.websiteUrl)) { ex.href = CFG.websiteUrl; ex.hidden = false; }
+  })();
+
+  /* ── Word split for text reveal ── */
+  $all("[data-split]").forEach(function (el) {
+    var i = 0;
+    (function walk(node) {
+      Array.prototype.slice.call(node.childNodes).forEach(function (n) {
+        if (n.nodeType === 3) {
+          var frag = doc.createDocumentFragment();
+          n.textContent.split(/(\s+)/).forEach(function (part) {
+            if (!part) return;
+            if (/^\s+$/.test(part)) { frag.appendChild(doc.createTextNode(part)); return; }
+            var s = doc.createElement("span"); s.className = "w"; s.style.setProperty("--i", i++); s.textContent = part;
+            frag.appendChild(s);
+          });
+          n.parentNode.replaceChild(frag, n);
+        } else if (n.nodeType === 1) { walk(n); }
+      });
+    })(el);
+    el.setAttribute("aria-label", el.textContent.replace(/\s+/g, " ").trim());
+  });
+
+  /* ── Scroll reveal ── */
+  var revealEls = $all(".reveal, .words");
+  if ("IntersectionObserver" in window && !reduceMotion) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } });
+    }, { threshold: 0.15, rootMargin: "0px 0px -40px 0px" });
+    revealEls.forEach(function (el) { io.observe(el); });
+  } else { revealEls.forEach(function (el) { el.classList.add("in"); }); }
+
+  /* ── Journey rail + progress bar ── */
+  var pill = $("#next-pill"), bar = $(".progress"), journey = $(".journey"), fill = $(".journey .fill");
+  var steps = $all(".journey a");
+  var sections = steps.map(function (a) { return doc.getElementById(a.getAttribute("data-step")); });
+  var ticking = false;
+  function onScroll() {
+    if (ticking) return; ticking = true;
+    requestAnimationFrame(function () {
+      ticking = false;
+      var max = root.scrollHeight - innerHeight;
+      var p = max > 0 ? Math.min(1, scrollY / max) : 0;
+      bar.style.transform = "scaleX(" + p + ")";
+      var mid = innerHeight * 0.45, cur = 0;
+      sections.forEach(function (s, i) { if (s && s.getBoundingClientRect().top <= mid) cur = i; });
+      if (scrollY + innerHeight >= root.scrollHeight - 4) cur = sections.length - 1;
+      steps.forEach(function (a, i) {
+        if (i === cur) a.setAttribute("aria-current", "step"); else a.removeAttribute("aria-current");
+        a.classList.toggle("done", i < cur);
+      });
+      fill.style.transform = "scaleY(" + (cur / (steps.length - 1)) + ")";
+      journey.classList.toggle("on-hero", cur === 0);
+      if (pill) { var g = scrollY > 120; pill.classList.toggle("gone", g); if (g) pill.classList.add("settled"); }
+    });
+  }
+  addEventListener("scroll", onScroll, { passive: true });
+  addEventListener("resize", onScroll);
+  onScroll();
+
+  /* ── Pause SVG (SMIL) flag animation for reduced motion ── */
+  var sceneSvg = $(".scene > svg");
+  function syncMotion() {
+    reduceMotion = mqReduce.matches;
+    if (sceneSvg && sceneSvg.pauseAnimations) { if (reduceMotion) sceneSvg.pauseAnimations(); else sceneSvg.unpauseAnimations(); }
+  }
+  syncMotion();
+  if (mqReduce.addEventListener) mqReduce.addEventListener("change", syncMotion);
+
+  /* ── Rising petals (kept from original goodbye.js) ── */
+  var petalColors = [
+    "radial-gradient(circle at 30% 30%, #ffe0b2, #ff7043)", "#ffd9a0", "#ffab66", "#ff8a3d", "#ffe9c4",
+    "radial-gradient(circle at 30% 30%, #fff3c4, #ffb300)"
+  ];
+  function spawnPetal(burst) {
+    if (reduceMotion || doc.hidden) return;
+    var p = doc.createElement("div");
+    p.className = "petal";
+    var size = 6 + Math.random() * 10;
+    p.style.width = size + "px";
+    p.style.height = size + "px";
+    p.style.left = Math.random() * 100 + "vw";
+    p.style.background = petalColors[Math.floor(Math.random() * petalColors.length)];
+    p.style.setProperty("--sway", (Math.random() * 80 - 40).toFixed(0) + "px");
+    var dur = burst ? 4 + Math.random() * 3 : 7 + Math.random() * 7;
+    p.style.animationDuration = dur + "s";
+    p.setAttribute("aria-hidden", "true");
+    doc.body.appendChild(p);
+    setTimeout(function () { p.remove(); }, dur * 1000 + 200);
+  }
+  function petalBurst(n) { for (var i = 0; i < n; i++) setTimeout(function () { spawnPetal(true); }, i * 60); }
+  for (var k = 0; k < 14; k++) setTimeout(spawnPetal, k * 450);
+  setInterval(spawnPetal, 1600);
+
+  /* ── Golden particles (hero canvas, paused off-screen) ── */
+  (function () {
+    var cv = $("#sky-particles"); if (!cv || !cv.getContext) return;
+    var ctx = cv.getContext("2d"), parts = [], w = 0, h = 0, dpr = Math.min(2, devicePixelRatio || 1), running = false, raf = 0;
+    function size() {
+      w = cv.clientWidth; h = cv.clientHeight;
+      cv.width = w * dpr; cv.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      var n = Math.round(Math.min(70, w * h / 16000));
+      parts = []; for (var i = 0; i < n; i++) parts.push(make(true));
+    }
+    function make(any) {
+      return { x: Math.random() * w, y: any ? Math.random() * h : h + 10, r: .6 + Math.random() * 2.2,
+        vy: .15 + Math.random() * .45, vx: (Math.random() - .5) * .2, a: .2 + Math.random() * .6, t: Math.random() * 6.28 };
+    }
+    function frame() {
+      ctx.clearRect(0, 0, w, h);
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i]; p.y -= p.vy; p.t += .02; p.x += p.vx + Math.sin(p.t) * .2;
+        if (p.y < -10) parts[i] = p = make(false);
+        var tw = p.a * (.6 + .4 * Math.sin(p.t * 2));
+        ctx.beginPath(); ctx.fillStyle = "rgba(255,226,150," + tw + ")";
+        ctx.shadowColor = "rgba(255,190,80,.9)"; ctx.shadowBlur = 6;
+        ctx.arc(p.x, p.y, p.r, 0, 6.283); ctx.fill();
+      }
+      raf = requestAnimationFrame(frame);
+    }
+    function start() { if (!running && !reduceMotion && !doc.hidden) { running = true; raf = requestAnimationFrame(frame); } }
+    function stop() { running = false; cancelAnimationFrame(raf); }
+    size(); addEventListener("resize", function () { size(); });
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (e) { e[0].isIntersecting ? start() : stop(); }).observe(cv);
+    } else start();
+    doc.addEventListener("visibilitychange", function () { doc.hidden ? stop() : start(); });
+    if (mqReduce.addEventListener) mqReduce.addEventListener("change", function () { mqReduce.matches ? (stop(), ctx.clearRect(0, 0, w, h)) : start(); });
+  })();
+
+  /* ── Waving hand ── */
+  (function () {
+    var btn = $(".wave-btn"), hand = $(".hand"), cap = $(".wave-caption"), waves = 0;
+    btn.addEventListener("click", function () {
+      hand.classList.remove("go"); void hand.offsetWidth; hand.classList.add("go");
+      waves++; cap.textContent = waves === 1 ? "We're waving back! 🧡" : "Namaste 🙏 — see you soon!";
+      petalBurst(10);
+    });
+  })();
+
+  /* ── Identity card tilt + feature spotlight (pointer only) ── */
+  if (window.matchMedia && matchMedia("(hover: hover) and (pointer: fine)").matches) {
+    var card = $("[data-tilt]");
+    card.addEventListener("pointermove", function (e) {
+      if (reduceMotion) return;
+      var r = card.getBoundingClientRect(), x = (e.clientX - r.left) / r.width - .5, y = (e.clientY - r.top) / r.height - .5;
+      card.style.transform = "perspective(900px) rotateY(" + (x * 7) + "deg) rotateX(" + (-y * 7) + "deg)";
+    });
+    card.addEventListener("pointerleave", function () { card.style.transform = ""; });
+    $all(".feature").forEach(function (f) {
+      f.addEventListener("pointermove", function (e) {
+        var r = f.getBoundingClientRect();
+        f.style.setProperty("--mx", (e.clientX - r.left) + "px"); f.style.setProperty("--my", (e.clientY - r.top) + "px");
+      });
+    });
+  }
+
+  /* ── Feedback form ── */
+  (function () {
+    var form = $("#feedback-form"), shell = $("#feedback-shell"), btn = $("#submit-btn"),
+        label = $(".btn-label", btn), status = $("#form-status"), ta = $("#comment"), count = $("#comment-count");
+    var boxes = $all('input[name="reason"]', form);
+    var sending = false;
+
+    function selected() { return boxes.filter(function (b) { return b.checked; }); }
+    function refresh() {
+      count.textContent = ta.value.length + " / 1000";
+      btn.disabled = sending || (selected().length === 0 && ta.value.trim() === "");
+      var want = selected().some(function (b) { return b.value === "missing_feature" || b.value === "other" || b.value === "bugs"; });
+      ta.placeholder = want ? "Tell us a little more — which feature, what went wrong, or what we missed?" : "What could we have done better? Which feature were you hoping for?";
+    }
+    boxes.forEach(function (b) { b.addEventListener("change", function () { refresh(); if (status.classList.contains("error")) clearStatus(); }); });
+    ta.addEventListener("input", refresh);
+    refresh();
+
+    function clearStatus() { status.textContent = ""; status.className = "status"; }
+    function showError(msg) { status.className = "status error"; status.setAttribute("role", "alert"); status.textContent = msg; }
+
+    // Strip anything that looks like a secret before sending.
+    function redact(s) {
+      return s
+        .replace(/\b00D[A-Za-z0-9]{12,15}![A-Za-z0-9._\-]{20,}/g, "[redacted-session]")
+        .replace(/\bBearer\s+[A-Za-z0-9._\-~+\/=]{12,}/gi, "Bearer [redacted]")
+        .replace(/\b(sk|pk|rk)-[A-Za-z0-9_\-]{16,}/g, "[redacted-key]")
+        .replace(/\bAIza[0-9A-Za-z_\-]{30,}/g, "[redacted-key]")
+        .replace(/\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}/g, "[redacted-token]")
+        .replace(/\b(password|passwd|pwd|token|secret|sid)\s*[:=]\s*\S+/gi, "$1: [redacted]");
+    }
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (sending) return;
+      clearStatus();
+      if ($("#hp-website").value) return; // bot
+      var reasons = selected();
+      var comment = redact(ta.value.trim()).slice(0, 1000);
+      if (!reasons.length && !comment) { showError("Pick a reason or write a short note — or simply skip, that's okay too."); return; }
+
+      var endpoint = (CFG.feedbackEndpoint || "").trim();
+      if (!/^https:\/\//i.test(endpoint)) {
+        showError("Sorry — feedback can't be sent right now (no feedback service is configured). Nothing was submitted.");
+        return;
+      }
+
+      var payload = {
+        reasons: reasons.map(function (b) { return b.value; }),
+        reasonLabels: reasons.map(function (b) { return $("label[for='" + b.id + "'] .txt", form).textContent; }),
+        comment: comment,
+        extensionVersion: version || null,
+        browser: browserName,
+        language: (navigator.language || "").slice(0, 12),
+        submittedAt: new Date().toISOString(),
+        source: "saralforce-uninstall"
+      };
+
+      var body, headers = { "Accept": "application/json" };
+      if ((CFG.feedbackFormat || "json") === "form") {
+        var fd = new URLSearchParams();
+        Object.keys(payload).forEach(function (k) {
+          var v = payload[k]; fd.append(k, Array.isArray(v) ? v.join(", ") : (v == null ? "" : String(v)));
+        });
+        body = fd; // browser sets Content-Type
+      } else {
+        headers["Content-Type"] = "application/json";
+        body = JSON.stringify(payload);
+      }
+
+      sending = true; btn.disabled = true; btn.classList.add("loading"); btn.setAttribute("aria-busy", "true");
+      label.textContent = "Sending…";
+      var ctrl = "AbortController" in window ? new AbortController() : null;
+      var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 15000);
+
+      fetch(endpoint, {
+        method: "POST", mode: "cors", credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
+        headers: headers, body: body, signal: ctrl ? ctrl.signal : undefined
+      }).then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        // Some services (e.g. Formspree) reply 200 with {ok:false}; honour that.
+        return res.text().then(function (t) {
+          try { var j = JSON.parse(t); if (j && (j.ok === false || j.success === false || j.result === "error")) throw new Error("Rejected"); } catch (err) { if (err.message === "Rejected") throw err; }
+        });
+      }).then(function () {
+        shell.classList.add("sent");
+        var th = $("#thanks"); th.focus({ preventScroll: true });
+        shell.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+        petalBurst(36);
+      }).catch(function (err) {
+        var aborted = err && err.name === "AbortError";
+        showError(aborted
+          ? "The request timed out, so your feedback wasn't sent. Please check your connection and try again."
+          : "We couldn't send your feedback (" + (navigator.onLine === false ? "you appear to be offline" : "the server didn't accept it") + "). Your answers are still here — please try again.");
+      }).then(function () {
+        clearTimeout(timer);
+        sending = false; btn.classList.remove("loading"); btn.removeAttribute("aria-busy");
+        label.textContent = "Submit Feedback"; refresh();
+      });
+    });
+  })();
+
+  /* ── Light-a-diya interaction ── */
+  (function () {
+    var row = $(".diya-row"), first = $(".diya-btn", row);
+    for (var i = 2; i <= 5; i++) {
+      var c = first.cloneNode(true); c.setAttribute("aria-label", "Light diya " + i); row.appendChild(c);
+    }
+    var btns = $all(".diya-btn", row), msg = $("#diya-msg");
+    var lines = ["", "A little light ✨", "Brighter already 🌅", "Glowing with hope 🧡", "Almost there 🪔", "शुभमस्तु — may every new path be bright. Jai Shri Ram 🙏"];
+    btns.forEach(function (b) {
+      b.addEventListener("click", function () {
+        b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") === "true" ? "false" : "true");
+        var lit = btns.filter(function (x) { return x.getAttribute("aria-pressed") === "true"; }).length;
+        msg.textContent = lines[lit];
+        b.setAttribute("aria-label", (b.getAttribute("aria-pressed") === "true" ? "Diya lit — " : "Light diya ") + (btns.indexOf(b) + 1));
+        if (lit === btns.length) petalBurst(30);
+      });
+    });
+  })();
+})();
+</script>
 </body>
 </html>

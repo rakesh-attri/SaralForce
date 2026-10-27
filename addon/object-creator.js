@@ -852,8 +852,13 @@ class App extends React.Component {
       queryHostRecord().then((rec) => {
         try {
           const msg = {message: "openInspectorTab", host: this.props.sfHost || ""};
-          if (rec && rec.obj) {
-            msg.rec = {obj: String(rec.obj), id: rec.id ? String(rec.id) : null};
+          // Id-only contexts (setup/classic record pages) are carried too —
+          // background.js emits openRecId alone and the panel resolves it.
+          if (rec && (rec.obj || rec.id)) {
+            msg.rec = {
+              obj: rec.obj ? String(rec.obj) : null,
+              id: rec.id ? String(rec.id) : null
+            };
           }
           chrome.runtime.sendMessage(msg);
         } catch (e) {

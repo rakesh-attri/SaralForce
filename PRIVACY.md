@@ -34,7 +34,6 @@ Salesforce, Inc. or any LLM provider.
 ## Permissions rationale (for store review)
 
 - `cookies`: read the Salesforce `sid` session cookie to authenticate API calls.
-- `storage`: persist settings (LLM config) locally.
 - Host permissions: Salesforce domains (API access) and LLM provider
   endpoints (chat completions) — nothing else.
 

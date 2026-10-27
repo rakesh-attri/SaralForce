@@ -68,10 +68,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const openerTabId = sender.tab && sender.tab.id != null ? sender.tab.id : null;
     // Record context carried from the opener page (absent when the sidebar
     // had no record context): the new tab has no content-script parent to
-    // ask, so it arrives as openRecObj/openRecId URL params instead.
-    const recSuffix = request.rec && /^[A-Za-z0-9_]+$/.test(request.rec.obj || "")
-      ? `&openRecObj=${encodeURIComponent(request.rec.obj)}` +
-        (request.rec.id ? `&openRecId=${encodeURIComponent(request.rec.id)}` : "")
+    // ask, so it arrives as openRecObj/openRecId URL params instead. Setup
+    // and classic pages contribute an Id with no object name — the panel
+    // resolves the object from the Id prefix.
+    const recObj = request.rec && /^[A-Za-z0-9_]+$/.test(request.rec.obj || "")
+      ? request.rec.obj : "";
+    const recId = request.rec && /^[a-zA-Z0-9]{15,18}$/.test(request.rec.id || "")
+      ? request.rec.id : "";
+    const recSuffix = (recObj || recId)
+      ? (recObj ? `&openRecObj=${encodeURIComponent(recObj)}` : "") +
+        (recId ? `&openRecId=${encodeURIComponent(recId)}` : "")
       : "";
     const openFresh = () => {
       let url = chrome.runtime.getURL("object-creator.html" + (request.host ? `?host=${encodeURIComponent(request.host)}` : ""));

@@ -260,6 +260,28 @@ debug-log analysis.
 
 ## What's New
 
+### v1.6.0
+- **New SaralForce brand mark** — the orange cloud `</>` logo replaces the old blue one
+  everywhere: toolbar icons (16 / 32 / 48 / 128), the panel header logo, the floating
+  page button and the sidebar header, with hand-tuned 16px and 32px vector variants so
+  the mark stays crisp at small sizes
+- **Record context from Setup and classic pages** — opening a record from
+  `/lightning/setup/...` (including the wrapped `address=` targets and Object Manager
+  detail pages) or a classic `/{keyprefix}/{id}` URL now hands the record to the panel;
+  when only the Id is known it is carried as-is and the object is resolved from the
+  Id prefix, so deep links land on the right record
+- **Tooling API fallback** — API calls that miss on a standard endpoint
+  (`INVALID_TYPE`, `NOT_FOUND`, `INVALID_ENDPOINT`) automatically retry on the Tooling
+  API, cached per object, so tooling-only metadata (and layouts exposed only there)
+  resolves without a manual switch
+- **Farewell page rebuilt** — `goodbye.html` is fully self-contained (inline CSS, SVG
+  and JS) with the rising-petals effect merged in; petals pause while the tab is hidden
+  and are switched off entirely under `prefers-reduced-motion`. The separate
+  `goodbye.js` file is gone
+- **Smaller permission footprint** — the `storage` permission is removed (the extension
+  keeps settings in `localStorage` and never used it), so the only permission left is
+  `cookies`
+
 ### v1.5.0
 - **Advanced Export rebuilt as a data-management workbench** — three columns (setup,
   query + preview, advanced options) shared with the new Import tab; Data API or
@@ -404,7 +426,6 @@ sf-object-creator/
 ## Permissions
 
 - `cookies`: Read Salesforce session cookies for API authentication
-- `storage`: Store LLM configuration and extension settings
 - Host permissions for Salesforce domains (needed to inject the inspector on your pages)
 - **Optional** host permission for `https://*/*`: requested only when you save an AI
   provider in Settings — it covers the chosen AI endpoint (or a custom OpenAI-compatible

@@ -69,7 +69,7 @@
       font-family: 'Salesforce Sans', Arial, sans-serif;
       opacity: 0.6;
     `;
-    btn.innerHTML = `<svg width="22" height="22" viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="sfbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#1e293b"/></linearGradient><linearGradient id="sfbr" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#38bdf8"/><stop offset="100%" stop-color="#2563eb"/></linearGradient></defs><rect width="120" height="120" rx="26" fill="url(#sfbg)"/><g transform="translate(14.5,21) scale(1.18)"><path d="M35 12 C24 12 15 20 13 31 C8 32 4 37 4 43 C4 49 9 54 15 54 L62 54 C68 54 73 49 73 43 C73 38 70 33 65 31 C63 20 54 12 43 12 C40 12 37 13 35 12 Z" fill="url(#sfbr)" opacity="0.15"/><path d="M33 10 C22.5 10 14 18.5 14 29 C9 30 5 34.5 5 40 C5 45.5 9.5 50 15 50 L58 50 C63.5 50 68 45.5 68 40 C68 35 64 31 59 30 C57 19.5 48.5 10 38 10 C35.5 10 34.2 10.5 33 10 Z" fill="none" stroke="url(#sfbr)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 31 L20 37 L26 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M47 31 L53 37 L47 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="41" y1="28" x2="32" y2="46" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/></g></svg>`;
+    btn.innerHTML = `<svg width="26" height="26" viewBox="0 0 128 128" aria-hidden="true"><defs><linearGradient id="sfbTile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1c2452"/><stop offset="1" stop-color="#0a0f26"/></linearGradient><linearGradient id="sfbCloud" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#ffd36e"/><stop offset="0.5" stop-color="#ff9a1f"/><stop offset="1" stop-color="#f05a0e"/></linearGradient><radialGradient id="sfbHalo" cx="0.5" cy="0.55" r="0.5"><stop offset="0" stop-color="#ff9a1f" stop-opacity="0.45"/><stop offset="1" stop-color="#ff9a1f" stop-opacity="0"/></radialGradient></defs><rect x="2" y="2" width="124" height="124" rx="28" fill="url(#sfbTile)"/><rect x="2.5" y="2.5" width="123" height="123" rx="27.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/><circle cx="64" cy="70" r="54" fill="url(#sfbHalo)"/><g transform="translate(0 -4)"><path d="M36 98 H94 A19 19 0 0 0 97.5 60.4 A30 30 0 0 0 40.6 56.6 A21 21 0 0 0 36 98 Z" fill="url(#sfbCloud)"/><path d="M43 64 A16 16 0 0 1 57 50" fill="none" stroke="#fff6dc" stroke-opacity="0.55" stroke-width="3" stroke-linecap="round"/><g fill="none" stroke="#141a3c" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M51 69 L41 78.5 L51 88"/><path d="M71 64 L61 93"/><path d="M81 69 L91 78.5 L81 88"/></g></g><path d="M101 14 Q103 25 112 27 Q103 29 101 40 Q99 29 90 27 Q99 25 101 14 Z" fill="#fff3c4"/></svg>`;
     btn.title = "SaralForce";
 
     btn.addEventListener("mouseenter", () => {
@@ -143,7 +143,7 @@
       `;
       header.innerHTML = `
         <span style="display:flex;align-items:center;gap:8px;">
-          <svg width="14" height="14" viewBox="0 0 120 120" aria-hidden="true"><rect width="120" height="120" rx="26" fill="#0f172a"/><g transform="translate(14.5,21) scale(1.18)"><path d="M33 10 C22.5 10 14 18.5 14 29 C9 30 5 34.5 5 40 C5 45.5 9.5 50 15 50 L58 50 C63.5 50 68 45.5 68 40 C68 35 64 31 59 30 C57 19.5 48.5 10 38 10 C35.5 10 34.2 10.5 33 10 Z" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 31 L20 37 L26 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M47 31 L53 37 L47 43" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="41" y1="28" x2="32" y2="46" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/></g></svg>
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><defs><linearGradient id="sfhCloud" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#ffc24a"/><stop offset="1" stop-color="#f05a0e"/></linearGradient></defs><rect x="0" y="0" width="16" height="16" rx="3.5" fill="#141a3c"/><g transform="translate(0 -0.8)"><path d="M3 14 H12.5 A2.8 2.8 0 0 0 13 8.4 A4.6 4.6 0 0 0 4.3 7.6 A3.3 3.3 0 0 0 3 14 Z" fill="url(#sfhCloud)"/><path d="M6.6 9.4 L5 11 L6.6 12.6 M9.4 9.4 L11 11 L9.4 12.6" fill="none" stroke="#141a3c" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></g></svg>
           SaralForce
           <span style="font-weight:400;opacity:0.7;font-size:11px;">Developer Inspector Utility</span>
         </span>
@@ -575,7 +575,56 @@
     return chip;
   }
 
+  // ─── Setup pages ────────────────────────────────────────────────────────
+  // Setup record pages wrap their target in the `address` query param, e.g.
+  //   /lightning/setup/ManageUsers/page?address=%2F005f6000008kWGP%3FisUserEntityOverride%3D1…
+  // Decode the wrapped target (sometimes double-encoded: a URL inside the
+  // address) and pull the object/record out of it. Object Manager pages
+  // carry the object API name directly in the path instead.
+  function parseSetupContext() {
+    const path = location.pathname;
+    if (path.indexOf("/lightning/setup/") !== 0) return null;
+
+    // Object Manager detail page (field / layout / record type record):
+    // /lightning/setup/ObjectManager/{Obj}/{Segment}/{15-18 id}/view
+    const omRec = path.match(
+      /^\/lightning\/setup\/ObjectManager\/[A-Za-z0-9_.]+\/[A-Za-z0-9]+\/([a-zA-Z0-9]{15,18})(?:\/|$)/);
+    if (omRec) return {obj: null, id: omRec[1]};
+
+    // Object Manager object page: object known, no record of its own (the
+    // object name can never be 15-18 chars here — it is checked only when
+    // the detail pattern above did not already match a real record Id).
+    const omObj = path.match(/^\/lightning\/setup\/ObjectManager\/([A-Za-z0-9_.]+)(?:\/|$)/);
+    if (omObj) return {obj: omObj[1], id: null};
+
+    // Wrapped target: /lightning/setup/{SetupNode}/page?address=…
+    let target = null;
+    try { target = new URLSearchParams(location.search).get("address"); } catch (e) { target = null; }
+    if (!target) return null;
+    for (let i = 0; i < 2; i++) {
+      let dec;
+      try { dec = decodeURIComponent(target); } catch (e) { break; }
+      if (dec === target) break;
+      target = dec;
+    }
+    // /r/{Obj}/{id} (and the lightning/r + sObject spellings) inside the target.
+    const lit = target.match(
+      /\/(?:lightning\/r|sObject|r)\/([A-Za-z0-9_.]+)\/([a-zA-Z0-9]{15,18})(?:\/view)?/);
+    if (lit) return {obj: lit[1], id: lit[2]};
+    // Bare record URL — /{15-18 id} at the very start of the target …
+    const bare = target.match(/^[=?\/]+([a-zA-Z0-9]{15,18})(?=$|[\/?&#])/);
+    if (bare) return {obj: null, id: bare[1]};
+    // … or behind a classic ?id= style parameter inside it.
+    const byParam = target.match(/[?&#](?:id|recordId|cid)=([a-zA-Z0-9]{15,18})(?=$|[^a-zA-Z0-9])/);
+    if (byParam) return {obj: null, id: byParam[1]};
+    return null;
+  }
+
   function getRecordInfo() {
+    // Setup first: its URLs never match the patterns below, and the wrapped
+    // target can itself be a normal record URL.
+    const setup = parseSetupContext();
+    if (setup) return setup;
     const parts = [location.pathname, location.hash.replace(/^#/, "")];
     for (const p of parts) {
       const m = p.match(/\/(?:r|sObject)\/([A-Za-z0-9_]+)\/([a-zA-Z0-9]{15,18})(?:\/|$)/);
@@ -591,6 +640,10 @@
       const m3 = p.match(/\/o\/([A-Za-z0-9_]+)\/(?:list|home)(?:\/|$)/);
       if (m3) return {obj: m3[1], id: null};
     }
+    // Classic record page: the whole path is one record Id. The panel
+    // resolves the object from the Id prefix (object unknown here).
+    const classic = location.pathname.match(/^\/([a-zA-Z0-9]{15,18})\/?$/);
+    if (classic) return {obj: null, id: classic[1]};
     const rid = new URLSearchParams(location.search).get("rid");
     if (rid && /^[a-zA-Z0-9]{15,18}$/.test(rid)) return {obj: null, id: rid};
     return null;

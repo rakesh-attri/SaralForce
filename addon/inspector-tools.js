@@ -1134,6 +1134,62 @@ async function ffGetObjects(force) {
   return _ffObjectsCache;
 }
 
+// ─── Setup / Tooling API access ───────────────────────────────────────────
+// Many setup entities (CustomField, Layout, Flow, CustomTab, …) and their
+// records are only reachable through the Tooling API, and Setup pages hand
+// us a record Id without an object name. These helpers retry any standard
+// REST call through /tooling — but only when the first attempt failed
+// because the endpoint does not serve that object — mirroring SF Inspector's
+// "Show all data (Tooling API)" behavior for every tooling-supported object.
+
+const _ffApiMode = {};   // object API name -> "std" | "tooling" (last success)
+
+function ffApiPath(mode, tail) {
+  return `/services/data/v${apiVersion}/${mode === "tooling" ? "tooling/" : ""}${tail}`;
+}
+
+// Endpoint miss (the object isn't served here) vs. real failures (session,
+// permissions, bad field…): only the former deserves a Tooling retry.
+function ffIsApiMissError(e) {
+  if (!e || e.name !== "SalesforceRestError" || !Array.isArray(e.detail)) return false;
+  const MISS = ["INVALID_TYPE", "NOT_FOUND", "INVALID_ENDPOINT"];
+  return e.detail.some(d => d && MISS.includes(d.errorCode));
+}
+
+// Run `pathFn(mode)` against the standard API first (Tooling first when it
+// already worked for this object), falling back only on an endpoint miss.
+// `only` pins a single endpoint. Returns the parsed response and records
+// the endpoint that worked so later calls (modal, export, save) reuse it.
+async function ffAutoApi(obj, pathFn, restOpts, only) {
+  const order = only
+    ? [only]
+    : (_ffApiMode[obj] === "tooling" ? ["tooling", "std"] : ["std", "tooling"]);
+  const errs = [];
+  for (const mode of order) {
+    try {
+      const res = await sfConn.rest(pathFn(mode), restOpts || {});
+      _ffApiMode[obj] = mode;
+      return res;
+    } catch (e) {
+      errs.push(e);
+      if (!ffIsApiMissError(e)) throw e;
+    }
+  }
+  // Every endpoint missed — include both messages so a tooling-only object
+  // reports what the Tooling API said, not just "not supported".
+  if (errs.length > 1) {
+    const merged = new Error(`${errs[0].message} | Tooling API: ${errs[1].message}`);
+    merged.name = "SalesforceRestError";
+    merged.detail = errs[0].detail;
+    throw merged;
+  }
+  throw errs[0];
+}
+
+function ffApiModeOf(obj) {
+  return _ffApiMode[obj] || null;
+}
+
 const _ffDescribeCache = {};
 async function ffDescribeObject(objApi, opts) {
   const key = String(objApi || "").trim();
@@ -1141,11 +1197,10 @@ async function ffDescribeObject(objApi, opts) {
   const tooling = !!(opts && opts.tooling);
   const cacheKey = (tooling ? "tooling:" : "std:") + key;
   if (_ffDescribeCache[cacheKey]) return _ffDescribeCache[cacheKey];
-  const d = await sfConn.rest(
-    tooling
-      ? `/services/data/v${apiVersion}/tooling/sobjects/${encodeURIComponent(key)}/describe`
-      : `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(key)}/describe`,
-    {useCache: false});
+  const d = await ffAutoApi(key,
+    (mode) => ffApiPath(mode, `sobjects/${encodeURIComponent(key)}/describe`),
+    {useCache: false},
+    tooling ? "tooling" : null);
   _ffDescribeCache[cacheKey] = d;
   return d;
 }
@@ -1167,6 +1222,71 @@ async function toolingListObjects() {
   list.sort((a, b) =>
     (b.custom - a.custom) || a.label.localeCompare(b.label));
   return list;
+}
+
+// ─── Id → object resolution (setup / classic record pages) ───────────────
+// Setup and classic pages can hand us a bare record Id with no object name.
+// Both global describes carry keyPrefix, so the Id prefix identifies the
+// object; static entries only bridge the rare case where neither list loads.
+const FF_STATIC_PREFIX_MAP = {
+  "005": "User", "00e": "Profile", "00G": "Group", "00k": "Role",
+  "0PS": "PermissionSet", "00N": "CustomField", "01z": "Layout",
+  "01p": "ApexClass", "01I": "CustomObject", "02u": "CustomTab",
+  "00O": "Report"
+};
+
+const _ffPrefixCache = {};   // "std" | "tooling" -> {keyPrefix: [objNames]}
+
+async function ffPrefixMap(mode) {
+  if (_ffPrefixCache[mode]) return _ffPrefixCache[mode];
+  const res = await sfConn.rest(ffApiPath(mode, "sobjects/"), {useCache: false});
+  const map = {};
+  for (const o of (res.sobjects || [])) {
+    if (o && o.keyPrefix && o.name) {
+      (map[o.keyPrefix] = map[o.keyPrefix] || []).push(o.name);
+    }
+  }
+  _ffPrefixCache[mode] = map;
+  return map;
+}
+
+const _ffIdObjCache = {};   // 15-char record Id -> object API name
+
+// Resolves a bare record Id to its object API name, or null when no listed
+// object owns the prefix (the caller then falls back to the empty state).
+async function ffResolveObjectById(id) {
+  const raw = String(id || "");
+  const short = /^[a-zA-Z0-9]{18}$/.test(raw) ? raw.slice(0, 15) : raw;
+  if (!/^[a-zA-Z0-9]{15}$/.test(short)) return null;
+  if (_ffIdObjCache[short]) return _ffIdObjCache[short];
+  const prefix = short.slice(0, 3);
+  const candidates = [];
+  for (const mode of ["std", "tooling"]) {
+    try {
+      const map = await ffPrefixMap(mode);
+      for (const name of (map[prefix] || [])) {
+        if (!candidates.includes(name)) candidates.push(name);
+      }
+    } catch (e) { /* this endpoint's list is unavailable — still try the other */ }
+  }
+  if (!candidates.length && FF_STATIC_PREFIX_MAP[prefix]) {
+    candidates.push(FF_STATIC_PREFIX_MAP[prefix]);
+  }
+  if (!candidates.length) return null;
+  let obj = candidates[0];
+  if (candidates.length > 1) {
+    // One prefix can belong to several entities: the first candidate whose
+    // record actually loads wins.
+    for (const cand of candidates) {
+      try {
+        await fetchFullRecord(cand, short);
+        obj = cand;
+        break;
+      } catch (e) { /* wrong candidate — keep probing */ }
+    }
+  }
+  _ffIdObjCache[short] = obj;
+  return obj;
 }
 
 // ─── Shared code-editor pieces (SOQL + Apex tabs) ─────────────────────
@@ -1488,6 +1608,7 @@ function SoqlTab() {
       const rec = await fetchFullRecord(m[1], id);
       setSoqlDetail({id, obj: m[1], rows: buildDetailRows(rec, d.fields || []),
         meta: {label: (d && d.label) || m[1], custom: !!(d && d.custom),
+          viaTooling: ffApiModeOf(m[1]) === "tooling",
           total: null, updated: null}});
     } catch (e) {
       setDetailHint(`Could not load the full record: ${e.message}`);
@@ -5277,8 +5398,10 @@ function normalizePicklistValues(picklistValues) {
 }
 
 async function fetchFullRecord(obj, id) {
-  return sfConn.rest(
-    `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`,
+  // Standard REST first, Tooling API when this object is only served there
+  // (the resolved mode is remembered for the modal/export/save round trips).
+  return ffAutoApi(obj,
+    (mode) => ffApiPath(mode, `sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`),
     {useCache: true});
 }
 
@@ -5530,7 +5653,10 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
         h("div", null,
           h("div", {className: "sad-info-name"},
             (detail.meta && detail.meta.label) || detail.obj,
-            h("span", {className: "rec-chip rec-chip-obj"}, "Object")),
+            h("span", {className: "rec-chip rec-chip-obj"}, "Object"),
+            (detail.meta && detail.meta.viaTooling) && h("span",
+              {className: "rec-chip rec-chip-api",
+               title: "This record is served through the Tooling API"}, "Tooling API")),
           h("div", {className: "sad-info-api"}, "API Name: ",
             h("span", {className: "sad-info-apiv"}, detail.obj)))),
       h("div", {className: "sad-info-cells"},
@@ -5642,23 +5768,25 @@ function RecordsTab() {
   const [pageRec, setPageRec] = React.useState(null);
   const [recDetail, setRecDetail] = React.useState(null);
   const [ctxLoading, setCtxLoading] = React.useState(false);
+  // True while a bare record Id (setup/classic page) is being looked up.
+  const [resolvingId, setResolvingId] = React.useState(false);
 
   const fmtCount = (n) => (typeof n === "number" ? n.toLocaleString("en-US") : "—");
   const countRecords = async (obj) => {
     try {
-      const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-        encodeURIComponent(`SELECT COUNT() FROM ${obj}`), {useCache: false});
+      const res = await ffAutoApi(obj,
+        (mode) => ffApiPath(mode, "query/?q=" +
+          encodeURIComponent(`SELECT COUNT() FROM ${obj}`)), {useCache: false});
       return typeof res.totalSize === "number" ? res.totalSize : null;
     } catch (e) {
-      return null;
+      return null;   // best-effort — some tooling entities can't COUNT()
     }
   };
   const describe = async (objName) => {
     const obj = String(objName || "").trim();
     if (!obj) return null;
-    const d = await sfConn.rest(
-      `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/describe`,
-      {useCache: false});
+    // Auto mode: standard describe, Tooling API for setup-only objects.
+    const d = await ffDescribeObject(obj);
     const total = await countRecords(obj);
     setObjInput(obj);
     setObjMeta({label: d.label || obj, custom: !!d.custom,
@@ -5675,10 +5803,13 @@ function RecordsTab() {
   const urlPageRec = () => {
     try {
       const q = new URLSearchParams(window.location.search);
-      const obj = (q.get("openRecObj") || "").trim();
-      if (!obj || !/^[A-Za-z0-9_]+$/.test(obj)) return null;
       const id = (q.get("openRecId") || "").trim() || null;
-      return {obj, id};
+      const obj = (q.get("openRecObj") || "").trim();
+      if (obj && !/^[A-Za-z0-9_]+$/.test(obj)) return null;
+      // Id-only contexts (setup/classic pages) arrive without an object
+      // name — boot() resolves the object from the Id prefix.
+      if (!obj && !id) return null;
+      return {obj: obj || null, id};
     } catch (e) {
       return null;
     }
@@ -5713,8 +5844,11 @@ function RecordsTab() {
   const loadRecordContext = async (rec) => {
     const d = await describe(rec.obj);
     const full = await fetchFullRecord(rec.obj, rec.id);
-    const nameKeys = ["Name", "Subject", "Title", "CaseNumber",
-      "DeveloperName", "MasterLabel", "OrderNumber"];
+    // Setup entities often have no Name column — Username (User), FullName
+    // (CustomField/Layout/…), MasterLabel (custom metadata) fill that slot.
+    const nameKeys = ["Name", "Username", "Subject", "Title", "CaseNumber",
+      "FullName", "ApiName", "MasterLabel", "DeveloperName",
+      "QualifiedApiName", "OrderNumber"];
     let name = null;
     if (full) {
       for (const k of nameKeys) {
@@ -5746,7 +5880,10 @@ function RecordsTab() {
       status = full.Status.trim();
     }
     setPageRec({obj: rec.obj, id: rec.id});
-    setRecDetail({name: name || (String(rec.id).slice(0, 6) + "…"), updated, recordType, status});
+    // viaTooling: drives the "Tooling API" badge — set only when this
+    // record's data was actually served through the Tooling API.
+    setRecDetail({name: name || (String(rec.id).slice(0, 6) + "…"), updated, recordType, status,
+      viaTooling: ffApiModeOf(rec.obj) === "tooling"});
   };
 
   const loadObjectContext = async (obj) => {
@@ -5767,7 +5904,21 @@ function RecordsTab() {
         if (!rec) rec = await queryPageRec();
         if (cancelled) return;
         if (rec && rec.obj && rec.id) { await loadRecordContext(rec); return; }
-        if (rec && rec.obj) { await loadObjectContext(rec.obj); return; }
+        if (rec && rec.id) {
+          // Setup / classic pages hand over a bare record Id — look the
+          // object up from its Id prefix before loading the record.
+          if (!cancelled) setResolvingId(true);
+          const obj = await ffResolveObjectById(rec.id);
+          if (cancelled) return;
+          if (obj) { await loadRecordContext({obj, id: rec.id}); return; }
+          if (!cancelled) {
+            setError(`Could not resolve record Id ${rec.id} to an object: ` +
+              `no object in this org lists its Id prefix.`);
+          }
+        } else if (rec && rec.obj) {
+          await loadObjectContext(rec.obj);
+          return;
+        }
         // No record/list context on this page: drop any object left over
         // from an earlier page in this tab (SPA navigation keeps the panel
         // alive) and show the empty state instead of silently re-opening
@@ -5782,7 +5933,10 @@ function RecordsTab() {
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
-        if (!cancelled) setCtxLoading(false);
+        if (!cancelled) {
+          setCtxLoading(false);
+          setResolvingId(false);
+        }
       }
     };
     boot();
@@ -5833,6 +5987,7 @@ function RecordsTab() {
       setDetail({id: pageRec.id, obj: pageRec.obj,
         rows: buildDetailRows(full, d.fields || []),
         meta: {label: d.label || pageRec.obj, custom: !!d.custom,
+          viaTooling: ffApiModeOf(pageRec.obj) === "tooling",
           total: recordCount, updated: (recDetail && recDetail.updated) || lastRefresh || null}});
     } catch (e) {
       setError(e.message);
@@ -5866,8 +6021,10 @@ function RecordsTab() {
   // the payload, so there is no need to wait for another round trip (and no
   // stale-value flash while a re-fetch is in flight).
   const saveDetailChanges = async (obj, id, changes) => {
-    await sfConn.rest(
-      `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`,
+    // Same endpoint order as the read path: Tooling PATCH for objects the
+    // standard sobjects route does not serve.
+    await ffAutoApi(obj,
+      (mode) => ffApiPath(mode, `sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`),
       {method: "PATCH", body: changes});
     setDetail(prev => {
       if (!prev || prev.id !== id) return prev;
@@ -5996,6 +6153,9 @@ function RecordsTab() {
                 h("span", {className: /active/i.test(recDetail.status)
                   ? "rec-dot" : "rec-dot rec-dot-grey", "aria-hidden": "true"}),
                 h("span", null, recDetail.status)),
+              (recDetail && recDetail.viaTooling) && h("span",
+                {className: "rec-chip rec-chip-api", title: "This record is served through the Tooling API"},
+                miniSvg(P_CODE), h("span", null, "Tooling API")),
               h("span", {className: "rec-chip rec-chip-soft"},
                 miniSvg(P_CLOCK),
                 h("span", null, "Last updated: " + ffFmtRelative(sumUpdated)))))),
@@ -6063,7 +6223,7 @@ function RecordsTab() {
       )
     )),
     (!isRecord && !showObject && (ctxLoading
-      ? h("div", {className: "insp-meta"}, "Loading…")
+      ? h("div", {className: "insp-meta"}, resolvingId ? "Resolving record…" : "Loading…")
       : h("div", {className: "rec-nosel"},
           h("div", {className: "rec-nosel-art", "aria-hidden": "true"}, noselSvg()),
           h("div", {className: "rec-nosel-t"}, "No object selected"),
