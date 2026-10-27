@@ -125,8 +125,17 @@ email via the User password API.
 
 - **Records** — open any record in View, Read-only or Edit mode with a field summary,
   related-record lookups, Show-All-Data popup, and CSV export of the current layout.
-- **Export / Import** — query any object and download CSV, or upload a CSV to create or
-  update records with field mapping.
+- **Advanced Export** — a three-column workbench: object + Field Explorer on the left
+  (Standard / Custom / Relationship / Formula groups, click to insert into the query),
+  a syntax-highlighted SOQL editor with line numbers, autocomplete, validate and format
+  in the middle, and API, output-format and CSV-writing options on the right. Preview
+  pages through real results with client-side sorting, then download CSV, Excel or JSON
+  or copy the query. Saved exports and run history persist per org and user.
+- **Advanced Import** — the matching three-column layout for Insert, Update, Upsert and
+  Delete: drag-and-drop or pasted CSV, interactive field mapping with auto-suggestion
+  and saveable templates, client-side Validate Data with a downloadable error CSV, and
+  runs through the Data API in batches or Bulk API 2.0 ingest with live job tracking and
+  the success, failed and unprocessed result files pulled straight from Salesforce.
 
 <img src="docs/screenshots/ai-records.png" alt="Records tab in Read-only mode with field summary and CSV export" width="720">
 
@@ -250,6 +259,50 @@ debug-log analysis.
 - **Models**: the Options page always lists the currently supported models
 
 ## What's New
+
+### v1.5.0
+- **Advanced Export rebuilt as a data-management workbench** — three columns (setup,
+  query + preview, advanced options) shared with the new Import tab; Data API or
+  Bulk API 2.0; SOQL Query and Object Export modes; a searchable object selector with
+  recent objects; and a syntax-highlighted editor with line numbers, autocomplete,
+  validate, format and query examples
+- **Field Explorer** — fields grouped as Standard / Custom / Relationship / Formula /
+  Picklist with a search box, click to insert at the caret (duplicates are refused),
+  plus insert-all
+- **Real paginated preview** — client-side sortable columns, "load more from server"
+  paging that follows the Data API records, honest loading / empty / error states, and
+  downloads of CSV, Excel (a built-in writer, no new dependency) or JSON honouring your
+  delimiter, quoting, encoding, date format, null value, line-ending and header options
+- **Bulk 2.0 job tracking for queries** — job ID, state, records processed, copyable
+  job ID, cancel, and result retrieval that follows Sforce-Locator pagination
+- **Advanced Import** — Insert / Update / Upsert / Delete (plus Hard Delete where the
+  org supports it, behind an explicit confirmation), run through Data API batches or
+  Bulk API 2.0 ingest (create → upload → close → poll → result files), with the success,
+  failed and unprocessed records downloadable straight from Salesforce
+- **CSV in, safely** — drag-and-drop or pasted CSV parsed properly (quotes, escaped
+  quotes, multiline cells), an interactive mapping table with auto-suggested matches,
+  searchable field dropdowns, required / read-only / duplicate / unmapped / invalid
+  indicators, relationship and external-ID references, and saveable mapping templates
+- **Validate Data before you run** — client-side checks for the operation you picked
+  (missing Id on update, missing external ID on upsert, missing required fields, bad
+  picklist values, malformed ids, dates and numbers) with a results table and a
+  downloadable error CSV; the summary is always labelled as preliminary because
+  Salesforce decides the final outcome
+- **Client-side duplicate check** — pick a column and surface repeated values before you
+  import; it is a plain value check and says so, since it is not Salesforce duplicate rules
+- **Import job history and destructive-action guards** — every run recorded per org and
+  user, double-submit prevention, no automatic retry after a failure, and delete-style
+  operations confirmed before anything is sent
+- **Shared workbench layout polish** — the setup / work / options columns use one spacing
+  and typography scale: field boxes are spaced instead of touching, labels stay aligned
+  with their controls, the save-name row fits inside its card, disabled buttons are still
+  visible, and the Import action bar spans the layout as its own final row (a fixed bottom
+  bar below 860px) so the Run button is always reachable
+- **Nothing overlaps while scrolling** — below 1240px the setup column no longer stays
+  pinned while the full-width options row scrolls underneath it, so the Export / Import
+  Setup card can never cover Advanced Options or Recent Objects; the sticky setup and
+  options columns are kept only in the wide three-column layout, where each stays inside
+  its own column
 
 ### v1.4.23
 - **App Tab Manager** (replaces App Tabs) — a full three-step manager for Lightning

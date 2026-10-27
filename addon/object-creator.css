@@ -6947,8 +6947,8 @@ html[data-theme="dark"] .usr-filters select {
 
 
 /* --- App Tab Manager (apptm-*) -----------------------------------------
-   Azure Midnight tokens: navy #0B2F66 � blue #2878F0 � purple #635BFF �
-   page #F4F7FC � card #FFFFFF � border #DCE5F2 � text #172B4D. */
+   Azure Midnight tokens: navy #0B2F66 � blue #2878F0 � purple #635BFF �
+   page #F4F7FC � card #FFFFFF � border #DCE5F2 � text #172B4D. */
 .apptm {
   display: flex;
   flex-direction: column;
@@ -7473,4 +7473,1530 @@ html[data-theme="dark"] .usr-filters select {
   color: #b45309;
   font-size: 12.5px;
   font-weight: 600;
+}
+
+/* ─── Code Coverage dashboard — left rail + summary tiles + table ────────
+   Redesign only: queries, thresholds and handlers are untouched. Surfaces
+   and text come from --cov-* so html.dark can flip them in one place. */
+.covdash {
+  --cov-card: #ffffff;
+  --cov-border: #dce5f2;
+  --cov-text: #172b4d;
+  --cov-text-2: #5b6b85;
+  --cov-head: #ecf5fd;
+  --cov-line: #eef3f9;
+  --cov-name: #0b2f66;
+  --cov-track: #e7edf5;
+  --cov-icon-bg: #e8f1fe;
+  --cov-tip-bg: #e7f0fd;
+  --cov-tip-bd: #cfe0fb;
+  --cov-tip-text: #35507a;
+  --cov-soft: #e9f3fe;
+  --cov-soft-hover: #d8e9fe;
+  --cov-soft-bd: #bbd9fb;
+  --cov-row-ok: #ecfdf2;
+  --cov-row-warn: #fff8e7;
+  --cov-row-bad: #feebeb;
+  --cov-row-none: #ffffff;
+  --cov-tile-blue-bg: #edf5fd;
+  --cov-tile-blue-bd: #d8e8fb;
+  --cov-tile-green-bg: #ecfdf4;
+  --cov-tile-green-bd: #d3f3e1;
+  --cov-tile-red-bg: #fdf1f2;
+  --cov-tile-red-bd: #fbdadc;
+  --cov-tile-violet-bg: #f2effe;
+  --cov-tile-violet-bd: #e2dcfd;
+  --cov-search-ico: #64748b;
+
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr);
+  gap: 16px;
+  color: var(--cov-text);
+}
+
+/* The right column is the sizing context for the tiles: they sit four
+   across as soon as the card can hold them, at any window width. */
+.covdash-main {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: covmain;
+}
+
+.covdash-card,
+.covdash-side {
+  background: var(--cov-card);
+  border: 1px solid var(--cov-border);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.05);
+  min-width: 0;
+}
+
+.covdash-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Left rail — identity, run-all split button, run-one search */
+.covdash-side-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.covdash-side-ico {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  background: var(--cov-icon-bg);
+  color: var(--cf-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.covdash-side-t {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--cov-text);
+}
+
+.covdash-side-sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--cov-text-2);
+}
+
+.covdash-split {
+  display: flex;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(90deg, #1b85f9 0%, #0564fc 100%);
+  box-shadow: 0 6px 16px rgba(5, 100, 252, 0.25);
+}
+
+.covdash-run,
+.covdash-run-chev {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.covdash-run {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 10px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.covdash-run-chev {
+  width: 44px;
+  flex-shrink: 0;
+  font-size: 15px;
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.covdash-run:disabled,
+.covdash-run-chev:disabled {
+  opacity: 0.75;
+  cursor: default;
+}
+
+.covdash-run-ico {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.covdash-status {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--cov-text-2);
+}
+
+.covdash-status p {
+  margin: 0;
+}
+
+.covdash-status-note {
+  color: #b54708;
+}
+
+.covdash-rule {
+  border: none;
+  border-top: 1px solid var(--cov-border);
+  margin: 2px 0;
+}
+
+.covdash-side-h {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--cov-text);
+}
+
+.covdash-search {
+  display: block;
+  width: 100%;
+  position: relative;
+}
+
+.covdash-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px 10px 34px;
+  border: 1px solid var(--cov-border);
+  border-radius: 10px;
+  background: var(--cov-card)
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='7'/><path d='M20 20l-3.6-3.6'/></svg>")
+    no-repeat 11px center;
+  font-size: 13px;
+  font-family: var(--font-ui);
+  color: var(--cov-text);
+}
+
+.covdash-input:focus,
+.covdash-filter:focus {
+  outline: none;
+  border-color: var(--cf-blue);
+  box-shadow: 0 0 0 3px rgba(40, 120, 240, 0.15);
+}
+
+.covdash-input:disabled {
+  background-color: var(--cov-head);
+  opacity: 0.8;
+}
+
+.covdash-panel {
+  width: 100%;
+  background: var(--cov-card);
+  border-color: var(--cov-border);
+}
+
+/* The generic suggestion rows are hard-coded light-mode navy; inside our
+   panel they must follow --cov-* or they go invisible in dark mode. */
+.covdash-panel .ff-multi-list {
+  border-top-color: var(--cov-line);
+}
+
+.covdash-panel .ff-suggest-row {
+  color: var(--cov-text);
+  border-bottom-color: var(--cov-line);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.covdash-panel .ff-suggest-row:hover,
+.covdash-panel .ff-suggest-row:focus {
+  background: var(--cov-soft);
+  color: var(--cf-blue);
+}
+
+.covdash-panel .insp-empty {
+  color: var(--cov-text-2);
+}
+
+.covdash-runclass {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 12px;
+  background: var(--cov-soft);
+  border: 1px solid var(--cov-soft-bd);
+  border-radius: 10px;
+  color: var(--cf-blue);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.covdash-runclass:hover:not(:disabled) {
+  background: var(--cov-soft-hover);
+  border-color: var(--cf-blue);
+}
+
+.covdash-runclass:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Summary card */
+.covdash-sum-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.covdash-sum-ico {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--cov-icon-bg);
+  color: var(--cf-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.covdash-sum-t {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--cov-text);
+  white-space: nowrap;
+}
+
+.covdash-i {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--cf-blue);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-style: italic;
+  cursor: help;
+}
+
+.covdash-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  background: var(--cov-tip-bg);
+  border: 1px solid var(--cov-tip-bd);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--cov-tip-text);
+}
+
+.covdash-tip-i {
+  color: var(--cf-blue);
+  font-weight: 700;
+  font-style: italic;
+  flex-shrink: 0;
+}
+
+.covdash-at {
+  font-size: 11.5px;
+  color: var(--cov-text-2);
+  white-space: nowrap;
+}
+
+.covdash-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  background: var(--cov-card);
+  border: 1px solid var(--cov-border);
+  border-radius: 8px;
+  color: var(--cf-blue);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.covdash-refresh:hover:not(:disabled) {
+  border-color: var(--cf-blue);
+  background: #f4f8ff;
+}
+
+.covdash-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Summary tiles */
+.covdash-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@container covmain (max-width: 460px) {
+  .covdash-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container covmain (max-width: 319px) {
+  .covdash-tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.covdash-tile {
+  padding: 10px;
+  border: 1px solid var(--cov-border);
+  border-radius: 12px;
+  background: var(--cov-card);
+  min-width: 0;
+}
+
+.cov-tone-blue {
+  background: var(--cov-tile-blue-bg);
+  border-color: var(--cov-tile-blue-bd);
+}
+
+.cov-tone-green {
+  background: var(--cov-tile-green-bg);
+  border-color: var(--cov-tile-green-bd);
+}
+
+.cov-tone-red {
+  background: var(--cov-tile-red-bg);
+  border-color: var(--cov-tile-red-bd);
+}
+
+.cov-tone-violet {
+  background: var(--cov-tile-violet-bg);
+  border-color: var(--cov-tile-violet-bd);
+}
+
+.covdash-tile-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.covdash-tile-ico {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--cov-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+}
+
+.covdash-tile-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cov-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.covdash-tile-val {
+  margin-top: 4px;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+}
+
+.cov-tone-blue .covdash-tile-val { color: #0b5cf5; }
+.cov-tone-green .covdash-tile-val { color: #0c7a38; }
+.cov-tone-red .covdash-tile-val { color: #e12a34; }
+.cov-tone-violet .covdash-tile-val { color: #4b36f0; }
+
+.covdash-tile-sub {
+  margin-top: 1px;
+  font-size: 10.5px;
+  color: var(--cov-text-2);
+}
+
+.covdash-bar {
+  margin-top: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.35);
+  overflow: hidden;
+}
+
+.covdash-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.cov-tone-blue .covdash-bar-fill { background: #0b5cf5; }
+.cov-tone-green .covdash-bar-fill { background: #31bc67; }
+.cov-tone-red .covdash-bar-fill { background: #fd5555; }
+.cov-tone-violet .covdash-bar-fill { background: #823afc; }
+
+/* Table card */
+.covdash-tab-h {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.covdash-tab-t {
+  margin: 0;
+  padding-bottom: 7px;
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--cf-blue);
+  border-bottom: 3px solid var(--cf-blue);
+}
+
+.covdash-filter {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 170px;
+  max-width: 260px;
+  margin-left: auto;
+  padding: 8px 10px 8px 30px;
+  border: 1px solid var(--cov-border);
+  border-radius: 8px;
+  background: var(--cov-card)
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round'><circle cx='11' cy='11' r='7'/><path d='M20 20l-3.6-3.6'/></svg>")
+    no-repeat 9px center;
+  font-size: 12.5px;
+  font-family: var(--font-ui);
+  color: var(--cov-text);
+}
+
+.covdash-tablewrap {
+  overflow-x: auto;
+  border: 1px solid var(--cov-border);
+  border-radius: 10px;
+}
+
+.covdash-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.covdash-table thead th {
+  background: var(--cov-head);
+  color: #475569;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-align: left;
+  padding: 10px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--cov-border);
+}
+
+.covdash-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--cov-line);
+}
+
+.covdash-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.covdash-c-n {
+  width: 48px;
+  text-align: center;
+  color: #64748b;
+}
+
+.covdash-c-type {
+  width: 104px;
+  white-space: nowrap;
+}
+
+.covdash-c-num {
+  width: 72px;
+  text-align: right;
+}
+
+th.covdash-c-num {
+  text-align: right;
+}
+
+.covdash-c-cov {
+  width: 220px;
+  white-space: nowrap;
+}
+
+th.covdash-c-cov {
+  cursor: pointer;
+  user-select: none;
+}
+
+th.covdash-c-cov:hover {
+  color: var(--cf-blue);
+}
+
+th.covdash-c-cov.sorted {
+  color: var(--cf-blue);
+}
+
+.covdash-c-act {
+  width: 84px;
+  text-align: center;
+}
+
+.covdash-row {
+  cursor: pointer;
+}
+
+.covdash-row td {
+  background: var(--cov-row-none);
+  transition: filter 0.12s ease;
+}
+
+.covt-ok td { background: var(--cov-row-ok); }
+.covt-warn td { background: var(--cov-row-warn); }
+.covt-bad td { background: var(--cov-row-bad); }
+.covt-none td { background: var(--cov-row-none); }
+
+.covdash-row:hover td {
+  filter: brightness(0.985);
+}
+
+.covdash-name {
+  min-width: 150px;
+}
+
+.covdash-name-t {
+  display: inline-block;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--cov-name);
+  font-weight: 600;
+}
+
+.covdash-copied {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.covdash-c-type {
+  color: #3d56a6;
+}
+
+.covdash-pct {
+  display: inline-block;
+  width: 46px;
+  margin-right: 8px;
+  font-weight: 700;
+}
+
+.covt-ok .covdash-pct { color: #0a6929; }
+.covt-warn .covdash-pct { color: #d97706; }
+.covt-bad .covdash-pct { color: #d53947; }
+.covt-none .covdash-pct { color: var(--cov-text-2); }
+
+.covdash-rowbar {
+  display: inline-block;
+  width: 140px;
+  max-width: 45%;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--cov-track);
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.covt-bad .covdash-rowbar {
+  background: #fbd9d9;
+}
+
+.covdash-rowbar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #2eb95f;
+  transition: width 0.3s ease;
+}
+
+.covt-warn .covdash-rowbar-fill { background: #fdb726; }
+.covt-bad .covdash-rowbar-fill { background: #fd5555; }
+
+.covdash-runbtn {
+  padding: 6px 14px;
+  background: var(--cov-soft);
+  border: none;
+  border-radius: 7px;
+  color: var(--cf-blue);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.covdash-runbtn:hover {
+  background: var(--cov-soft-hover);
+}
+
+.covdash-noact {
+  color: var(--cov-text-2);
+}
+
+/* Footer — counts + pager */
+.covdash-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.covdash-foot-t {
+  font-size: 12px;
+  color: var(--cov-text-2);
+}
+
+.covdash-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.covdash-page {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--cov-card);
+  border: 1px solid var(--cov-border);
+  border-radius: 8px;
+  color: var(--cov-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.covdash-page:hover:not(:disabled):not(.cur) {
+  border-color: var(--cf-blue);
+  color: var(--cf-blue);
+}
+
+.covdash-page.cur {
+  background: var(--cf-blue);
+  border-color: var(--cf-blue);
+  color: #fff;
+}
+
+.covdash-page:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.covdash-step {
+  color: var(--cov-text-2);
+}
+
+.covdash-page-dots {
+  align-self: center;
+  padding: 0 2px;
+  color: var(--cov-text-2);
+  font-size: 12.5px;
+}
+
+/* Layout collapse — the mockup's left rail survives down to small windows;
+   the tiles switch through the covmain container query above. */
+@media (max-width: 1200px) {
+  .covdash {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .covdash {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .covdash-tab-t {
+    font-size: 14.5px;
+  }
+}
+
+/* Dark theme — one block, since every surface reads from --cov-* */
+html.dark .covdash,
+html[data-theme="dark"] .covdash {
+  --cov-card: #151b27;
+  --cov-border: #2a3547;
+  --cov-text: #e7edf7;
+  --cov-text-2: #97a5bc;
+  --cov-head: #1a2333;
+  --cov-line: #232d3e;
+  --cov-name: #8fb6ff;
+  --cov-track: #2c374a;
+  --cov-icon-bg: rgba(40, 120, 240, 0.18);
+  --cov-tip-bg: rgba(40, 120, 240, 0.14);
+  --cov-tip-bd: rgba(40, 120, 240, 0.35);
+  --cov-tip-text: #a9c6f5;
+  --cov-soft: rgba(40, 120, 240, 0.16);
+  --cov-soft-hover: rgba(40, 120, 240, 0.26);
+  --cov-soft-bd: rgba(40, 120, 240, 0.4);
+  --cov-row-ok: rgba(34, 197, 94, 0.12);
+  --cov-row-warn: rgba(245, 158, 11, 0.12);
+  --cov-row-bad: rgba(239, 68, 68, 0.14);
+  --cov-row-none: #151b27;
+  --cov-tile-blue-bg: #14243c;
+  --cov-tile-blue-bd: #22374f;
+  --cov-tile-green-bg: #112a1e;
+  --cov-tile-green-bd: #1e3d2c;
+  --cov-tile-red-bg: #2c181c;
+  --cov-tile-red-bd: #45242a;
+  --cov-tile-violet-bg: #1e1b33;
+  --cov-tile-violet-bd: #302b52;
+  --cov-search-ico: #94a3b8;
+}
+
+html.dark .cov-tone-blue .covdash-tile-val,
+html[data-theme="dark"] .cov-tone-blue .covdash-tile-val { color: #6fa8ff; }
+
+html.dark .cov-tone-green .covdash-tile-val,
+html[data-theme="dark"] .cov-tone-green .covdash-tile-val { color: #4ade80; }
+
+html.dark .cov-tone-red .covdash-tile-val,
+html[data-theme="dark"] .cov-tone-red .covdash-tile-val { color: #ff7a84; }
+
+html.dark .cov-tone-violet .covdash-tile-val,
+html[data-theme="dark"] .cov-tone-violet .covdash-tile-val { color: #a99cff; }
+
+html.dark .covt-ok .covdash-pct,
+html[data-theme="dark"] .covt-ok .covdash-pct { color: #4ade80; }
+
+html.dark .covt-warn .covdash-pct,
+html[data-theme="dark"] .covt-warn .covdash-pct { color: #fdb726; }
+
+html.dark .covt-bad .covdash-pct,
+html[data-theme="dark"] .covt-bad .covdash-pct { color: #ff7a84; }
+
+html.dark .covt-bad .covdash-rowbar,
+html[data-theme="dark"] .covt-bad .covdash-rowbar { background: rgba(239, 68, 68, 0.25); }
+
+html.dark .covdash-c-type,
+html[data-theme="dark"] .covdash-c-type { color: #8aa6e8; }
+
+html.dark .covdash-table thead th,
+html[data-theme="dark"] .covdash-table thead th { color: #9fb2cc; }
+
+html.dark .covdash-copied,
+html[data-theme="dark"] .covdash-copied {
+  background: rgba(34, 197, 94, 0.18);
+  color: #4ade80;
+}
+
+html.dark .covdash-run,
+html[data-theme="dark"] .covdash-run,
+html.dark .covdash-run-chev,
+html[data-theme="dark"] .covdash-run-chev { color: #ffffff; }
+
+html.dark .covdash-refresh:hover:not(:disabled),
+html[data-theme="dark"] .covdash-refresh:hover:not(:disabled) {
+  background: rgba(40, 120, 240, 0.14);
+}
+
+html.dark .covdash-status-note,
+html[data-theme="dark"] .covdash-status-note { color: #fdba74; }
+
+html.dark .covdash-c-n,
+html[data-theme="dark"] .covdash-c-n { color: #97a5bc; }
+
+html.dark .covdash-runclass,
+html[data-theme="dark"] .covdash-runclass,
+html.dark .covdash-runbtn,
+html[data-theme="dark"] .covdash-runbtn,
+html.dark .covdash-refresh,
+html[data-theme="dark"] .covdash-refresh { color: #7db3ff; }
+
+html.dark .covdash-tab-t,
+html[data-theme="dark"] .covdash-tab-t {
+  color: #7db3ff;
+  border-bottom-color: #7db3ff;
+}
+
+/* --- Data Manager (Export / Import) � Azure Midnight three-column workspace
+   v1.5.0. Design tokens: navy #0B2F66 � blue #2878F0 � purple #635BFF �
+   page #F4F7FC � card #FFFFFF � text #172B4D � secondary #64748B �
+   border #DCE5F2. Radii: cards 12�16px, controls 8�12px. */
+.dm-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 280px;
+  gap: 16px;
+  align-items: start;
+  background: #F4F7FC;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.dm-side,
+.dm-adv {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  position: sticky;
+  top: 8px;
+}
+
+.dm-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dm-side .insp-field input,
+.dm-side .insp-field select,
+.dm-side .sq3-field input,
+.dm-side .sq3-field select,
+.dm-adv .sq3-field select,
+.dm-adv .sq3-field input {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.dm-side .btn,
+.dm-adv .btn {
+  width: 100%;
+}
+
+.dm-btn-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.dm-btn-row .btn {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.dm-note {
+  font-size: 12.5px;
+}
+
+/* Query examples dropdown */
+.dm-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 10px;
+  background: #F4F7FC;
+  border: 1px solid #DCE5F2;
+  border-radius: 10px;
+}
+
+.dm-example {
+  text-align: left;
+  font-size: 13px;
+  color: #172B4D;
+  background: #fff;
+  border: 1px solid #DCE5F2;
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.dm-example:hover {
+  border-color: #2878F0;
+  color: #2878F0;
+}
+
+/* Field Explorer buttons (export tab) */
+.sq3-field-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #DCE5F2;
+  border-radius: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  min-width: 0;
+  font-family: inherit;
+}
+
+.sq3-field-btn:hover {
+  border-color: #2878F0;
+  box-shadow: 0 1px 6px rgba(40, 120, 240, 0.15);
+}
+
+.sq3-field-btn .sq3-field-name {
+  font-size: 12px;
+}
+
+/* Results pager */
+.dm-pager {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.dm-pager .btn {
+  width: auto;
+}
+
+/* Job tracking card */
+.dm-job {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dm-job-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.dm-job-k {
+  font-size: 12px;
+  color: #64748B;
+  flex: 0 0 auto;
+  min-width: 118px;
+}
+
+.dm-job-v {
+  font-size: 13px;
+  font-weight: 600;
+  color: #172B4D;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dm-job-v.dm-mono {
+  font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.dm-job-row .btn {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.dm-state {
+  font-weight: 700;
+}
+
+.dm-state-jobcomplete,
+.dm-state-uploadresults {
+  color: #15803d;
+}
+
+.dm-state-processing,
+.dm-state-inprogress,
+.dm-state-open,
+.dm-state-uploadreceived,
+.dm-state-queued,
+.dm-state-preparing {
+  color: #b45309;
+}
+
+.dm-state-failed,
+.dm-state-aborted {
+  color: #b91c1c;
+}
+
+.dm-resultfiles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #DCE5F2;
+}
+
+/* -- Import center: upload zone -- */
+.dm-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 14px;
+  border: 2px dashed #DCE5F2;
+  border-radius: 14px;
+  background: #F4F7FC;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dm-drop.over {
+  border-color: #2878F0;
+  background: #EFF6FF;
+}
+
+.dm-drop-t {
+  font-size: 14px;
+  font-weight: 600;
+  color: #172B4D;
+}
+
+.dm-drop-s {
+  font-size: 12px;
+  color: #64748B;
+}
+
+.dm-drop .insp-file {
+  display: inline-flex;
+}
+
+.dm-paste-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 10px;
+}
+
+.dm-paste-row textarea {
+  flex: 1;
+  min-width: 0;
+  font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 8px 10px;
+  border: 1px solid #DCE5F2;
+  border-radius: 8px;
+  background: #fff;
+  color: #172B4D;
+  resize: vertical;
+}
+
+.dm-paste-row .btn {
+  width: auto;
+  flex-shrink: 0;
+}
+
+/* File/parse stats strip */
+.dm-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 9px 12px;
+  background: #F4F7FC;
+  border: 1px solid #DCE5F2;
+  border-radius: 10px;
+}
+
+.dm-stat {
+  font-size: 12.5px;
+  color: #172B4D;
+}
+
+.dm-stat i {
+  font-style: normal;
+  color: #64748B;
+}
+
+/* Status pills */
+.dm-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.dm-pill-ok {
+  color: #15803d;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.dm-pill-warn {
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+}
+
+.dm-pill-error {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+}
+
+.dm-pill-idle {
+  color: #64748B;
+  background: #F4F7FC;
+  border: 1px solid #DCE5F2;
+}
+
+/* -- Field mapping grid -- */
+.dm-map {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.dm-map-head,
+.dm-map-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.3fr) 132px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+}
+
+.dm-map-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+  border-bottom: 2px solid #DCE5F2;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748B;
+}
+
+.dm-map-row {
+  border-bottom: 1px solid #EFF3FA;
+  border-radius: 8px;
+}
+
+.dm-map-row:hover {
+  background: #F4F7FC;
+}
+
+.dm-map-csv {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #172B4D;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dm-map-sample {
+  font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: #64748B;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dm-map-field {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+.dm-map-field input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  padding: 6px 9px;
+  border: 1px solid #DCE5F2;
+  border-radius: 8px;
+  background: #fff;
+  color: #172B4D;
+}
+
+.dm-map-field input:focus {
+  outline: none;
+  border-color: #2878F0;
+  box-shadow: 0 0 0 3px rgba(40, 120, 240, 0.16);
+}
+
+/* Mapping template row */
+.dm-tpl-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.dm-tpl-row input {
+  flex: 1;
+  min-width: 140px;
+  font-size: 12.5px;
+  padding: 6px 9px;
+  border: 1px solid #DCE5F2;
+  border-radius: 8px;
+  background: #fff;
+  color: #172B4D;
+}
+
+.dm-tpl-row .btn,
+.dm-tpl-row select {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.dm-dupselect {
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border: 1px solid #DCE5F2;
+  border-radius: 8px;
+  background: #fff;
+  color: #172B4D;
+}
+
+/* Validation results */
+.dm-valstats {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+
+.dm-valtable td {
+  font-size: 12.5px;
+  vertical-align: top;
+}
+
+/* Preview severity indicators */
+.dm-sev-col {
+  width: 30px;
+  text-align: center;
+}
+
+.dm-row-error {
+  background: #fef2f2;
+}
+
+.dm-row-error:hover {
+  background: #fee2e2;
+}
+
+.dm-row-warn {
+  background: #fffbeb;
+}
+
+.dm-row-warn:hover {
+  background: #fef3c7;
+}
+
+/* Run bar + destructive confirmation */
+.dm-runbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  border: 1px solid #DCE5F2;
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 -2px 10px rgba(23, 43, 77, 0.06);
+  z-index: 3;
+}
+
+.dm-runbar .btn {
+  width: auto;
+}
+
+.dm-danger {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dm-danger-t {
+  font-size: 14px;
+  font-weight: 700;
+  color: #b91c1c;
+}
+
+.dm-danger-b {
+  font-size: 13px;
+  color: #7f1d1d;
+}
+
+/* ── Setup-column cards ─────────────────────────────────────────────────────
+   The field boxes (.insp-field.sq3-field) carry their own border + radius, so
+   stacking them flush made neighbouring borders touch and look like they were
+   overlapping. Cards now lay their children out as a spaced column instead,
+   which also keeps the child margins (some of them negative) from fighting
+   the layout at every breakpoint. */
+.dm-side .sq3-card,
+.dm-adv .sq3-card,
+.dm-main .sq3-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dm-side .sq3-card > *,
+.dm-adv .sq3-card > *,
+.dm-main .sq3-card > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+/* .sq3-field is centred by default (it is also used as a horizontal pill
+   elsewhere) — inside these columns it wraps a label + control, so the label
+   text has to stay left-aligned with the control below it. */
+.dm-side .sq3-field,
+.dm-adv .sq3-field,
+.dm-main .sq3-field {
+  align-items: stretch;
+}
+
+/* Save row: the name input takes the slack and the button hugs its own label.
+   Without this, `.dm-side .btn { width: 100% }` widens the button to the full
+   row and it spills past the right edge of the card. */
+.dm-side .soql-save-row .soql-save-input,
+.dm-adv .soql-save-row .soql-save-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.dm-side .soql-save-row .btn,
+.dm-adv .soql-save-row .btn {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+/* Action bar row: .dm-runbar (and the destructive confirmation that pairs with
+   it) are direct children of the layout and span every column, so they always
+   land in the final grid row — reachable at the end of the scroll range at any
+   width, and out of the way of the columns above. */
+.dm-layout > .dm-runbar,
+.dm-layout > .dm-danger {
+  grid-column: 1 / -1;
+}
+
+/* Disabled secondary buttons were almost invisible on these white cards, so
+   controls like "Describe" (before an object is entered) read as stray text
+   instead of a button. Keep the disabled colours, add a visible fill. */
+.dm-side .btn-secondary:disabled,
+.dm-adv .btn-secondary:disabled,
+.dm-main .btn-secondary:disabled {
+  background: #F4F7FC;
+}
+
+/* Security notes card */
+.dm-security {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: #64748B;
+}
+
+/* -- Responsive: stack columns in the narrow sidebar iframe / small view -- */
+@media (max-width: 1240px) {
+  .dm-layout {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+  /* .dm-adv drops to a full-width row *below* the setup column here. If
+     .dm-side stayed sticky it would pin itself over that row while scrolling
+     (Export Setup card covering Advanced Options). Both columns are now
+     stacked content, so neither sticks — same as the <=860px rule. */
+  .dm-side,
+  .dm-adv {
+    position: static;
+  }
+  .dm-adv {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .dm-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dm-side {
+    position: static;
+  }
+  .dm-side .sq3-card {
+    display: flex;
+    flex-direction: column;
+  }
+  .dm-map-head,
+  .dm-map-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .dm-map-head span:nth-child(2),
+  .dm-map-head span:nth-child(4) {
+    display: none;
+  }
+  .dm-map-sample,
+  .dm-map-row .dm-pill {
+    display: none;
+  }
+  /* Columns stack into one long column here, so the action bar becomes a
+     fixed bar on the bottom of the panel — the Run button must stay
+     reachable while scrolling. It can't use position:sticky here: its
+     containing block (.dm-main) is only as tall as itself. */
+  .dm-runbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    box-shadow: 0 -4px 14px rgba(23, 43, 77, 0.12);
+    z-index: 20;
+  }
+  .dm-layout.dm-imp {
+    padding-bottom: 76px;
+  }
 }

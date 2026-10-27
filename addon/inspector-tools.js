@@ -130,6 +130,521 @@ function flattenRecord(rec) {
   return out;
 }
 
+// ─── Data Manager shared helpers (Export / Import tabs, v1.5.0) ────────────
+// Real CSV parsing/serialization with options, a dependency-free XLSX writer,
+// Bulk API 2.0 job state machines, import mapping + validation. Everything
+// here talks to real Salesforce endpoints through the existing session.
+
+// Extended CSV parser: configurable delimiter, quoted values, escaped quotes
+// (""), embedded commas/newlines. Returns the same {headers, records} shape
+// as parseCsv plus a `duplicates` list of repeated header names.
+function parseCsvEx(text, opts) {
+  const o = opts || {};
+  const delim = o.delimiter || ",";
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  const s = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (s[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === delim) {
+      row.push(field);
+      field = "";
+    } else if (c === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else field += c;
+  }
+  if (inQuotes) {
+    // Unterminated quote: surface it instead of silently swallowing the tail.
+    return {headers: [], records: [], parseError: "CSV parsing error: a quoted value is never closed (missing \")."};
+  }
+  if (field.length || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  if (!rows.length) return {headers: [], records: [], duplicates: []};
+  const headers = rows[0].map(x => String(x == null ? "" : x).trim());
+  const seen = {};
+  const duplicates = [];
+  for (const hd of headers) {
+    const k = hd.toLowerCase();
+    seen[k] = (seen[k] || 0) + 1;
+    if (seen[k] === 2) duplicates.push(hd);
+  }
+  const records = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (r.every(c => String(c || "").trim() === "")) continue;
+    const obj = {};
+    headers.forEach((hName, idx) => { obj[hName] = r[idx] ?? ""; });
+    records.push(obj);
+  }
+  return {headers, records, duplicates};
+}
+
+// Extended CSV writer: delimiter, quoting policy ("minimal" | "all"),
+// optional header row, null/blank replacement, line ending, optional BOM.
+function toCsvEx(columns, rows, opts) {
+  const o = opts || {};
+  const delim = o.delimiter || ",";
+  const quoteAll = o.quoting === "all";
+  const nullValue = o.nullValue != null ? String(o.nullValue) : "";
+  const esc = (v) => {
+    if (v == null || v === "") return nullValue;
+    const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+    if (quoteAll || s.includes(delim) || /["\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const lines = [];
+  if (o.headers !== false) lines.push(columns.map(esc).join(delim));
+  for (const row of rows) lines.push(columns.map(c => esc(row[c])).join(delim));
+  return lines.join(o.lineEnding === "\n" ? "\n" : "\r\n");
+}
+
+// ── Minimal XLSX writer (no dependencies) ─────────────────────────────────
+// Stored-method ZIP + CRC32 + SpreadsheetML with inline strings. Produces a
+// genuine .xlsx workbook that Excel, LibreOffice and Google Sheets open.
+const FF_CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function ffCrc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = FF_CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function ffZipStore(entries) {
+  const enc = new TextEncoder();
+  const now = new Date();
+  const dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF;
+  const dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const e of entries) {
+    const nameB = enc.encode(e.name);
+    const crc = ffCrc32(e.data);
+    const size = e.data.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true);
+    lh.setUint16(4, 20, true);
+    lh.setUint16(8, 0, true); // stored
+    lh.setUint16(10, dosTime, true);
+    lh.setUint16(12, dosDate, true);
+    lh.setUint32(14, crc, true);
+    lh.setUint32(18, size, true);
+    lh.setUint32(22, size, true);
+    lh.setUint16(26, nameB.length, true);
+    chunks.push(new Uint8Array(lh.buffer), nameB, e.data);
+    central.push({nameB, crc, size, offset});
+    offset += 30 + nameB.length + size;
+  }
+  const cdStart = offset;
+  for (const c of central) {
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true);
+    ch.setUint16(4, 20, true);
+    ch.setUint16(6, 20, true);
+    ch.setUint16(12, dosTime, true);
+    ch.setUint16(14, dosDate, true);
+    ch.setUint32(16, c.crc, true);
+    ch.setUint32(20, c.size, true);
+    ch.setUint32(24, c.size, true);
+    ch.setUint16(28, c.nameB.length, true);
+    ch.setUint32(42, c.offset, true);
+    chunks.push(new Uint8Array(ch.buffer), c.nameB);
+    offset += 46 + c.nameB.length;
+  }
+  const eocd = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0, 0x06054b50, true);
+  eocd.setUint16(8, central.length, true);
+  eocd.setUint16(10, central.length, true);
+  eocd.setUint32(12, offset - cdStart, true);
+  eocd.setUint32(16, cdStart, true);
+  chunks.push(new Uint8Array(eocd.buffer));
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const c of chunks) { out.set(c, pos); pos += c.length; }
+  return out;
+}
+
+function ffXmlEscape(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ""); // XML-illegal control chars
+}
+
+function toXlsxBlob(sheetName, columns, rows) {
+  const enc = new TextEncoder();
+  const colRef = (i) => {
+    let s = "";
+    i++;
+    while (i > 0) {
+      const m = (i - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      i = Math.floor((i - 1) / 26);
+    }
+    return s;
+  };
+  const cell = (r, c, v) =>
+    `<c r="${colRef(c)}${r}" t="inlineStr"><is><t xml:space="preserve">${ffXmlEscape(v)}</t></is></c>`;
+  const parts = [];
+  parts.push(`<row r="1">${columns.map((c, i) => cell(1, i, c)).join("")}</row>`);
+  rows.forEach((row, ri) => {
+    parts.push(`<row r="${ri + 2}">${columns.map((c, i) => {
+      const v = row[c];
+      return cell(ri + 2, i, v == null ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v)));
+    }).join("")}</row>`);
+  });
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<sheetData>${parts.join("")}</sheetData></worksheet>`;
+  const files = [
+    {name: "[Content_Types].xml", data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`)},
+    {name: "_rels/.rels", data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`)},
+    {name: "xl/workbook.xml", data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${ffXmlEscape(String(sheetName || "Sheet1").slice(0, 31))}" sheetId="1" r:id="rId1"/></sheets></workbook>`)},
+    {name: "xl/_rels/workbook.xml.rels", data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`)},
+    {name: "xl/worksheets/sheet1.xml", data: enc.encode(sheet)}
+  ];
+  return new Blob([ffZipStore(files)],
+    {type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+}
+
+function ffDownloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// ── Bulk API 2.0 client ────────────────────────────────────────────────────
+// Raw fetch (same session token sfConn uses) so response headers
+// (Sforce-Locator) and CSV/text bodies stay accessible.
+async function ffBulkFetch(path, opts) {
+  const o = opts || {};
+  if (!sfConn.instanceHostname || !sfConn.sessionId) throw new Error("No active Salesforce session");
+  const res = await fetch("https://" + sfConn.instanceHostname + path, {
+    method: o.method || "GET",
+    headers: Object.assign({
+      Authorization: "Bearer " + sfConn.sessionId,
+      "Sforce-Call-Options": "client=ForceForge"
+    }, o.headers || {}),
+    body: o.body
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch (e) { /* CSV / plain text */ }
+  if (!res.ok) {
+    let detail;
+    if (Array.isArray(json) && json[0]) {
+      detail = (json[0].errorCode ? json[0].errorCode + ": " : "") + (json[0].message || "");
+    } else if (json && json.message) {
+      detail = (json.errorCode ? json.errorCode + ": " : "") + json.message;
+    } else {
+      detail = text.slice(0, 300) || ("HTTP " + res.status);
+    }
+    const err = new Error(detail);
+    err.status = res.status;
+    throw err;
+  }
+  return {status: res.status, headers: res.headers, text, json};
+}
+
+async function ffBulkQueryCreate(soql, opts) {
+  const o = opts || {};
+  const r = await ffBulkFetch("/services/data/v" + apiVersion + "/jobs/query", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      operation: o.allRows ? "queryAll" : "query",
+      query: String(soql || "").trim()
+    })
+  });
+  return r.json;
+}
+
+function ffBulkQueryStatus(jobId) {
+  return ffBulkFetch(`/services/data/v${apiVersion}/jobs/query/${jobId}`).then(r => r.json);
+}
+
+async function ffBulkQueryResults(jobId, locator) {
+  const path = `/services/data/v${apiVersion}/jobs/query/${jobId}/results` +
+    (locator ? `?locator=${encodeURIComponent(locator)}` : "");
+  const r = await ffBulkFetch(path, {headers: {Accept: "text/csv"}});
+  // Sforce-Locator present => more result chunks remain.
+  return {csv: r.text, locator: r.headers.get("Sforce-Locator")};
+}
+
+async function ffBulkIngestCreate(opts) {
+  const body = {
+    operation: opts.operation, // insert | update | upsert | delete | hardDelete
+    object: opts.object,
+    contentType: "CSV",
+    lineEnding: opts.lineEnding === "\n" ? "LF" : "CRLF"
+  };
+  if (opts.operation === "upsert" && opts.externalIdFieldName) {
+    body.externalIdFieldName = opts.externalIdFieldName;
+  }
+  const r = await ffBulkFetch("/services/data/v" + apiVersion + "/jobs/ingest", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  });
+  return r.json;
+}
+
+function ffBulkIngestUpload(jobId, csv) {
+  return ffBulkFetch(`/services/data/v${apiVersion}/jobs/ingest/${jobId}/batches`, {
+    method: "POST",
+    headers: {"Content-Type": "text/csv"},
+    body: csv
+  });
+}
+
+function ffBulkIngestClose(jobId) {
+  return ffBulkFetch(`/services/data/v${apiVersion}/jobs/ingest/${jobId}`, {
+    method: "PATCH",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({state: "JobComplete"})
+  });
+}
+
+function ffBulkIngestStatus(jobId) {
+  return ffBulkFetch(`/services/data/v${apiVersion}/jobs/ingest/${jobId}`).then(r => r.json);
+}
+
+async function ffBulkIngestResults(jobId, kind) {
+  // kind: successfulResults | failedResults | unprocessedRecords
+  const r = await ffBulkFetch(
+    `/services/data/v${apiVersion}/jobs/ingest/${jobId}/${kind}`,
+    {headers: {Accept: "text/csv"}});
+  return r.text;
+}
+
+async function ffBulkJobCancel(jobId, kind) {
+  if (kind === "query") {
+    return ffBulkFetch(`/services/data/v${apiVersion}/jobs/query/${jobId}`, {method: "DELETE"});
+  }
+  return ffBulkFetch(`/services/data/v${apiVersion}/jobs/ingest/${jobId}`, {
+    method: "PATCH",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({state: "Aborted"})
+  });
+}
+
+// Poll a Bulk job until a terminal state. onTick receives each intermediate
+// job record so the UI can render live progress.
+async function ffBulkPoll(getStatus, jobId, opts) {
+  const o = opts || {};
+  const terminal = o.terminal || ["JobComplete", "Failed", "Aborted"];
+  const intervalMs = o.intervalMs || 2000;
+  const timeoutMs = o.timeoutMs || 300000;
+  const start = Date.now();
+  let job = await getStatus(jobId);
+  while (terminal.indexOf(job.state) === -1) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error("Timed out waiting for Bulk job " + jobId + " (last state: " + job.state + ")");
+    }
+    if (o.onTick) o.onTick(job);
+    await new Promise(r => setTimeout(r, intervalMs));
+    job = await getStatus(jobId);
+  }
+  if (o.onTick) o.onTick(job);
+  return job;
+}
+
+// ── Import mapping + validation ────────────────────────────────────────────
+// Suggest header → field mappings by exact API name first, then by label
+// (case/punctuation-insensitive). Each field is consumed at most once.
+function ffSuggestFieldMap(headers, fields) {
+  const byName = {};
+  const byLabel = {};
+  for (const f of fields || []) {
+    if (!f || !f.name) continue;
+    byName[String(f.name).toLowerCase()] = f.name;
+    if (f.label) byLabel[String(f.label).toLowerCase().replace(/[^a-z0-9]/g, "")] = f.name;
+  }
+  const map = {};
+  const used = new Set();
+  for (const hd of headers || []) {
+    const low = String(hd || "").trim().toLowerCase();
+    let hit = byName[low] || byLabel[low.replace(/[^a-z0-9]/g, "")] || "";
+    if (hit && used.has(hit)) hit = "";
+    if (hit) used.add(hit);
+    map[hd] = hit;
+  }
+  return map;
+}
+
+const FF_BOOL_TRUE = /^(true|1|yes|y|on)$/i;
+const FF_BOOL_FALSE = /^(false|0|no|n|off)$/i;
+const FF_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const FF_DATETIME_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/;
+
+// Client-side import validation. Preliminary by design — only Salesforce
+// can enforce server-side validation, automation and duplicate rules.
+// Returns {issues, rowSeverity, okRows, warnRows, errorRows, hardErrors}.
+function ffValidateImport(opts) {
+  const headers = opts.headers || [];
+  const records = opts.records || [];
+  const fieldMap = opts.fieldMap || {};
+  const fields = opts.fields || [];
+  const operation = opts.operation || "insert";
+  const externalId = opts.externalId || "";
+  const issues = [];
+  const fieldByName = {};
+  for (const f of fields) if (f && f.name) fieldByName[f.name] = f;
+
+  // Duplicate CSV headers.
+  const seen = {};
+  for (const hd of headers) {
+    const k = String(hd).toLowerCase();
+    seen[k] = (seen[k] || 0) + 1;
+  }
+  for (const [k, n] of Object.entries(seen)) {
+    if (n > 1) issues.push({row: 0, field: k, severity: "error",
+      problem: `Duplicate CSV header appears ${n} times`,
+      suggestion: "Rename the duplicate column in your CSV"});
+  }
+
+  // Duplicate target fields.
+  const targets = {};
+  for (const [hd, fa] of Object.entries(fieldMap)) {
+    if (!fa) continue;
+    (targets[fa] = targets[fa] || []).push(hd);
+  }
+  for (const [fa, cols] of Object.entries(targets)) {
+    if (cols.length > 1) issues.push({row: 0, field: fa, severity: "error",
+      problem: `Mapped from ${cols.length} CSV columns (${cols.join(", ")})`,
+      suggestion: "Map only one column to each Salesforce field"});
+  }
+
+  // Unknown fields.
+  for (const [hd, fa] of Object.entries(fieldMap)) {
+    if (fa && !fieldByName[fa]) issues.push({row: 0, field: fa, severity: "error",
+      problem: `"${fa}" (mapped from "${hd}") is not a field on this object`,
+      suggestion: "Pick a field from the dropdown"});
+  }
+
+  // Operation-specific configuration.
+  if (operation === "upsert" && !externalId) {
+    issues.push({row: 0, field: "(upsert)", severity: "error",
+      problem: "Upsert requires an External ID field",
+      suggestion: "Choose the External ID field in Import Setup"});
+  }
+  const idMapped = Object.values(fieldMap).some(fa => fa === "Id");
+  if ((operation === "update" || operation === "delete") && !idMapped) {
+    issues.push({row: 0, field: "Id", severity: "error",
+      problem: `${operation === "update" ? "Update" : "Delete"} requires an Id column mapped to Id`,
+      suggestion: "Map a CSV column containing Salesforce record IDs to Id"});
+  }
+
+  // Required fields (createable, not nillable, no default) for row-creating ops.
+  if (operation === "insert" || operation === "upsert") {
+    const mappedTargets = new Set(Object.values(fieldMap).filter(Boolean));
+    for (const f of fields) {
+      if (!f || !f.name || f.name === "Id") continue;
+      if (f.nillable === false && f.defaultedOnCreate !== true && !mappedTargets.has(f.name)) {
+        issues.push({row: 0, field: f.name, severity: "error",
+          problem: `Required field ${f.name} is not mapped`,
+          suggestion: `Map a CSV column to ${f.label || f.name}`});
+      }
+    }
+  }
+
+  // Per-row checks.
+  const rowSeverity = {};
+  const mark = (idx, sev) => {
+    if (sev === "error") rowSeverity[idx] = "error";
+    else if (sev === "warn" && rowSeverity[idx] !== "error") rowSeverity[idx] = "warn";
+    else if (!rowSeverity[idx]) rowSeverity[idx] = "ok";
+  };
+  records.forEach((rec, idx) => {
+    const rowNo = idx + 2; // 1-based + header row
+    for (const [hd, fa] of Object.entries(fieldMap)) {
+      if (!fa || !fieldByName[fa]) continue;
+      const f = fieldByName[fa];
+      const raw = rec[hd];
+      if (raw == null || String(raw).trim() === "") {
+        if (f.nillable === false && f.defaultedOnCreate !== true &&
+            (operation === "insert" || operation === "upsert")) {
+          issues.push({row: rowNo, field: fa, severity: "error",
+            problem: "Required field is blank", suggestion: `Provide a value for ${fa}`});
+          mark(idx, "error");
+        }
+        continue;
+      }
+      const v = String(raw).trim();
+      const t = String(f.type || "").toLowerCase();
+      const err = (problem, suggestion) => {
+        issues.push({row: rowNo, field: fa, severity: "error", problem, suggestion});
+        mark(idx, "error");
+      };
+      if (t === "boolean" && !FF_BOOL_TRUE.test(v) && !FF_BOOL_FALSE.test(v)) {
+        err(`"${v}" is not a valid boolean`, "Use true/false (or 1/0)");
+      } else if (["int", "double", "currency", "percent"].includes(t) && isNaN(Number(v.replace(/,/g, "")))) {
+        err(`"${v}" is not a valid number`, "Use a plain number, e.g. 1234.56");
+      } else if (t === "date" && !FF_DATE_RE.test(v)) {
+        err(`"${v}" is not a valid date`, "Use YYYY-MM-DD");
+      } else if (t === "datetime" && !FF_DATETIME_RE.test(v)) {
+        err(`"${v}" is not a valid datetime`, "Use ISO 8601, e.g. 2026-01-31T10:00:00Z");
+      } else if ((t === "picklist" || t === "multipicklist") && f.picklistValues &&
+          f.picklistValues.length &&
+          !f.picklistValues.some(pl => String(pl.value) === v)) {
+        issues.push({row: rowNo, field: fa, severity: "warn",
+          problem: `"${v}" is not an active picklist value`,
+          suggestion: "Salesforce will reject restricted picklists; check the field setup"});
+        mark(idx, "warn");
+      } else if (fa === "Id" && !ffIsSfId(v)) {
+        err(`"${v}" is not a valid Salesforce Id`, "Ids are 15 or 18 characters, e.g. 001...");
+      }
+    }
+    mark(idx, rowSeverity[idx] || "ok");
+  });
+
+  // Record-count guidance.
+  if (records.length > 100000) {
+    issues.push({row: 0, field: "(file)", severity: "warn",
+      problem: `${fmtNum(records.length)} rows is very large for in-browser processing`,
+      suggestion: "Split the file or use Bulk API 2.0"});
+  }
+
+  let okRows = 0, warnRows = 0, errorRows = 0;
+  for (let i = 0; i < records.length; i++) {
+    const s = rowSeverity[i];
+    if (s === "error") errorRows++;
+    else if (s === "warn") warnRows++;
+    else okRows++;
+  }
+  const hardErrors = issues.filter(x => x.severity === "error").length;
+  return {issues, rowSeverity, okRows, warnRows, errorRows, hardErrors};
+}
+
 // ─── Shared: open-in-Salesforce ────────────────────────────────────────────
 // 15/18-char Salesforce Id validation (same rule as object-creator.js).
 function ffIsSfId(value) {
@@ -1728,31 +2243,87 @@ function SoqlTab() {
   );
 }
 
-// ─── Data Export tab ────────────────────────────────────────
+// ─── Data Export tab (v1.5.0 — three-column data manager) ──────────────────
+// Left: setup (saved/history/API/mode/object/limit/format). Center: SOQL
+// editor + Field Explorer + bounded preview. Right: advanced options + Bulk
+// 2.0 job tracking. All results come from real Salesforce query responses.
+const FF_EXPORT_FORMATS = ["CSV", "Excel (.xlsx)", "JSON"];
+
 function ExportTab() {
   useSfTimeZoneTick();
+  // ── Setup state (left panel) ────────────────────────────────
   const [objectApi, setObjectApi] = ffUseSession("export", "objectApi", "");
   const [fields, setFields] = ffUseSession("export", "fields", "Id, Name");
   const [where, setWhere] = ffUseSession("export", "where", "");
   const [limit, setLimit] = ffUseSession("export", "limit", 10000);
+  const [apiMode, setApiMode] = ffUseSession("export", "apiMode", "data"); // data | bulk
+  const [expMode, setExpMode] = ffUseSession("export", "expMode", "soql"); // soql | object
+  const [format, setFormat] = ffUseSession("export", "format", "CSV");
+  const [includeDeleted, setIncludeDeleted] = ffUseSession("export", "includeDeleted", false);
+  const [includeFormula, setIncludeFormula] = ffUseSession("export", "includeFormula", false);
+  const [includeHeaders, setIncludeHeaders] = ffUseSession("export", "includeHeaders", true);
+
+  // ── Advanced CSV / export options (right panel) ─────────────
+  const [csvDelimiter, setCsvDelimiter] = ffUseSession("export", "csvDelimiter", ",");
+  const [csvQuoting, setCsvQuoting] = ffUseSession("export", "csvQuoting", "minimal");
+  const [csvEncoding, setCsvEncoding] = ffUseSession("export", "csvEncoding", "utf8"); // utf8 | utf8bom
+  const [csvDateFormat, setCsvDateFormat] = ffUseSession("export", "csvDateFormat", "iso");
+  const [csvNullValue, setCsvNullValue] = ffUseSession("export", "csvNullValue", "");
+  const [csvLineEnding, setCsvLineEnding] = ffUseSession("export", "csvLineEnding", "\r\n");
+
+  // ── Query editor state (center) ─────────────────────────────
+  const [query, setQuery] = ffUseSession("export", "query",
+    "SELECT Id, Name FROM Account LIMIT 10000");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
+  const [note, setNote] = React.useState(null);
   const [meta, setMeta] = ffUseSession("export", "meta", null);
   const [preview, setPreview] = ffUseSession("export", "preview", null);
+  const [sortCol, setSortCol] = React.useState(null);
+  const [sortDir, setSortDir] = React.useState(1);
+  const [page, setPage] = React.useState(1);
+  const [expandFields, setExpandFields] = React.useState(false);
+  const [objFilter, setObjFilter] = React.useState("");
+  const [fieldCat, setFieldCat] = React.useState("All");
   const [objects, setObjects] = React.useState([]);
+  const [recents, setRecents] = React.useState(() => ffLoadJson("ff_recent_objects", []));
   const [history, setHistory] = React.useState(() => ffLoadJson("ff_export_history", []));
   const [saved, setSaved] = React.useState(() => ffLoadJson("ff_export_saved", []));
   const [saveLabel, setSaveLabel] = React.useState("");
+  const [examplesOpen, setExamplesOpen] = React.useState(false);
+
+  // ── Bulk 2.0 query job (right panel) ────────────────────────
+  const [bulkJob, setBulkJob] = ffUseSession("export", "bulkJob", null);
+  const [bulkBusy, setBulkBusy] = React.useState(false);
+  const [bulkError, setBulkError] = React.useState(null);
+
+  const taRef = React.useRef(null);
+  const hlRef = React.useRef(null);
+  const gutterRef = React.useRef(null);
+
+  const PAGE_SIZE = 200;
+  const lineCount = Math.max(1, String(query || "").split("\n").length);
 
   React.useEffect(() => {
     ffGetObjects().then(setObjects).catch(() => {});
   }, []);
 
+  const onTermScroll = (e) => {
+    const t = e.target;
+    if (hlRef.current) {
+      hlRef.current.scrollTop = t.scrollTop;
+      hlRef.current.scrollLeft = t.scrollLeft;
+    }
+    if (gutterRef.current) gutterRef.current.scrollTop = t.scrollTop;
+  };
+
   const currentConfig = () => ({
     objectApi: objectApi.trim(),
     fields: fields.trim(),
     where: where.trim(),
-    limit: parseInt(limit, 10) || 10000
+    limit: parseInt(limit, 10) || 10000,
+    query: query.trim(),
+    apiMode, expMode, format
   });
 
   const applyConfig = (c) => {
@@ -1760,28 +2331,57 @@ function ExportTab() {
     setFields(c.fields || "Id, Name");
     setWhere(c.where || "");
     if (c.limit) setLimit(c.limit);
+    if (c.query) setQuery(c.query);
+    if (c.apiMode) setApiMode(c.apiMode);
+    if (c.expMode) setExpMode(c.expMode);
+    if (c.format) setFormat(c.format);
     setPreview(null);
+    setError(null);
   };
 
-  const describe = async () => {
+  // Deterministic pastel pill tone (same hash trick as the SOQL tab).
+  const pillTone = (name) => {
+    let hv = 0;
+    const s = String(name || "");
+    for (let i = 0; i < s.length; i++) hv = (hv * 31 + s.charCodeAt(i)) >>> 0;
+    return hv % 8;
+  };
+
+  // describe() accepts an override so the Recent Objects chips can set the
+  // object and describe it in one click (state updates are async).
+  const describe = async (objOverride) => {
     setError(null);
-    const obj = objectApi.trim();
+    const obj = String(objOverride != null ? objOverride : objectApi).trim();
     if (!obj) { setError("Enter an object API name"); return; }
     setLoading(true);
     try {
-      const d = await sfConn.rest(`/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/describe`);
+      const d = await ffDescribeObject(obj);
       const fieldList = (d.fields || []).map(f => ({
         name: f.name,
         label: f.label,
         type: f.type,
+        custom: !!f.custom,
+        calculated: !!f.calculated,
         updateable: f.updateable,
         createable: f.createable
       }));
       setMeta({name: d.name, label: d.label, fields: fieldList});
-      setFields(["Id", ...(d.fields || []).filter(f => f.name !== "Id" &&
-        ["string", "textarea", "email", "phone", "url", "date", "datetime", "currency",
-         "double", "int", "boolean", "picklist", "multipicklist", "reference"].includes(f.type))
-        .slice(0, 8).map(f => f.name)].join(", "));
+      // Recent objects (org-scoped; shared with the Import tab).
+      try {
+        const next = [obj, ...ffLoadJson("ff_recent_objects", []).filter(n => n !== obj)].slice(0, 12);
+        ffSaveJson("ff_recent_objects", next);
+        setRecents(next);
+      } catch (e) { /* ignore */ }
+      // Object Export mode: seed the editor with a sane field list.
+      if (expMode === "object") {
+        const seed = ["Id",
+          ...(d.fields || []).filter(f => f.name !== "Id" &&
+            ["string", "textarea", "email", "phone", "url", "date", "datetime", "currency",
+             "double", "int", "boolean", "picklist", "multipicklist", "reference"].includes(f.type))
+          .slice(0, 8).map(f => f.name)];
+        setFields(seed.join(", "));
+      }
+      setNote(`${d.label || d.name}: ${fieldList.length} fields loaded`);
     } catch (e) {
       setError(e.message);
       setMeta(null);
@@ -1790,30 +2390,295 @@ function ExportTab() {
     }
   };
 
-  const runExport = async () => {
+  // Build the executable SOQL. Both modes run the editor text — Object
+  // Export mode seeds it from Setup (Describe / Rebuild SOQL), SOQL mode is
+  // free editing. One code path keeps preview/downloads honest.
+  const buildQuery = () => {
+    const q = String(query || "").trim();
+    if (!q) throw new Error("Enter a SOQL query");
+    if (!/^select\b/i.test(q)) throw new Error("Only SELECT queries are supported");
+    if (expMode === "object" && !objectApi.trim()) throw new Error("Enter an object API name");
+    if (soqlNeedsLimit(q) && apiMode === "data") {
+      return q + ` LIMIT ${parseInt(limit, 10) || 10000}`;
+    }
+    return q;
+  };
+
+  // Object Export: assemble SELECT <fields> FROM <object> [WHERE …] LIMIT n.
+  // "Include formula fields" appends every calculated field from describe.
+  const rebuildQuery = () => {
+    const obj = objectApi.trim();
+    if (!obj) { setError("Enter an object API name"); return; }
+    let sel = fields.trim() || "Id, Name";
+    if (includeFormula && meta && meta.name === obj) {
+      const formulaNames = meta.fields.filter(f => f.calculated).map(f => f.name);
+      const have = new Set(sel.split(",").map(s => s.trim().toLowerCase()));
+      const add = formulaNames.filter(n => !have.has(n.toLowerCase()));
+      if (add.length) sel = `${sel}, ${add.join(", ")}`;
+    }
+    let q = `SELECT ${sel} FROM ${obj}`;
+    if (where.trim()) q += ` WHERE ${where.trim()}`;
+    if (soqlNeedsLimit(q)) q += ` LIMIT ${parseInt(limit, 10) || 10000}`;
+    setQuery(q);
+    setPreview(null);
     setError(null);
+  };
+
+  // Field Explorer categories (shared vocabulary with the SOQL tab).
+  const fieldCategory = (f) => {
+    const t = String(f.type || "").toLowerCase();
+    if (t === "picklist" || t === "multipicklist") return "Picklist";
+    if (f.calculated) return "Formula";
+    if (t === "reference") return "Relationships";
+    if (f.custom) return "Custom";
+    if (["string", "textarea", "email", "phone", "url", "id",
+         "boolean", "date", "datetime", "time"].includes(t)) return "Standard";
+    return "Other";
+  };
+  const FIELD_CATS = ["All", "Standard", "Custom", "Relationships", "Picklist", "Formula", "Other"];
+  const catCounts = {};
+  if (meta && meta.fields) {
+    for (const f of meta.fields) {
+      const c = fieldCategory(f);
+      catCounts[c] = (catCounts[c] || 0) + 1;
+    }
+  }
+
+  // Insert a field into the editor's SELECT list: comma-safe, no duplicates,
+  // never before FROM. Mirrors the SOQL tab's insertFieldAt rules.
+  const insertField = (name) => {
+    const ta = taRef.current;
+    const src = (ta && typeof ta.value === "string") ? ta.value : query;
+    const inSelect = /\bfrom\s/i.test(src);
+    if (inSelect) {
+      // Duplicate guard: already present as a SELECT token?
+      const selPart = (/\bselect\s+([\s\S]*?)\s+from\b/i.exec(src) || [null, ""])[1];
+      const tokens = selPart.split(",").map(s => s.trim().toLowerCase())
+        .filter(s => s && !/[\s(]/.test(s));
+      if (tokens.includes(name.toLowerCase())) {
+        setNote(`"${name}" is already in the query`);
+        return;
+      }
+    }
+    const caret = ta && ta.selectionStart != null ? ta.selectionStart : src.length;
+    const before = src.slice(0, caret);
+    const quotes = (before.match(/'/g) || []).length;
+    // Only replace a token when the caret is genuinely inside a word (chars on
+    // both sides). Placing the caret right after "Name" and clicking Status
+    // must APPEND — silently dropping the existing field would lose data.
+    let start = caret;
+    let end = caret;
+    if (quotes % 2 === 0) {
+      const left = /(\w+)$/.exec(before);
+      const right = /^\w+/.exec(src.slice(caret));
+      if (left && right) {
+        start = caret - left[1].length;
+        end = caret + right[0].length;
+      }
+    }
+    const after = src.slice(end);
+    // Insert into the SELECT list when there is no FROM yet (incomplete
+    // query) or when the caret still sits before the FROM clause.
+    const inSelectList = !/\bfrom\b/i.test(src) || /\bfrom\b/i.test(after);
+    let head = src.slice(0, start);
+    if (inSelectList && /[A-Za-z0-9_\)]\s*$/.test(head) && !/\bselect\s*$/i.test(head)) {
+      head = head.replace(/\s+$/, "") + ", ";
+    }
+    let sep = "";
+    if (!/^\s*,/.test(after) && !/^\s*from\b/i.test(after)) sep = ",";
+    if (after === "" || /^[^\s,]/.test(after)) sep += " ";
+    const next = head + name + sep + after;
+    const pos = (head + name + sep).length;
+    setQuery(next);
+    const applied = next;
+    requestAnimationFrame(() => {
+      if (!ta || ta.value !== applied) return;
+      try { ta.focus(); ta.setSelectionRange(pos, pos); } catch (e) { /* ignore */ }
+    });
+    setNote(null);
+  };
+
+  // Insert the whole FROM object's fields (Ctrl+Space equivalent).
+  const insertAllFields = () => {
+    if (!meta || !meta.fields.length) {
+      setNote("Run Describe first to load fields.");
+      return;
+    }
+    const names = meta.fields.map(f => f.name);
+    if (names.length > 120) {
+      setNote(`Refusing to insert ${names.length} fields — pick individual fields.`);
+      return;
+    }
+    const obj = objectApi.trim();
+    setQuery(`SELECT ${names.join(", ")} FROM ${obj}` +
+      (where.trim() ? ` WHERE ${where.trim()}` : "") +
+      (soqlNeedsLimit(`SELECT ${names.join(", ")} FROM ${obj}`)
+        ? ` LIMIT ${parseInt(limit, 10) || 10000}` : ""));
+    setNote(null);
+  };
+
+  const formatSoql = () => {
+    const src = String(query || "");
+    if (!src.trim()) return;
+    const segs = src.split(/('[^']*')/g);
+    const majors = ["select", "from", "where", "group by", "order by",
+      "having", "limit", "offset"];
+    const minors = ["and", "or", "not", "in", "like", "asc", "desc",
+      "nulls first", "nulls last"];
+    const out = segs.map((seg, i) => {
+      if (i % 2 === 1) return seg;
+      let s = seg.replace(/\s+/g, " ");
+      for (const kw of [...majors, ...minors].sort((a, b) => b.length - a.length)) {
+        const re = new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi");
+        s = s.replace(re, kw.toUpperCase());
+      }
+      for (const kw of majors.slice(1)) {
+        s = s.replace(new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi"), `\n${kw.toUpperCase()}`);
+      }
+      return s;
+    }).join("");
+    setQuery(out.trim());
+  };
+
+  const clearQuery = () => {
+    setQuery("");
+    setPreview(null);
+    setError(null);
+    setNote(null);
+  };
+
+  // Lightweight SOQL sanity check (client-side; the server remains the
+  // authority — Run Preview executes against Salesforce for real).
+  const validateSoql = () => {
+    setError(null);
+    const q = String(query || "").trim();
+    const problems = [];
+    if (!q) problems.push("Query is empty.");
+    if (q && !/^select\b/i.test(q)) problems.push("Only SELECT queries are supported.");
+    if (q && !/\bfrom\s+[A-Za-z0-9_]/i.test(q)) problems.push("Missing FROM <Object>.");
+    if ((q.match(/\(/g) || []).length !== (q.match(/\)/g) || []).length) {
+      problems.push("Unbalanced parentheses.");
+    }
+    const quotes = (q.match(/'/g) || []).length;
+    if (quotes % 2 !== 0) problems.push("Unbalanced single quotes.");
+    if (problems.length) {
+      setError("Validation failed: " + problems.join(" "));
+      return false;
+    }
+    setNote("Query looks valid. Run Preview to execute it against Salesforce.");
+    return true;
+  };
+
+  const QUERY_EXAMPLES = [
+    {label: "Accounts by industry",
+     q: "SELECT Id, Name, Industry FROM Account WHERE Industry != null ORDER BY Name LIMIT 100"},
+    {label: "Recent opportunities",
+     q: "SELECT Id, Name, Amount, StageName, CloseDate FROM Opportunity ORDER BY CloseDate DESC LIMIT 100"},
+    {label: "Open cases",
+     q: "SELECT Id, CaseNumber, Subject, Status, Priority FROM Case WHERE IsClosed = false LIMIT 100"},
+    {label: "Active contacts with email",
+     q: "SELECT Id, Name, Email, Account.Name FROM Contact WHERE Email != null LIMIT 100"},
+    {label: "Count accounts by type",
+     q: "SELECT Type, COUNT(Id) FROM Account GROUP BY Type"},
+    {label: "Custom object records",
+     q: "SELECT Id, Name FROM IT_Asset__c ORDER BY LastModifiedDate DESC LIMIT 100"}
+  ];
+
+  // ── Data API preview (bounded, paginated through nextRecordsUrl) ──
+  const runDataPreview = async (q) => {
+    const url = `/services/data/v${apiVersion}/` +
+      (includeDeleted ? "queryAll" : "query") + "/?q=" + encodeURIComponent(q);
+    const res = await sfConn.rest(url, {useCache: false});
+    const rows = (res.records || []).map(flattenRecord);
+    return {rows, total: res.totalSize, done: res.done !== false, next: res.done === false ? res.nextRecordsUrl : null};
+  };
+
+  // Bulk 2.0 query: create → poll → retrieve result CSV chunks.
+  const runBulkQuery = async (q) => {
+    setBulkError(null);
+    const job = await ffBulkQueryCreate(q, {allRows: includeDeleted});
+    setBulkJob({id: job.id, state: job.state, object: objectApi.trim() || null,
+      operation: job.operation || "query", createdDate: job.createdDate || new Date().toISOString(),
+      api: "Bulk 2.0", query: q});
+    const done = await ffBulkPoll(ffBulkQueryStatus, job.id, {
+      terminal: ["UploadResults", "JobComplete", "Failed", "Aborted"],
+      onTick: j => setBulkJob(prev => prev ? {...prev, state: j.state,
+        numberRecordsProcessed: j.numberRecordsProcessed,
+        errorMessage: j.errorMessage || null} : prev)
+    });
+    // Query jobs land in UploadResults (results ready) before JobComplete.
+    if (done.state === "Failed") throw new Error(done.errorMessage || "Bulk query job failed");
+    // The user cancelled mid-flight: stop here instead of pulling a result set
+    // they already asked to abandon.
+    if (done.state === "Aborted") throw new Error("Bulk query job was cancelled");
+    // Retrieve all result chunks (Sforce-Locator pagination).
+    let csv = "";
+    let locator = null;
+    let guard = 0;
+    do {
+      const chunk = await ffBulkQueryResults(job.id, locator);
+      csv += chunk.csv;
+      locator = chunk.locator;
+      guard++;
+    } while (locator && guard < 500);
+    setBulkJob(prev => prev ? {...prev, state: done.state,
+      numberRecordsProcessed: done.numberRecordsProcessed} : prev);
+    const parsed = parseCsvEx(csv, {delimiter: ","});
+    return {rows: parsed.records, total: parsed.records.length, done: true, next: null};
+  };
+
+  const pushHistory = (q) => {
+    const entry = {...currentConfig(), query: q, ts: Date.now()};
+    setHistory(prev => {
+      const next = [entry,
+        ...prev.filter(hh => JSON.stringify({...hh, ts: 0}) !== JSON.stringify({...entry, ts: 0}))]
+        .slice(0, 15);
+      ffSaveJson("ff_export_history", next);
+      return next;
+    });
+  };
+
+  const runPreview = async () => {
+    setError(null);
+    setNote(null);
+    setSortCol(null);
+    setSortDir(1);
+    setPage(1);
     setLoading(true);
     setPreview(null);
     try {
-      const obj = objectApi.trim();
-      if (!obj) throw new Error("Enter an object API name");
-      let q = `SELECT ${fields.trim() || "Id, Name"} FROM ${obj}`;
-      if (where.trim()) q += ` WHERE ${where.trim()}`;
-      if (soqlNeedsLimit(q)) q += ` LIMIT ${parseInt(limit, 10) || 10000}`;
-      const r = await runSoql(q, null);
-      const rows = r.records.map(flattenRecord);
+      const q = buildQuery();
+      const r = apiMode === "bulk"
+        ? await runBulkQuery(q)
+        : await runDataPreview(q);
+      // Column order: sorted set from first row + any late additions.
       const colSet = new Set();
-      rows.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
+      r.rows.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
       const columns = [...colSet];
-      setPreview({columns, rows, total: r.totalSize, query: q});
-      setHistory(prev => {
-        const entry = {...currentConfig(), ts: Date.now()};
-        const next = [entry,
-          ...prev.filter(h => JSON.stringify({...h, ts: 0}) !== JSON.stringify({...entry, ts: 0}))]
-          .slice(0, 15);
-        ffSaveJson("ff_export_history", next);
-        return next;
-      });
+      setPreview({columns, rows: r.rows, total: r.total, query: q,
+        next: r.next, fetched: r.rows.length});
+      pushHistory(q);
+    } catch (e) {
+      setError(e.message);
+      if (apiMode === "bulk") setBulkError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load the next server page (Data API only — Bulk returns everything).
+  const loadMore = async () => {
+    if (!preview || !preview.next) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await sfConn.rest(preview.next, {useCache: false});
+      const more = (res.records || []).map(flattenRecord);
+      const colSet = new Set(preview.columns);
+      more.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
+      setPreview({...preview, rows: preview.rows.concat(more),
+        columns: [...colSet], next: res.done === false ? res.nextRecordsUrl : null,
+        fetched: preview.rows.length + more.length});
     } catch (e) {
       setError(e.message);
     } finally {
@@ -1821,14 +2686,107 @@ function ExportTab() {
     }
   };
 
+  const cancelBulkJob = async () => {
+    if (!bulkJob || !bulkJob.id) return;
+    setBulkBusy(true);
+    setBulkError(null);
+    try {
+      await ffBulkJobCancel(bulkJob.id, "query");
+      setBulkJob(prev => prev ? {...prev, state: "Aborted"} : prev);
+      setNote("Bulk query job cancelled.");
+    } catch (e) {
+      setBulkError(e.message);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const copyJobId = async () => {
+    if (!bulkJob || !bulkJob.id) return;
+    try {
+      await safeCopyText(bulkJob.id);
+      setNote("Job ID copied.");
+    } catch (e) { /* ignore */ }
+  };
+
+  // ── Downloads (always from real retrieved rows) ─────────────
+  const applyDateFormat = (v) => {
+    if (v == null || v === "") return v;
+    const s = String(v);
+    if (csvDateFormat === "iso") return v;
+    if (!looksLikeSfDateTime(s)) return v;
+    const d = parseSfInstant(s);
+    if (!d) return v;
+    if (csvDateFormat === "ymd") {
+      return isDateOnlyString(s) ? s.slice(0, 10)
+        : d.toISOString().replace("T", " ").slice(0, 19);
+    }
+    return d.toISOString();
+  };
+
+  const exportRows = () => {
+    if (!preview) return [];
+    return preview.rows.map(row => {
+      const out = {};
+      for (const [k, v] of Object.entries(row)) {
+        out[k] = (v === null || v === undefined || v === "") ? csvNullValue : applyDateFormat(v);
+      }
+      return out;
+    });
+  };
+
+  const download = () => {
+    if (!preview) return;
+    const rows = exportRows();
+    const base = (objectApi.trim() || "export").replace(/[^A-Za-z0-9_-]/g, "_");
+    try {
+      if (format === "JSON") {
+        const json = includeHeaders === false ? rows
+          : Object.fromEntries(preview.columns.map(c => [c, rows.map(r => r[c])]));
+        downloadText(`${base}.json`, JSON.stringify(json, null, 2), "application/json;charset=utf-8");
+      } else if (format === "Excel (.xlsx)") {
+        ffDownloadBlob(`${base}.xlsx`,
+          toXlsxBlob(base, preview.columns, rows));
+      } else {
+        let text = toCsvEx(preview.columns, rows, {
+          delimiter: csvDelimiter, quoting: csvQuoting,
+          headers: includeHeaders, nullValue: csvNullValue,
+          lineEnding: csvLineEnding
+        });
+        if (csvEncoding === "utf8bom") text = "\uFEFF" + text;
+        downloadText(`${base}.csv`, text, "text/csv;charset=utf-8");
+      }
+      setNote(`Downloaded ${fmtNum(rows.length)} row(s) as ${format}.`);
+    } catch (e) {
+      setError("Download failed: " + e.message);
+    }
+  };
+
+  const copyQuery = async () => {
+    try {
+      await safeCopyText(preview ? preview.query : buildQuery());
+      setNote("SOQL copied to clipboard.");
+    } catch (e) {
+      setNote("Copy failed: " + e.message);
+    }
+  };
+
   const saveCurrent = () => {
-    if (!objectApi.trim()) return;
-    const label = saveLabel.trim() || `${objectApi.trim()} export ${saved.length + 1}`;
+    const label = saveLabel.trim() || `${objectApi.trim() || "query"} export ${saved.length + 1}`;
     const next = [{label, ...currentConfig()},
       ...saved.filter(s => s.label !== label)].slice(0, 50);
     setSaved(next);
     ffSaveJson("ff_export_saved", next);
     setSaveLabel("");
+    setNote(`Saved export "${label}".`);
+  };
+
+  const renameSaved = (oldLabel) => {
+    const fresh = (window.prompt(`Rename "${oldLabel}"`, oldLabel) || "").trim();
+    if (!fresh || fresh === oldLabel) return;
+    const next = saved.map(s => s.label === oldLabel ? {...s, label: fresh} : s);
+    setSaved(next);
+    ffSaveJson("ff_export_saved", next);
   };
 
   const deleteSaved = (label) => {
@@ -1837,329 +2795,1622 @@ function ExportTab() {
     ffSaveJson("ff_export_saved", next);
   };
 
-  const download = () => {
-    if (!preview) return;
-    downloadText(`${objectApi.trim() || "export"}.csv`, toCsv(preview.columns, preview.rows));
+  // ── Preview table (bounded pages + client-side sort) ────────
+  const sortedRows = React.useMemo(() => {
+    if (!preview) return [];
+    if (sortCol == null) return preview.rows;
+    return preview.rows.slice().sort((a, b) => {
+      const av = a[sortCol], bv = b[sortCol];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * sortDir;
+      return String(av).localeCompare(String(bv)) * sortDir;
+    });
+  }, [preview, sortCol, sortDir]);
+
+  const pagedRows = sortedRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pageCount = Math.max(1, Math.ceil(sortedRows.length / PAGE_SIZE));
+  const toggleSort = (col) => {
+    if (sortCol !== col) { setSortCol(col); setSortDir(1); return; }
+    if (sortDir === 1) { setSortDir(-1); return; }
+    setSortCol(null); setSortDir(1);
   };
 
+  const fieldTypes = {};
+  if (meta && meta.fields) for (const f of meta.fields) fieldTypes[f.name] = f.type;
+
+  // Visible field list in the explorer (search + category).
+  const explorerFields = (() => {
+    if (!meta || !meta.fields) return [];
+    let list = meta.fields.filter(f =>
+      (fieldCat === "All" || fieldCategory(f) === fieldCat) &&
+      (!objFilter ||
+        f.name.toLowerCase().includes(objFilter.toLowerCase()) ||
+        (f.label || "").toLowerCase().includes(objFilter.toLowerCase())));
+    // Fields already in the query sink to the bottom (not hidden — visible state).
+    const usedSel = (/\bselect\s+([\s\S]*?)\s+from\b/i.exec(
+      expMode === "object" ? `SELECT ${fields} FROM x` : query) || [null, ""])[1];
+    const used = new Set(usedSel.split(",").map(s => s.trim().toLowerCase()));
+    list = list.slice().sort((a, b) => (used.has(a.name.toLowerCase()) ? 1 : 0) -
+      (used.has(b.name.toLowerCase()) ? 1 : 0));
+    return list;
+  })();
+  const visibleFields = expandFields ? explorerFields.slice(0, 120) : explorerFields.slice(0, 12);
+
+  const btnState = (label) => loading ? "…" : label;
+
   return h("div", {className: "insp-panel"},
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("label", {className: "insp-field"},
-        h("span", null, "Saved exports"),
-        h("select", {
-          value: "",
-          onChange: e => {
-            const hit = saved.find(s => s.label === e.target.value);
-            if (hit) applyConfig(hit);
-            e.target.value = "";
-          }
-        },
-          h("option", {value: ""}, saved.length ? "— load —" : "No saved exports"),
-          saved.map(s => h("option", {key: s.label, value: s.label}, s.label))
-        )
-      ),
-      h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "Save current as"),
-        h("input", {
-          value: saveLabel,
-          placeholder: "Export label",
-          onChange: e => setSaveLabel(e.target.value),
-          onKeyDown: e => { if (e.key === "Enter") saveCurrent(); }
-        })
-      ),
-      h("button", {
-        className: "btn btn-secondary btn-sm",
-        disabled: loading || !objectApi.trim(),
-        onClick: saveCurrent
-      }, "Save Export"),
-      h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "History"),
-        h("select", {
-          value: "",
-          onChange: e => {
-            const idx = parseInt(e.target.value, 10);
-            if (!isNaN(idx) && history[idx]) applyConfig(history[idx]);
-            e.target.value = "";
-          }
-        },
-          h("option", {value: ""}, history.length ? "— recent —" : "No history yet"),
-          history.map((hh, i) =>
-            h("option", {key: i, value: String(i)},
-              `${new Date(hh.ts).toLocaleString()} — ${hh.objectApi}`)
+    h("div", {className: "dm-layout dm-exp"},
+
+      // ── Left: Export Setup ─────────────────────────────────
+      h("div", {className: "dm-side"},
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_DB)),
+            h("span", {className: "sq3-card-t"}, "Export Setup")),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Saved exports"),
+            h("select", {
+              value: "",
+              onChange: e => {
+                const hit = saved.find(s => s.label === e.target.value);
+                if (hit) applyConfig(hit);
+                e.target.value = "";
+              }
+            },
+              h("option", {value: ""}, saved.length ? "— load —" : "No saved exports"),
+              saved.map(s => h("option", {key: s.label, value: s.label}, s.label))
+            )
+          ),
+          h("div", {className: "soql-save-row"},
+            h("input", {
+              className: "soql-save-input",
+              value: saveLabel,
+              placeholder: "Export name",
+              onChange: e => setSaveLabel(e.target.value),
+              onKeyDown: e => { if (e.key === "Enter") saveCurrent(); }
+            }),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              onClick: saveCurrent
+            }, "Save Export")
+          ),
+          saved.length > 0 && h("div", {className: "insp-chips-row"},
+            saved.slice(0, 8).map(s =>
+              h("span", {key: s.label, className: "insp-chip-group"},
+                h("button", {
+                  className: "insp-chip",
+                  title: s.query || `${s.objectApi} — ${s.fields}`,
+                  onClick: () => applyConfig(s)
+                }, s.label),
+                h("button", {
+                  className: "insp-chip-x",
+                  title: `Rename "${s.label}"`,
+                  onClick: () => renameSaved(s.label)
+                }, "✎"),
+                h("button", {
+                  className: "insp-chip-x",
+                  title: `Delete "${s.label}"`,
+                  onClick: () => deleteSaved(s.label)
+                }, "×")
+              )
+            )
+          ),
+          history.length > 0 && h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Export history"),
+            h("select", {
+              value: "",
+              onChange: e => {
+                const idx = parseInt(e.target.value, 10);
+                if (!isNaN(idx) && history[idx]) applyConfig(history[idx]);
+                e.target.value = "";
+              }
+            },
+              h("option", {value: ""}, "— recent exports —"),
+              history.map((hh, i) =>
+                h("option", {key: i, value: String(i)},
+                  `${new Date(hh.ts).toLocaleString()} — ${hh.objectApi || "query"}`))
+            )
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "API"),
+            h("select", {value: apiMode, onChange: e => setApiMode(e.target.value)},
+              h("option", {value: "data"}, "Data API (synchronous query)"),
+              h("option", {value: "bulk"}, "Bulk API 2.0 (large exports)")
+            )
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Export mode"),
+            h("select", {value: expMode, onChange: e => setExpMode(e.target.value)},
+              h("option", {value: "soql"}, "SOQL Query"),
+              h("option", {value: "object"}, "Object Export")
+            )
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Object"),
+            h("input", {
+              value: objectApi,
+              list: "dm-exp-objects",
+              placeholder: "Account / IT_Asset__c",
+              onChange: e => setObjectApi(e.target.value),
+              onKeyDown: e => { if (e.key === "Enter") describe(); }
+            }),
+            h("datalist", {id: "dm-exp-objects"},
+              objects.map(o =>
+                h("option", {key: o.name, value: o.name}, `${o.label}${o.custom ? " (custom)" : ""}`))
+            )
+          ),
+          h("div", {className: "dm-btn-row"},
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: loading || !objectApi.trim(),
+              // Wrap: React passes the click event as the first argument, and
+              // describe() treats it as an object-name override.
+              onClick: () => describe()
+            }, loading ? "Describing…" : "Describe")
+          ),
+          expMode === "object" && h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Fields (comma-separated)"),
+            h("input", {value: fields, onChange: e => setFields(e.target.value), placeholder: "Id, Name"})
+          ),
+          expMode === "object" && h("label", {className: "insp-field sq3-field"},
+            h("span", null, "WHERE (optional)"),
+            h("input", {value: where, onChange: e => setWhere(e.target.value), placeholder: "Industry = 'Tech'"})
+          ),
+          expMode === "object" && h("div", {className: "dm-btn-row"},
+            h("button", {className: "btn btn-secondary btn-sm", onClick: rebuildQuery,
+              title: "Assemble SELECT … FROM … from Setup into the editor"},
+              "Rebuild SOQL")
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Row limit (Data API)"),
+            h("input", {
+              type: "number", min: 1, max: 2000000, value: limit,
+              onChange: e => setLimit(e.target.value),
+              title: apiMode === "bulk"
+                ? "Bulk API 2.0 jobs are not capped by this value — the full result set is exported."
+                : "Maximum rows fetched through the synchronous Data API."
+            })
+          ),
+          apiMode === "bulk" && h("div", {className: "insp-meta dm-note"},
+            "Bulk API 2.0: row limit applies to preview only; jobs return the full result set."),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Output format"),
+            h("select", {value: format, onChange: e => setFormat(e.target.value)},
+              FF_EXPORT_FORMATS.map(f => h("option", {key: f, value: f}, f))
+            )
           )
         )
-      )
-    ),
-    saved.length > 0 && h("div", {className: "insp-chips-row"},
-      h("span", {className: "insp-chips-label"}, "Saved:"),
-      saved.slice(0, 12).map(s =>
-        h("span", {key: s.label, className: "insp-chip-group"},
-          h("button", {
-            className: "insp-chip",
-            title: `${s.objectApi} — ${s.fields}${s.where ? ` WHERE ${s.where}` : ""}`,
-            onClick: () => applyConfig(s)
-          }, s.label),
-          h("button", {
-            className: "insp-chip-x",
-            title: `Delete "${s.label}"`,
-            onClick: () => deleteSaved(s.label)
-          }, "×")
-        )
-      )
-    ),
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "Object API name"),
-        h("input", {
-          value: objectApi,
-          list: "insp-export-objects",
-          placeholder: "Account / IT_Asset__c — type to filter",
-          onChange: e => setObjectApi(e.target.value),
-          onKeyDown: e => { if (e.key === "Enter") describe(); }
-        }),
-        h("datalist", {id: "insp-export-objects"},
-          objects.map(o =>
-            h("option", {key: o.name, value: o.name}, `${o.label}${o.custom ? " (custom)" : ""}`)
+      ),
+
+      // ── Center: Query Builder & Preview ────────────────────
+      h("div", {className: "dm-main"},
+        h("div", {className: "sq3-card sq3-editor-card"},
+          h("div", {className: "insp-card-title", style: {marginBottom: "8px"}},
+            expMode === "object" ? "Object Export — generated SOQL" : "SOQL Query Editor"),
+          expMode === "object" && h("div", {className: "sq3-card-sub"},
+            "Object Export mode builds the query from Setup. Switch to SOQL Query for free editing."),
+          h("div", {className: "sq3-editor-actions"},
+            h("button", {className: "btn btn-secondary btn-sm", onClick: validateSoql,
+              disabled: loading}, "Validate"),
+            h("button", {className: "btn btn-secondary btn-sm", onClick: formatSoql,
+              disabled: loading}, "Format Query"),
+            h("button", {className: "btn btn-secondary btn-sm", onClick: clearQuery,
+              disabled: loading}, "Clear"),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              onClick: () => setExamplesOpen(v => !v)
+            }, examplesOpen ? "Hide Examples" : "Query Examples"),
+            h("button", {className: "btn btn-secondary btn-sm", onClick: copyQuery,
+              title: preview ? "Copy the executed query" : "Copy the current query"},
+              "Copy Query"),
+            h("button", {className: "btn btn-primary btn-sm", onClick: runPreview,
+              disabled: loading},
+              loading ? btnState("Running…") : "Run Preview"),
+            h("button", {className: "btn btn-secondary btn-sm", onClick: saveCurrent},
+              "Save Export")
+          ),
+          examplesOpen && h("div", {className: "dm-examples"},
+            QUERY_EXAMPLES.map(ex =>
+              h("button", {
+                key: ex.label,
+                className: "dm-example",
+                onClick: () => { setQuery(ex.q); setExamplesOpen(false); setNote(null); }
+              }, ex.label))),
+          h("div", {className: "soql-editor-box"},
+            h("div", {className: "soql-term"},
+              h("div", {className: "soql-gutter", ref: gutterRef, "aria-hidden": "true"},
+                Array.from({length: lineCount}, (_, i) =>
+                  h("div", {key: i, className: "soql-ln"}, String(i + 1)))),
+              h("div", {className: "soql-pane"},
+                h("pre", {className: "soql-hl", ref: hlRef, "aria-hidden": "true"},
+                  h("code", {dangerouslySetInnerHTML: {__html: soqlHighlight(query)}})),
+                h("textarea", {
+                  ref: taRef,
+                  className: "insp-soql",
+                  value: query,
+                  spellCheck: false,
+                  wrap: "off",
+                  onChange: e => setQuery(e.target.value),
+                  onScroll: onTermScroll,
+                  onKeyDown: e => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") runPreview();
+                    if ((e.ctrlKey || e.metaKey) && e.key === " ") {
+                      e.preventDefault();
+                      insertAllFields();
+                    }
+                  },
+                  placeholder: "SELECT Id, Name FROM Account LIMIT 10000"
+                })))),
+          h("div", {className: "soql-hint-row"},
+            h("span", null, h("kbd", null, "Ctrl"), " + ", h("kbd", null, "Enter"),
+              " run · ", h("kbd", null, "Ctrl"), " + ", h("kbd", null, "Space"),
+              " insert all fields")
           )
+        ),
+
+        // Field Explorer
+        h("div", {className: "sq3-card"},
+          h("div", {className: "soql-explorer-h"},
+            h("div", {className: "insp-card-title"},
+              meta ? `Field Explorer · ${meta.label || meta.name}` : "Field Explorer"),
+            h("div", {className: "soql-search"},
+              h("input", {
+                className: "soql-search-input",
+                value: objFilter,
+                placeholder: meta ? "search fields…" : "select an object and Describe",
+                onChange: e => setObjFilter(e.target.value)
+              }))
+          ),
+          meta && h("div", {className: "sq3-pills", role: "group", "aria-label": "Field categories"},
+            FIELD_CATS.map(c => h("button", {
+              key: c,
+              className: "sq3-pill" + (fieldCat === c ? " active" : ""),
+              onClick: () => setFieldCat(c)
+            }, `${c} (${c === "All" ? meta.fields.length : (catCounts[c] || 0)})`))
+          ),
+          h("div", {className: "insp-chips soql-fields sq3-field-grid"},
+            !meta && h("div", {key: "__e", className: "insp-empty"},
+              "Choose an object in Export Setup and click Describe to load its fields."),
+            meta && (visibleFields.length
+              ? visibleFields.map(f => h("button", {
+                  key: f.name,
+                  "data-name": f.name,
+                  className: "sq3-field-btn",
+                  title: `${f.label} · ${f.type} — click to insert into SELECT`,
+                  onClick: () => insertField(f.name)
+                },
+                  h("span", {className: "sq3-field-name"}, f.name),
+                  h("span", {className: "sq3-field-type"}, f.type || "")))
+              : h("div", {key: "__e", className: "insp-empty"},
+                  `No ${fieldCat} fields match.`))
+          ),
+          meta && explorerFields.length > 12 && h("button", {
+            className: "sq3-expander" + (expandFields ? " expanded" : ""),
+            onClick: () => setExpandFields(v => !v)
+          }, expandFields ? "Show fewer" : `Show all ${explorerFields.length} fields`)
+        ),
+
+        note && h("div", {className: "insp-meta"}, note),
+        error && h("div", {className: "insp-error"}, error),
+
+        // Results preview
+        preview && h("div", {className: "sq3-card sq3-results-card"},
+          h("div", {className: "soql-results-h"},
+            h("div", {className: "sq3-results-title"},
+              h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_DB)),
+              h("span", {className: "insp-card-title"}, "Results Preview")),
+            h("div", {className: "insp-meta"},
+              `${fmtNum(preview.rows.length)} loaded · ` +
+              `${fmtNum(preview.total)} total · ${preview.columns.length} columns` +
+              (preview.next ? ` · page ${page}/${pageCount}` : "")),
+            h("div", {className: "dm-btn-row"},
+              h("button", {className: "btn btn-secondary btn-sm", onClick: download},
+                ffIcon(FF_I_DOWNLOAD), h("span", null, `Download ${format}`)),
+              h("button", {className: "btn btn-secondary btn-sm", onClick: copyQuery},
+                "Copy Query"))
+          ),
+          preview.rows.length === 0
+            ? h("div", {className: "insp-empty"},
+                "No records matched this query.")
+            : h(ResultTable, {
+                columns: preview.columns,
+                rows: pagedRows,
+                maxRows: PAGE_SIZE,
+                sortCol, sortDir, onSort: toggleSort,
+                fieldTypes
+              }),
+          (pageCount > 1 || preview.next) && h("div", {className: "dm-pager"},
+            h("button", {className: "btn btn-secondary btn-sm", disabled: page <= 1,
+              onClick: () => setPage(p => Math.max(1, p - 1))}, "‹ Prev"),
+            h("span", {className: "insp-meta"},
+              `Page ${page} of ${pageCount}`),
+            h("button", {className: "btn btn-secondary btn-sm", disabled: page >= pageCount,
+              onClick: () => setPage(p => Math.min(pageCount, p + 1))}, "Next ›"),
+            preview.next && h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: loading,
+              onClick: loadMore
+            }, loading ? "Loading…" : "Load more from server"))
+        ),
+        !preview && !error && h("div", {className: "insp-empty"},
+          "Run a preview to see real records here.")
+      ),
+
+      // ── Right: Advanced options ────────────────────────────
+      h("div", {className: "dm-adv"},
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_SLIDERS)),
+            h("span", {className: "sq3-card-t"}, "Advanced Options")),
+          h("label", {className: "sq3-check"},
+            h("input", {type: "checkbox", checked: includeDeleted,
+              onChange: e => setIncludeDeleted(e.target.checked)}),
+            h("span", null, "Include deleted/recycled records",
+              apiMode === "data" ? " (queryAll)" : " (queryAll job)")),
+          h("label", {className: "sq3-check"},
+            h("input", {type: "checkbox", checked: includeFormula,
+              onChange: e => setIncludeFormula(e.target.checked),
+              disabled: expMode !== "object"}),
+            h("span", null, "Include formula fields",
+              expMode !== "object" ? " (Object Export mode — formula fields are selectable in SOQL)" : "")),
+          h("label", {className: "sq3-check"},
+            h("input", {type: "checkbox", checked: includeHeaders,
+              onChange: e => setIncludeHeaders(e.target.checked)}),
+            h("span", null, "Include CSV headers")),
+          h("div", {className: "sq3-card-sub", style: {marginTop: "10px"}}, "CSV output"),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Delimiter"),
+            h("select", {value: csvDelimiter, onChange: e => setCsvDelimiter(e.target.value)},
+              h("option", {value: ","}, "Comma ( , )"),
+              h("option", {value: ";"}, "Semicolon ( ; )"),
+              h("option", {value: "\t"}, "Tab"),
+              h("option", {value: "|"}, "Pipe ( | )"))
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Quoting"),
+            h("select", {value: csvQuoting, onChange: e => setCsvQuoting(e.target.value)},
+              h("option", {value: "minimal"}, "Minimal (when needed)"),
+              h("option", {value: "all"}, "Always quote"))
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Encoding"),
+            h("select", {value: csvEncoding, onChange: e => setCsvEncoding(e.target.value)},
+              h("option", {value: "utf8"}, "UTF-8"),
+              h("option", {value: "utf8bom"}, "UTF-8 with BOM (Excel)"))
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Date format"),
+            h("select", {value: csvDateFormat, onChange: e => setCsvDateFormat(e.target.value)},
+              h("option", {value: "iso"}, "ISO 8601 (raw)"),
+              h("option", {value: "ymd"}, "YYYY-MM-DD HH:MM:SS (UTC)"))
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Null/blank value"),
+            h("input", {value: csvNullValue, placeholder: "(empty)",
+              onChange: e => setCsvNullValue(e.target.value)})
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Line ending"),
+            h("select", {value: csvLineEnding, onChange: e => setCsvLineEnding(e.target.value)},
+              h("option", {value: "\r\n"}, "CRLF (Windows)"),
+              h("option", {value: "\n"}, "LF (Unix)"))
+          )
+        ),
+
+        // Bulk 2.0 job tracking
+        apiMode === "bulk" && h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_ZAP)),
+            h("span", {className: "sq3-card-t"}, "Bulk 2.0 Query Job")),
+          bulkJob
+            ? h("div", {className: "dm-job"},
+                h("div", {className: "dm-job-row"},
+                  h("span", {className: "dm-job-k"}, "Job ID"),
+                  h("span", {className: "dm-job-v dm-mono", title: bulkJob.id},
+                    bulkJob.id || "—"),
+                  h("button", {className: "btn btn-secondary btn-sm", onClick: copyJobId},
+                    "Copy")),
+                h("div", {className: "dm-job-row"},
+                  h("span", {className: "dm-job-k"}, "State"),
+                  h("span", {className: "dm-job-v dm-state dm-state-" +
+                    String(bulkJob.state || "").toLowerCase()},
+                    bulkJob.state || "—")),
+                h("div", {className: "dm-job-row"},
+                  h("span", {className: "dm-job-k"}, "Records processed"),
+                  h("span", {className: "dm-job-v"},
+                    bulkJob.numberRecordsProcessed != null
+                      ? fmtNum(bulkJob.numberRecordsProcessed) : "—")),
+                bulkJob.errorMessage && h("div", {className: "insp-error"},
+                  bulkJob.errorMessage),
+                h("div", {className: "dm-btn-row"},
+                  h("button", {
+                    className: "btn btn-secondary btn-sm",
+                    disabled: bulkBusy ||
+                      ["JobComplete", "Failed", "Aborted"].includes(bulkJob.state),
+                    onClick: cancelBulkJob
+                  }, bulkBusy ? "Cancelling…" : "Cancel Job")))
+            : h("div", {className: "insp-empty"},
+                "Run a preview with Bulk API 2.0 to create a query job."),
+          bulkError && h("div", {className: "insp-error"}, bulkError)
+        ),
+
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_CLOCK)),
+            h("span", {className: "sq3-card-t"}, "Recent Objects")),
+          recents.length
+            ? h("div", {className: "insp-chips"},
+                recents.slice(0, 10).map(n => h("button", {
+                  key: n,
+                  className: "insp-chip t" + pillTone(n),
+                  title: `Describe ${n}`,
+                  onClick: () => { setObjectApi(n); describe(n); }
+                }, n)))
+            : h("div", {className: "insp-empty"},
+                "Objects you Describe appear here (org-scoped).")
         )
-      ),
-      h("button", {
-        className: "btn btn-secondary btn-sm",
-        disabled: loading,
-        onClick: describe
-      }, "Describe")
-    ),
-    h("label", {className: "insp-field"},
-      h("span", null, "Fields (comma-separated)"),
-      h("input", {
-        value: fields,
-        onChange: e => setFields(e.target.value),
-        placeholder: "Id, Name"
-      })
-    ),
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "WHERE (optional)"),
-        h("input", {
-          value: where,
-          onChange: e => setWhere(e.target.value),
-          placeholder: "Industry = 'Tech'"
-        })
-      ),
-      h("label", {className: "insp-field"},
-        h("span", null, "Limit"),
-        h("input", {
-          type: "number",
-          min: 1,
-          max: 50000,
-          value: limit,
-          onChange: e => setLimit(e.target.value)
-        })
-      ),
-      h("button", {
-        className: "btn btn-primary btn-sm",
-        disabled: loading,
-        onClick: runExport
-      }, loading ? "Exporting…" : "Query & Preview"),
-      preview && h("button", {
-        className: "btn btn-secondary btn-sm",
-        onClick: download
-      }, "Download CSV")
-    ),
-    meta && h("div", {className: "insp-meta"},
-      `${meta.label || meta.name} · ${meta.fields.length} fields (describe OK)`
-    ),
-    error && h("div", {className: "insp-error"}, error),
-    preview && h("div", {className: "insp-meta"},
-      `${preview.total} row(s) ready · ${preview.columns.length} columns`
-    ),
-    preview && h(ResultTable, {
-      columns: preview.columns,
-      rows: preview.rows,
-      maxRows: 200,
-      fieldTypes: (() => {
-        const m = {};
-        if (meta && meta.fields) {
-          for (const f of meta.fields) {
-            if (f && f.name) m[f.name] = f.type;
-          }
-        }
-        return m;
-      })()
-    })
+      )
+    )
   );
 }
 
-// ─── Data Import tab ────────────────────────────────────────
+// ─── Data Import tab (v1.5.0 — three-column data manager) ──────────────────
+// Left: setup (saved/history/operation/API/object/external ID/batch/CSV
+// options). Center: upload + parse + field mapping + validation + preview.
+// Right: execution (Data API batches or Bulk 2.0 ingest) + job tracking.
+// Every result shown comes from actual Salesforce responses.
+const FF_IMPORT_OPS = [
+  {id: "insert", label: "Insert", destructive: false},
+  {id: "update", label: "Update", destructive: false},
+  {id: "upsert", label: "Upsert", destructive: false},
+  {id: "delete", label: "Delete", destructive: true, recoverable: true},
+  {id: "hardDelete", label: "Hard Delete", destructive: true, recoverable: false}
+];
+
 function ImportTab() {
+  useSfTimeZoneTick();
+  // ── Setup (left) ────────────────────────────────────────────
   const [objectApi, setObjectApi] = ffUseSession("import", "objectApi", "");
+  const [operation, setOperation] = ffUseSession("import", "operation", "insert");
+  const [apiMode, setApiMode] = ffUseSession("import", "apiMode", "data"); // data | bulk
+  const [externalId, setExternalId] = ffUseSession("import", "externalId", "");
+  const [batchSize, setBatchSize] = ffUseSession("import", "batchSize", 200);
+  const [csvDelimiter, setCsvDelimiter] = ffUseSession("import", "csvDelimiter", ",");
+  const [csvLineEnding, setCsvLineEnding] = ffUseSession("import", "csvLineEnding", "\r\n");
+  const [useFirstRowHeaders, setUseFirstRowHeaders] = ffUseSession("import", "useFirstRowHeaders", true);
+  const [ignoreBlanks, setIgnoreBlanks] = ffUseSession("import", "ignoreBlanks", true);
+  const [autoTrim, setAutoTrim] = ffUseSession("import", "autoTrim", true);
+  const [allowPartial, setAllowPartial] = ffUseSession("import", "allowPartial", true);
+
+  // ── Data (center) ───────────────────────────────────────────
   const [csvText, setCsvText] = ffUseSession("import", "csvText", "");
+  const [fileName, setFileName] = ffUseSession("import", "fileName", "");
+  const [fileSize, setFileSize] = ffUseSession("import", "fileSize", 0);
   const [headers, setHeaders] = ffUseSession("import", "headers", []);
   const [records, setRecords] = ffUseSession("import", "records", []);
+  const [dupHeaders, setDupHeaders] = ffUseSession("import", "dupHeaders", []);
+  const [parseError, setParseError] = ffUseSession("import", "parseError", null);
   const [fieldMap, setFieldMap] = ffUseSession("import", "fieldMap", {});
-  const [pasteText, setPasteText] = ffUseSession("import", "pasteText", "");
+  const [pasteText, setPasteText] = React.useState("");
+  const [dragOver, setDragOver] = React.useState(false);
+
+  // ── Describe / validation / preview ─────────────────────────
+  const [meta, setMeta] = ffUseSession("import", "meta", null);
+  const [validation, setValidation] = ffUseSession("import", "validation", null);
+  const [mapTemplateLabel, setMapTemplateLabel] = React.useState("");
+  const [mapTemplates, setMapTemplates] = React.useState(() => ffLoadJson("ff_import_templates", []));
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [result, setResult] = ffUseSession("import", "result", null);
+  const [note, setNote] = React.useState(null);
+  const [saved, setSaved] = React.useState(() => ffLoadJson("ff_import_saved", []));
+  const [saveLabel, setSaveLabel] = React.useState("");
+  const [history, setHistory] = React.useState(() => ffLoadJson("ff_import_history", []));
+  const [dupCheckKey, setDupCheckKey] = React.useState("");
 
-  // Shared loader for both the file picker and the paste box.
-  const loadCsvText = (text, name) => {
+  // ── Execution (right) ───────────────────────────────────────
+  const [result, setResult] = ffUseSession("import", "result", null);
+  const [runJob, setRunJob] = ffUseSession("import", "runJob", null);
+  const [bulkBusy, setBulkBusy] = React.useState(false);
+  const [bulkError, setBulkError] = React.useState(null);
+  const [confirming, setConfirming] = React.useState(false);
+  const [resultFiles, setResultFiles] = React.useState(null);
+  const [running, setRunning] = React.useState(false);
+
+  // Double-submit guard: refs are immune to stale renders.
+  const runRef = React.useRef(false);
+
+  const opDef = FF_IMPORT_OPS.find(o => o.id === operation) || FF_IMPORT_OPS[0];
+  const fieldByName = {};
+  if (meta && meta.fields) for (const f of meta.fields) fieldByName[f.name] = f;
+  const fields = meta && meta.fields ? meta.fields : [];
+
+  // External-ID candidates: describe fields flagged externalId/idLookup,
+  // falling back to any Id-candidate list when the describe lacks flags.
+  const externalIdOptions = React.useMemo(() => {
+    const list = fields.filter(f => f.externalId || f.idLookup || f.name === "Id");
+    return list.length ? list : [{name: "Id", label: "Id", type: "id"}];
+  }, [fields]);
+
+  // Hard Delete only when supported: Bulk API 2.0 + hardDelete operation.
+  const hardDeleteSupported = apiMode === "bulk";
+
+  // Recent objects shared with the Export tab (org-scoped localStorage).
+  const [recents, setRecents] = React.useState(() => ffLoadJson("ff_recent_objects", []));
+  const rememberObject = (key) => {
+    try {
+      const next = [key, ...ffLoadJson("ff_recent_objects", []).filter(n => n !== key)].slice(0, 12);
+      ffSaveJson("ff_recent_objects", next);
+      setRecents(next);
+    } catch (e) { /* ignore */ }
+  };
+
+  // Auto-describe when an object is set (field dropdowns need it).
+  const describeObject = React.useCallback(async (obj) => {
+    const key = String(obj || "").trim();
+    if (!key) return null;
+    try {
+      const d = await ffDescribeObject(key);
+      const fieldList = (d.fields || []).map(f => ({
+        name: f.name, label: f.label, type: f.type,
+        custom: !!f.custom, calculated: !!f.calculated,
+        nillable: f.nillable !== false,
+        createable: f.createable !== false,
+        updateable: f.updateable !== false,
+        defaultedOnCreate: !!f.defaultedOnCreate,
+        externalId: !!f.externalId,
+        idLookup: !!f.idLookup,
+        picklistValues: f.picklistValues || []
+      }));
+      const m = {name: d.name, label: d.label, fields: fieldList};
+      setMeta(m);
+      rememberObject(key);
+      return m;
+    } catch (e) {
+      setError(`Describe failed for ${key}: ${e.message}`);
+      setMeta(null);
+      return null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  React.useEffect(() => {
+    if (objectApi.trim()) describeObject(objectApi);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectApi]);
+
+  // ── CSV ingest (file + paste share one loader) ──────────────
+  const loadCsvText = (text, name, size) => {
     setError(null);
+    setNote(null);
     setResult(null);
+    setValidation(null);
     if (!text) return;
     setCsvText(text);
-    const parsed = parseCsv(text);
-    setHeaders(parsed.headers);
-    setRecords(parsed.records);
-    // Auto-map header → field when header looks like an API name.
-    const map = {};
-    for (const hd of parsed.headers) {
-      map[hd] = hd;
+    setFileName(name || "pasted.csv");
+    setFileSize(size || text.length);
+    const parsed = parseCsvEx(text, {delimiter: csvDelimiter});
+    if (parsed.parseError) {
+      setParseError(parsed.parseError);
+      setHeaders([]);
+      setRecords([]);
+      setDupHeaders([]);
+      setError(parsed.parseError);
+      return;
     }
-    setFieldMap(map);
-    // Guess object from filename: Account.csv → Account
+    setParseError(null);
+    let hd = parsed.headers;
+    let recs = parsed.records;
+    if (!useFirstRowHeaders) {
+      // Treat the first row as data: synthesize Column1..N headers.
+      const n = Math.max(...parsed.records.map(r => Object.keys(r).length), hd.length);
+      hd = Array.from({length: n}, (_, i) => `Column${i + 1}`);
+      recs = parsed.records;
+    }
+    if (autoTrim) {
+      recs = recs.map(r => {
+        const out = {};
+        for (const [k, v] of Object.entries(r)) out[k] = String(v == null ? "" : v).trim();
+        return out;
+      });
+    }
+    setHeaders(hd);
+    setRecords(recs);
+    setDupHeaders(parsed.duplicates || []);
+    // Auto-map: only exact API-name hits (suggestions never guess silently).
+    const autoMap = {};
+    for (const col of hd) autoMap[col] = "";
+    const byName = {};
+    if (meta && meta.fields) {
+      for (const f of meta.fields) byName[f.name.toLowerCase()] = f.name;
+    }
+    for (const col of hd) {
+      const hit = byName[String(col).trim().toLowerCase()];
+      if (hit) autoMap[col] = hit;
+    }
+    setFieldMap(autoMap);
+    // Guess object from filename: Account.csv → Account (if nothing set).
     if (name) {
       const base = name.replace(/\.[^.]+$/, "");
       if (/^[A-Za-z][A-Za-z0-9_]*$/.test(base)) setObjectApi(prev => prev || base);
     }
+    setNote(`Parsed ${fmtNum(recs.length)} row(s) · ${hd.length} column(s)`);
   };
 
   const onFile = async (file) => {
     if (!file) return;
+    if (file.size > 50 * 1024 * 1024) {
+      setError("File larger than 50 MB — split it or use Bulk API 2.0 with a smaller file.");
+      return;
+    }
     const text = await file.text();
-    loadCsvText(text, file.name);
+    loadCsvText(text, file.name, file.size);
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) onFile(f);
   };
 
   const loadPasted = () => {
     if (!pasteText.trim()) return;
-    loadCsvText(pasteText, "");
+    loadCsvText(pasteText, "", pasteText.length);
   };
 
-  const importRows = async () => {
+  // ── Mapping helpers ─────────────────────────────────────────
+  const suggestMappings = async () => {
     setError(null);
-    setResult(null);
-    const obj = objectApi.trim();
-    if (!obj) { setError("Enter target object API name"); return; }
-    if (!records.length) { setError("Load a CSV first"); return; }
-    const mapped = [];
-    for (const rec of records) {
-      const body = {};
-      for (const [csvKey, fieldApi] of Object.entries(fieldMap)) {
-        if (!fieldApi) continue;
-        const v = rec[csvKey];
-        if (v === undefined || v === null || v === "") continue;
-        body[fieldApi] = v;
-      }
-      if (Object.keys(body).length) mapped.push(body);
+    const m = meta || await describeObject(objectApi);
+    if (!m) { setError("Set an object first (auto-describe runs on selection)."); return; }
+    const suggested = ffSuggestFieldMap(headers, m.fields);
+    setFieldMap(suggested);
+    const hitCount = Object.values(suggested).filter(Boolean).length;
+    setNote(`Suggested ${hitCount} of ${headers.length} column(s).`);
+    setValidation(null);
+  };
+
+  const setMapping = (col, val) => {
+    setFieldMap(prev => ({...prev, [col]: val}));
+    setValidation(null);
+  };
+
+  const clearMapping = (col) => setMapping(col, "");
+
+  const duplicateTargets = React.useMemo(() => {
+    const counts = {};
+    for (const fa of Object.values(fieldMap)) {
+      if (!fa) continue;
+      counts[fa] = (counts[fa] || 0) + 1;
     }
-    if (!mapped.length) { setError("No mappable rows — map at least one column to a field"); return; }
-    setLoading(true);
-    let ok = 0;
+    return counts;
+  }, [fieldMap]);
+
+  const mappingStatus = (col) => {
+    const fa = fieldMap[col];
+    if (!fa) return {kind: "warn", text: "Unmapped"};
+    const f = fieldByName[fa];
+    if (!f) return {kind: "error", text: "Unknown field"};
+    if (duplicateTargets[fa] > 1) return {kind: "error", text: "Duplicate mapping"};
+    if (operation === "insert" && f.createable === false) {
+      return {kind: "error", text: "Not createable"};
+    }
+    if ((operation === "update" || operation === "upsert") &&
+        f.updateable === false && f.name !== "Id") {
+      return {kind: "warn", text: "Not updateable (read-only)"};
+    }
+    if (f.calculated) return {kind: "warn", text: "Formula field (read-only)"};
+    return {kind: "ok", text: (f.type || "field") + (f.custom ? " · custom" : "")};
+  };
+
+  // ── Mapping templates ───────────────────────────────────────
+  const saveTemplate = () => {
+    const label = mapTemplateLabel.trim() ||
+      `${objectApi.trim() || "object"} ${operation} template ${mapTemplates.length + 1}`;
+    const next = [{label, objectApi: objectApi.trim(), operation, externalId,
+      fieldMap}, ...mapTemplates.filter(t => t.label !== label)].slice(0, 30);
+    setMapTemplates(next);
+    ffSaveJson("ff_import_templates", next);
+    setMapTemplateLabel("");
+    setNote(`Mapping template "${label}" saved.`);
+  };
+
+  const loadTemplate = (label) => {
+    const t = mapTemplates.find(x => x.label === label);
+    if (!t) return;
+    setObjectApi(t.objectApi || "");
+    setOperation(t.operation || "insert");
+    if (t.externalId !== undefined) setExternalId(t.externalId);
+    setFieldMap(t.fieldMap || {});
+    setValidation(null);
+    setNote(`Loaded template "${t.label}".`);
+  };
+
+  const deleteTemplate = (label) => {
+    const next = mapTemplates.filter(t => t.label !== label);
+    setMapTemplates(next);
+    ffSaveJson("ff_import_templates", next);
+  };
+
+  // ── Validation ──────────────────────────────────────────────
+  const validateData = async () => {
+    setError(null);
+    if (!records.length) { setError("Load a CSV first."); return; }
+    const m = meta || await describeObject(objectApi);
+    if (!m) { setError("Set a target object first."); return; }
+    const v = ffValidateImport({
+      headers, records, fieldMap, fields: m.fields,
+      operation, externalId
+    });
+    setValidation(v);
+    setNote(null);
+    if (!v.issues.length) {
+      setNote(`All ${fmtNum(records.length)} row(s) passed client-side checks.`);
+    }
+  };
+
+  const downloadErrors = () => {
+    if (!validation || !validation.issues.length) return;
+    const cols = ["Row", "Field", "Severity", "Problem", "Suggested correction"];
+    const rows = validation.issues.map(x => ({
+      Row: x.row, Field: x.field, Severity: x.severity,
+      Problem: x.problem, "Suggested correction": x.suggestion || ""
+    }));
+    downloadText("import-validation-errors.csv", toCsvEx(cols, rows, {delimiter: ","}),
+      "text/csv;charset=utf-8");
+  };
+
+  // Client-side duplicate detection (distinct from Salesforce duplicate rules).
+  const runDupCheck = () => {
+    const fa = fieldMap[dupCheckKey];
+    if (!fa || !records.length) return;
+    const seen = new Map();
+    const dups = [];
+    records.forEach((r, i) => {
+      const v = String(r[dupCheckKey] == null ? "" : r[dupCheckKey]).trim();
+      if (!v) return;
+      if (seen.has(v)) dups.push({value: v, rows: [seen.get(v) + 2, i + 2]});
+      else seen.set(v, i);
+    });
+    if (dups.length) {
+      setNote(`Client-side duplicate check: ${dups.length} duplicated value(s) in ` +
+        `"${dupCheckKey}" (${fa}) — e.g. "${dups[0].value}" on rows ${dups[0].rows.join(" & ")}. ` +
+        `This is a plain value check, NOT Salesforce duplicate rules.`);
+    } else {
+      setNote(`Client-side duplicate check: no duplicates in "${dupCheckKey}". ` +
+        `This does not replace Salesforce duplicate rules.`);
+    }
+  };
+
+  // ── Row preparation for execution ───────────────────────────
+  const prepareRows = () => {
+    const active = Object.entries(fieldMap).filter(([, fa]) => fa && fieldByName[fa]);
+    const out = [];
+    for (let i = 0; i < records.length; i++) {
+      const rec = records[i];
+      const body = {};
+      let hasValue = false;
+      let idVal = null;
+      let extVal = null;
+      for (const [col, fa] of active) {
+        let v = rec[col];
+        if (v == null) continue;
+        v = String(v);
+        if (autoTrim) v = v.trim();
+        if (v === "" && ignoreBlanks) continue;
+        if (v === "" && !ignoreBlanks) {
+          body[fa] = null; // explicit blank (clears the field on update)
+          hasValue = true;
+          continue;
+        }
+        if (fa === "Id") idVal = v;
+        if (fa === externalId) extVal = v;
+        body[fa] = v;
+        hasValue = true;
+      }
+      out.push({index: i, body, idVal, extVal, hasValue});
+    }
+    return out.filter(r => r.hasValue || operation === "delete" || operation === "hardDelete");
+  };
+
+  const pushHistory = (extra) => {
+    const entry = {objectApi: objectApi.trim(), operation, apiMode,
+      rows: records.length, mapped: Object.values(fieldMap).filter(Boolean).length,
+      ts: Date.now(), ...extra};
+    setHistory(prev => {
+      const next = [entry, ...prev].slice(0, 15);
+      ffSaveJson("ff_import_history", next);
+      return next;
+    });
+  };
+
+  // ── Data API execution (batched, per-record results) ────────
+  const runDataImport = async (rows) => {
+    const obj = objectApi.trim();
+    const base = `/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}`;
+    const size = Math.max(1, Math.min(parseInt(batchSize, 10) || 200, 200));
+    const successes = [];
     const failures = [];
-    try {
-      for (let i = 0; i < mapped.length; i++) {
+    for (let i = 0; i < rows.length; i += size) {
+      const batch = rows.slice(i, i + size);
+      // Sequential within the batch: honest per-record results, no parallel
+      // hammering of the org's rate limits.
+      for (const row of batch) {
+        if (!allowPartial && failures.length) {
+          failures.push({row: row.index + 2, message: "Stopped: partial success disabled"});
+          break;
+        }
         try {
-          await sfConn.rest(`/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}`, {
-            method: "POST",
-            body: mapped[i],
-            useCache: false
-          });
-          ok++;
+          let res;
+          if (operation === "insert") {
+            res = await sfConn.rest(base, {method: "POST", body: row.body,
+              useCache: false});
+          } else if (operation === "update") {
+            if (!row.idVal) throw new Error("Missing Id");
+            await sfConn.rest(`${base}/${encodeURIComponent(row.idVal)}`,
+              {method: "PATCH", body: row.body, useCache: false});
+            res = {id: row.idVal, success: true};
+          } else if (operation === "upsert") {
+            if (!externalId) throw new Error("External ID field not selected");
+            const ext = row.extVal;
+            if (!ext) throw new Error(`Missing value for External ID ${externalId}`);
+            await sfConn.rest(
+              `${base}/${encodeURIComponent(externalId)}/${encodeURIComponent(ext)}`,
+              {method: "PATCH", body: row.body, useCache: false});
+            res = {id: row.idVal, success: true};
+          } else if (operation === "delete") {
+            if (!row.idVal) throw new Error("Missing Id");
+            await sfConn.rest(`${base}/${encodeURIComponent(row.idVal)}`,
+              {method: "DELETE", useCache: false});
+            res = {id: row.idVal, success: true};
+          } else {
+            throw new Error("Hard Delete requires Bulk API 2.0");
+          }
+          successes.push({row: row.index + 2, id: res && res.id ? res.id : ""});
         } catch (e) {
-          failures.push(`row ${i + 1}: ${e.message}`);
-          if (failures.length >= 5) break;
+          failures.push({row: row.index + 2, message: e.message});
         }
       }
-      setResult({
-        ok,
-        failed: mapped.length - ok,
-        failures: failures.slice(0, 5),
-        total: mapped.length
+      if (!allowPartial && failures.length) break;
+      // Yield between batches so the UI can breathe on large files.
+      await new Promise(r => setTimeout(r, 0));
+    }
+    return {successes, failures};
+  };
+
+  // ── Bulk 2.0 ingest execution ───────────────────────────────
+  // Serialize mapped rows as Bulk 2.0 ingest CSV: one header line of target
+  // field API names, RFC-4180 quoting, chosen line ending.
+  const buildBulkCsv = (rows) => {
+    const targets = [...new Set(Object.values(fieldMap).filter(fa => fa && fieldByName[fa]))];
+    const esc = (v) => {
+      if (v == null) return "";
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const eol = csvLineEnding === "\n" ? "\n" : "\r\n";
+    const lines = [targets.map(esc).join(",")];
+    for (const row of rows) {
+      lines.push(targets.map(t => esc(row.body[t])).join(","));
+    }
+    return lines.join(eol);
+  };
+
+  const runBulkImport = async (rows) => {
+    setBulkBusy(true);
+    setBulkError(null);
+    setResultFiles(null);
+    try {
+      const csv = buildBulkCsv(rows);
+      const job = await ffBulkIngestCreate({
+        operation, object: objectApi.trim(),
+        externalIdFieldName: operation === "upsert" ? externalId : null,
+        lineEnding: csvLineEnding
       });
+      setRunJob({id: job.id, state: job.state, operation, object: objectApi.trim(),
+        api: "Bulk 2.0", createdDate: job.createdDate || new Date().toISOString(),
+        apiMode: "bulk"});
+      await ffBulkIngestUpload(job.id, csv);
+      await ffBulkIngestClose(job.id);
+      const done = await ffBulkPoll(ffBulkIngestStatus, job.id, {
+        onTick: j => setRunJob(prev => prev ? {...prev, state: j.state,
+          numberRecordsProcessed: j.numberRecordsProcessed,
+          numberRecordsFailed: j.numberRecordsFailed} : prev)
+      });
+      setRunJob(prev => prev ? {...prev, state: done.state,
+        numberRecordsProcessed: done.numberRecordsProcessed,
+        numberRecordsFailed: done.numberRecordsFailed,
+        completedDate: done.systemModstamp || new Date().toISOString()} : prev);
+      if (done.state === "Failed") {
+        throw new Error(done.errorMessage || "Bulk ingest job failed");
+      }
+      // Retrieve the three result files (actual SF responses).
+      let successText = "", failedText = "", unprocessedText = "";
+      try { successText = await ffBulkIngestResults(job.id, "successfulResults"); }
+      catch (e) { /* job may have no successes */ }
+      try { failedText = await ffBulkIngestResults(job.id, "failedResults"); }
+      catch (e) { /* no failures */ }
+      try { unprocessedText = await ffBulkIngestResults(job.id, "unprocessedRecords"); }
+      catch (e) { /* none */ }
+      setResultFiles({success: successText, failed: failedText, unprocessed: unprocessedText});
+      const successRows = successText ? Math.max(0, successText.trim().split("\n").length - 1) : 0;
+      const failedRows = failedText ? Math.max(0, failedText.trim().split("\n").length - 1) : 0;
+      pushHistory({jobId: job.id, ok: successRows, failed: failedRows,
+        total: done.numberRecordsProcessed || rows.length});
+      return {ok: successRows, failed: failedRows,
+        total: rows.length, jobId: job.id, bulk: true,
+        failureSample: failedRows ? failedText.split("\n").slice(1, 4).filter(Boolean) : []};
+    } catch (e) {
+      setBulkError(e.message);
+      return null;
     } finally {
-      setLoading(false);
+      setBulkBusy(false);
     }
   };
 
+  const downloadResultFile = (kind) => {
+    if (!resultFiles) return;
+    const text = kind === "success" ? resultFiles.success
+      : kind === "failed" ? resultFiles.failed : resultFiles.unprocessed;
+    const name = kind === "success" ? "successful-records.csv"
+      : kind === "failed" ? "failed-records.csv" : "unprocessed-records.csv";
+    if (text === null || text === undefined || text === "") {
+      setNote(`No ${kind} records returned by Salesforce.`);
+      return;
+    }
+    downloadText(name, text, "text/csv;charset=utf-8");
+  };
+
+  const copyJobId = async () => {
+    if (!runJob || !runJob.id) return;
+    try {
+      await safeCopyText(runJob.id);
+      setNote("Job ID copied.");
+    } catch (e) { /* ignore */ }
+  };
+
+  const cancelJob = async () => {
+    if (!runJob || !runJob.id) return;
+    setBulkBusy(true);
+    setBulkError(null);
+    try {
+      await ffBulkJobCancel(runJob.id, "ingest");
+      setRunJob(prev => prev ? {...prev, state: "Aborted"} : prev);
+      setNote("Bulk job cancelled.");
+    } catch (e) {
+      setBulkError(e.message);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  // ── Main run (with destructive confirmation + double-submit guard) ──
+  const startRun = async () => {
+    if (runRef.current) return; // already in flight
+    setError(null);
+    setNote(null);
+    setResult(null);
+    if (!objectApi.trim()) { setError("Enter a target object API name"); return; }
+    if (!records.length) { setError("Load a CSV first"); return; }
+    if (operation === "upsert" && !externalId) {
+      setError("Upsert requires an External ID field (choose it in Import Setup)"); return;
+    }
+    if (operation === "hardDelete" && !hardDeleteSupported) {
+      setError("Hard Delete requires Bulk API 2.0 (switch the API selector)"); return;
+    }
+    const rows = prepareRows();
+    if (!rows.length) { setError("No mappable rows — map at least one column to a field"); return; }
+    // Warn (don't block) when validation hasn't run or has errors.
+    if (!validation) {
+      setNote("Running without Validate Data — client-side validation is preliminary; " +
+        "Salesforce remains the final authority.");
+    } else if (validation.hardErrors) {
+      setNote(`Continuing with ${fmtNum(validation.hardErrors)} validation error(s) — ` +
+        "Salesforce will reject invalid rows and report them individually.");
+    }
+
+    runRef.current = true;
+    setRunning(true);
+    setConfirming(false);
+    try {
+      if (apiMode === "bulk") {
+        const r = await runBulkImport(rows);
+        if (r) setResult(r);
+      } else {
+        const r = await runDataImport(rows);
+        const total = rows.length;
+        setResult({ok: r.successes.length, failed: r.failures.length, total,
+          failures: r.failures.slice(0, 20), bulk: false});
+        pushHistory({ok: r.successes.length, failed: r.failures.length, total});
+        if (r.failures.length && !allowPartial) {
+          setNote("Stopped early: Allow partial success is disabled.");
+        }
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      runRef.current = false;
+      setRunning(false);
+    }
+  };
+
+  // Destructive ops need explicit confirmation (object + count shown).
+  const needsConfirm = opDef.destructive;
+  const onClickRun = () => {
+    if (needsConfirm && !confirming) { setConfirming(true); return; }
+    startRun();
+  };
+
+  const saveCurrent = () => {
+    const label = saveLabel.trim() ||
+      `${objectApi.trim() || "import"} ${operation} ${saved.length + 1}`;
+    const next = [{label, objectApi: objectApi.trim(), operation, apiMode,
+      externalId, batchSize, fieldMap, csvDelimiter, ignoreBlanks, autoTrim,
+      allowPartial},
+      ...saved.filter(s => s.label !== label)].slice(0, 50);
+    setSaved(next);
+    ffSaveJson("ff_import_saved", next);
+    setSaveLabel("");
+    setNote(`Saved import "${label}".`);
+  };
+
+  const loadSaved = (label) => {
+    const s = saved.find(x => x.label === label);
+    if (!s) return;
+    setObjectApi(s.objectApi || "");
+    setOperation(s.operation || "insert");
+    setApiMode(s.apiMode || "data");
+    setExternalId(s.externalId || "");
+    if (s.batchSize) setBatchSize(s.batchSize);
+    setFieldMap(s.fieldMap || {});
+    if (s.csvDelimiter) setCsvDelimiter(s.csvDelimiter);
+    if (s.ignoreBlanks !== undefined) setIgnoreBlanks(s.ignoreBlanks);
+    if (s.autoTrim !== undefined) setAutoTrim(s.autoTrim);
+    if (s.allowPartial !== undefined) setAllowPartial(s.allowPartial);
+    setValidation(null);
+    setResult(null);
+    setNote(`Loaded saved import "${label}". Load the CSV again to re-parse.`);
+  };
+
+  const deleteSaved = (label) => {
+    const next = saved.filter(s => s.label !== label);
+    setSaved(next);
+    ffSaveJson("ff_import_saved", next);
+  };
+
+  // ── Preview table (first 50 rows + severity indicators) ─────
+  const previewRows = records.slice(0, 50);
+  const previewRowIdx = i => validation ? (validation.rowSeverity[i] || "ok") : null;
+
+  const stats = [
+    ["Rows", fmtNum(records.length)],
+    ["Columns", String(headers.length)],
+    ["Object", objectApi.trim() || "—"],
+    ["Operation", opDef.label],
+    ["API", apiMode === "bulk" ? "Bulk 2.0" : "Data API"],
+    ["Mapped", `${Object.values(fieldMap).filter(Boolean).length}/${headers.length}`],
+    ["Validation", validation
+      ? (validation.hardErrors
+        ? `${validation.hardErrors} error(s)`
+        : "Passed")
+      : "Not run"]
+  ];
+
+  const statusPill = (kind) =>
+    "dm-pill dm-pill-" + (kind || "ok");
+
   return h("div", {className: "insp-panel"},
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "Target object"),
-        h("input", {
-          value: objectApi,
-          placeholder: "Account / IT_Asset__c",
-          onChange: e => setObjectApi(e.target.value)
-        })
-      ),
-      h("label", {className: "insp-file"},
-        h("span", null, "CSV file"),
-        h("input", {
-          type: "file",
-          accept: ".csv,text/csv",
-          onChange: e => onFile(e.target.files && e.target.files[0])
-        })
-      )
-    ),
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("label", {className: "insp-field insp-field-grow"},
-        h("span", null, "…or paste CSV (first line = column headers)"),
-        h("textarea", {
-          rows: 3,
-          value: pasteText,
-          placeholder: "Id,Name,Industry\n001xx…,Acme,Technology",
-          onChange: e => setPasteText(e.target.value)
-        })
-      ),
-      h("button", {
-        className: "btn btn-secondary btn-sm",
-        style: {alignSelf: "flex-end"},
-        disabled: !pasteText.trim(),
-        onClick: loadPasted
-      }, "Load pasted CSV")
-    ),
-    records.length > 0 && h("div", {className: "insp-meta"},
-      `${records.length} data row(s) · ${headers.length} column(s)`
-    ),
-    headers.length > 0 && h("div", {className: "insp-map"},
-      h("div", {className: "insp-map-title"}, "Column → Salesforce field"),
-      h("div", {className: "insp-map-grid"},
-        headers.map(hd =>
-          h("div", {key: hd, className: "insp-map-row"},
-            h("span", {className: "insp-map-csv"}, hd),
-            h("span", {className: "insp-map-arrow"}, "→"),
+    h("div", {className: "dm-layout dm-imp"},
+
+      // ── Left: Import Setup ─────────────────────────────────
+      h("div", {className: "dm-side"},
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_DOC)),
+            h("span", {className: "sq3-card-t"}, "Import Setup")),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Saved imports"),
+            h("select", {
+              value: "",
+              onChange: e => { loadSaved(e.target.value); e.target.value = ""; }
+            },
+              h("option", {value: ""}, saved.length ? "— load —" : "No saved imports"),
+              saved.map(s => h("option", {key: s.label, value: s.label}, s.label))
+            )
+          ),
+          h("div", {className: "soql-save-row"},
             h("input", {
-              value: fieldMap[hd] || "",
-              placeholder: "Field API name",
-              onChange: e => setFieldMap(prev => ({...prev, [hd]: e.target.value}))
-            })
-          )
+              className: "soql-save-input",
+              value: saveLabel,
+              placeholder: "Import name",
+              onChange: e => setSaveLabel(e.target.value),
+              onKeyDown: e => { if (e.key === "Enter") saveCurrent(); }
+            }),
+            h("button", {className: "btn btn-secondary btn-sm", onClick: saveCurrent},
+              "Save Import")
+          ),
+          saved.length > 0 && h("div", {className: "insp-chips-row"},
+            saved.slice(0, 6).map(s =>
+              h("span", {key: s.label, className: "insp-chip-group"},
+                h("button", {className: "insp-chip", title: `${s.objectApi} · ${s.operation}`,
+                  onClick: () => loadSaved(s.label)}, s.label),
+                h("button", {className: "insp-chip-x", title: `Delete "${s.label}"`,
+                  onClick: () => deleteSaved(s.label)}, "×")
+              )
+            )
+          ),
+          history.length > 0 && h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Import history"),
+            h("select", {value: "", onChange: e => {
+              const i = parseInt(e.target.value, 10);
+              if (!isNaN(i) && history[i]) {
+                const hh = history[i];
+                setNote(`History: ${hh.operation} ${hh.objectApi} — ` +
+                  `${fmtNum(hh.ok || 0)} ok / ${fmtNum(hh.failed || 0)} failed ` +
+                  `on ${new Date(hh.ts).toLocaleString()}` +
+                  (hh.jobId ? ` · job ${hh.jobId}` : ""));
+              }
+              e.target.value = "";
+            }},
+              h("option", {value: ""}, "— recent imports —"),
+              history.map((hh, i) => h("option", {key: i, value: String(i)},
+                `${new Date(hh.ts).toLocaleString()} — ${hh.operation} ${hh.objectApi}`))
+            )
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Operation"),
+            h("select", {value: operation, onChange: e => {
+              setOperation(e.target.value);
+              setConfirming(false);
+              setValidation(null);
+            }},
+              FF_IMPORT_OPS.map(o => h("option", {key: o.id, value: o.id,
+                disabled: o.id === "hardDelete" && !hardDeleteSupported}, o.label))
+            )
+          ),
+          operation === "hardDelete" && !hardDeleteSupported &&
+            h("div", {className: "insp-warn"},
+              "Hard Delete needs Bulk API 2.0 — switch the API selector."),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "API"),
+            h("select", {value: apiMode, onChange: e => {
+              setApiMode(e.target.value);
+              if (e.target.value !== "bulk" && operation === "hardDelete") {
+                setOperation("delete");
+              }
+            }},
+              h("option", {value: "data"}, "Data API (batched REST)"),
+              h("option", {value: "bulk"}, "Bulk API 2.0 (ingest job)")
+            )
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Object"),
+            h("input", {
+              value: objectApi,
+              list: "dm-imp-objects",
+              placeholder: "Account / IT_Asset__c",
+              onChange: e => setObjectApi(e.target.value)
+            }),
+            h("datalist", {id: "dm-imp-objects"},
+              recents.map(n => h("option", {key: n, value: n})))
+          ),
+          operation === "upsert" && h("label", {className: "insp-field sq3-field"},
+            h("span", null, "External ID field"),
+            h("select", {value: externalId, onChange: e => setExternalId(e.target.value)},
+              h("option", {value: ""},
+                meta ? "— select —" : "Describe the object first"),
+              externalIdOptions.map(f => h("option", {key: f.name, value: f.name},
+                `${f.name} (${f.label || f.type || ""})`))
+            )
+          ),
+          apiMode === "data" && h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Batch size"),
+            h("input", {type: "number", min: 1, max: 200, value: batchSize,
+              onChange: e => setBatchSize(e.target.value),
+              title: "Records per REST cycle (max 200)"})
+          ),
+          h("div", {className: "sq3-card-sub", style: {marginTop: "8px"}}, "CSV settings"),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Delimiter"),
+            h("select", {value: csvDelimiter, onChange: e => setCsvDelimiter(e.target.value)},
+              h("option", {value: ","}, "Comma ( , )"),
+              h("option", {value: ";"}, "Semicolon ( ; )"),
+              h("option", {value: "\t"}, "Tab"),
+              h("option", {value: "|"}, "Pipe ( | )"))
+          ),
+          h("label", {className: "insp-field sq3-field"},
+            h("span", null, "Line ending (export/upload)"),
+            h("select", {value: csvLineEnding === "\n" ? "\n" : "\r\n",
+              onChange: e => setCsvLineEnding(e.target.value)},
+              h("option", {value: "\r\n"}, "CRLF (Windows)"),
+              h("option", {value: "\n"}, "LF (Unix)"))
+          ),
+          h("label", {className: "sq3-check"},
+            h("input", {type: "checkbox", checked: useFirstRowHeaders,
+              onChange: e => setUseFirstRowHeaders(e.target.checked)}),
+            h("span", null, "Use first row as headers")),
+          h("label", {className: "sq3-check"},
+            h("input", {type: "checkbox", checked: ignoreBlanks,
+              onChange: e => setIgnoreBlanks(e.target.checked)}),
+            h("span", null, "Ignore blank fields")),
+          h("label", {className: "sq3-check"},
+            h("input", {type: "checkbox", checked: autoTrim,
+              onChange: e => setAutoTrim(e.target.checked)}),
+            h("span", null, "Auto-trim spaces")),
+          h("label", {className: "sq3-check"},
+            h("input", {type: "checkbox", checked: allowPartial,
+              onChange: e => setAllowPartial(e.target.checked)}),
+            h("span", null, "Allow partial success"))
         )
-      )
-    ),
-    h("div", {className: "insp-toolbar"},
-      h("button", {
-        className: "btn btn-primary btn-sm",
-        disabled: loading || !records.length,
-        onClick: importRows
-      }, loading ? `Importing…` : `Import ${records.length} row(s)`)
-    ),
-    error && h("div", {className: "insp-error"}, error),
-    result && h("div", {
-      className: result.failed ? "insp-warn" : "insp-ok"
-    },
-      `Imported ${result.ok}/${result.total}` +
-      (result.failed ? ` · ${result.failed} failed` : "") +
-      (result.failures && result.failures.length
-        ? ` — first errors: ${result.failures.join("; ")}`
-        : "")
-    ),
-    records.length > 0 && h("details", {className: "insp-details"},
-      h("summary", null, "Preview CSV"),
-      h("textarea", {
-        className: "insp-csv-preview",
-        readOnly: true,
-        value: csvText.slice(0, 8000)
-      })
+      ),
+
+      // ── Center: Upload & Field Mapping ─────────────────────
+      h("div", {className: "dm-main"},
+        h("div", {className: "sq3-card"},
+          h("div", {className: "insp-card-title", style: {marginBottom: "8px"}},
+            "Upload Data"),
+          h("div", {
+            className: "dm-drop" + (dragOver ? " over" : ""),
+            onDragOver: e => { e.preventDefault(); setDragOver(true); },
+            onDragLeave: () => setDragOver(false),
+            onDrop
+          },
+            h("div", {className: "dm-drop-t"}, "Drag & drop a CSV file here"),
+            h("div", {className: "dm-drop-s"}, "or"),
+            h("label", {className: "insp-file"},
+              h("span", {className: "btn btn-secondary btn-sm"}, "Choose CSV file"),
+              h("input", {
+                type: "file",
+                accept: ".csv,text/csv",
+                style: {display: "none"},
+                onChange: e => onFile(e.target.files && e.target.files[0])
+              })
+            )
+          ),
+          h("div", {className: "dm-paste-row"},
+            h("textarea", {
+              rows: 3,
+              value: pasteText,
+              placeholder: "…or paste CSV here (first line = column headers)\nId,Name,Industry\n001xx…,Acme,Technology",
+              onChange: e => setPasteText(e.target.value)
+            }),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: !pasteText.trim(),
+              onClick: loadPasted
+            }, "Load pasted CSV")
+          ),
+          records.length > 0 && h("div", {className: "dm-stats"},
+            h("span", {className: "dm-stat"},
+              h("b", null, fileName || "pasted.csv")),
+            fileSize > 0 && h("span", {className: "dm-stat"},
+              `${(fileSize / 1024).toFixed(1)} KB`),
+            stats.map(([k, v]) => h("span", {key: k, className: "dm-stat"},
+              h("i", null, k + ": "), v)),
+            h("span", {className: statusPill(validation
+              ? (validation.hardErrors ? "error" : "ok") : "idle")},
+              validation
+                ? (validation.hardErrors ? "Validation: errors" : "Validation: passed")
+                : "Validation: not run")
+          ),
+          parseError && h("div", {className: "insp-error"}, parseError),
+          dupHeaders.length > 0 && h("div", {className: "insp-warn"},
+            `Duplicate CSV header(s): ${dupHeaders.join(", ")} — rename them before importing.`)
+        ),
+
+        // Field mapping
+        headers.length > 0 && h("div", {className: "sq3-card"},
+          h("div", {className: "soql-results-h"},
+            h("div", {className: "insp-card-title"}, "Field Mapping"),
+            h("div", {className: "dm-btn-row"},
+              h("button", {className: "btn btn-secondary btn-sm", onClick: suggestMappings},
+                "Auto-suggest"),
+              h("button", {className: "btn btn-secondary btn-sm",
+                onClick: () => { setFieldMap({}); setValidation(null); }},
+                "Clear all"))),
+          h("div", {className: "dm-map"},
+            h("div", {className: "dm-map-head"},
+              h("span", null, "CSV Column"),
+              h("span", null, "Sample value"),
+              h("span", null, "Salesforce field"),
+              h("span", null, "Status")),
+            headers.map(col => {
+              const sampleRec = records.find(r => String(r[col] || "").trim() !== "");
+              const sample = sampleRec ? String(sampleRec[col]) : "";
+              const st = mappingStatus(col);
+              const fa = fieldMap[col] || "";
+              return h("div", {key: col, className: "dm-map-row"},
+                h("span", {className: "dm-map-csv", title: col}, col),
+                h("span", {className: "dm-map-sample", title: sample},
+                  sample.length > 40 ? sample.slice(0, 40) + "…" : (sample || "—")),
+                h("span", {className: "dm-map-field"},
+                  h("input", {
+                    list: "dm-field-options",
+                    value: fa,
+                    placeholder: "Field API name (type to search)",
+                    onChange: e => setMapping(col, e.target.value)
+                  }),
+                  fa && h("button", {
+                    className: "insp-chip-x",
+                    title: "Clear mapping",
+                    onClick: () => clearMapping(col)
+                  }, "×")),
+                h("span", {className: statusPill(st.kind), title: st.text}, st.text)
+              );
+            })
+          ),
+          h("datalist", {id: "dm-field-options"},
+            fields.map(f => h("option", {key: f.name, value: f.name},
+              `${f.label || f.name} (${f.type || ""})`))),
+          h("div", {className: "dm-tpl-row"},
+            h("input", {
+              value: mapTemplateLabel,
+              placeholder: "Template name",
+              onChange: e => setMapTemplateLabel(e.target.value)
+            }),
+            h("button", {className: "btn btn-secondary btn-sm", onClick: saveTemplate},
+              "Save Template"),
+            mapTemplates.length > 0 && h("select", {
+              value: "",
+              onChange: e => { loadTemplate(e.target.value); e.target.value = ""; }
+            },
+              h("option", {value: ""}, "— load template —"),
+              mapTemplates.map(t => h("option", {key: t.label, value: t.label}, t.label)))),
+          mapTemplates.length > 0 && h("div", {className: "insp-chips-row"},
+            mapTemplates.slice(0, 6).map(t =>
+              h("span", {key: t.label, className: "insp-chip-group"},
+                h("button", {className: "insp-chip", onClick: () => loadTemplate(t.label)},
+                  t.label),
+                h("button", {className: "insp-chip-x",
+                  onClick: () => deleteTemplate(t.label)}, "×"))))
+        ),
+
+        // Validation actions
+        headers.length > 0 && h("div", {className: "sq3-card"},
+          h("div", {className: "soql-results-h"},
+            h("div", {className: "insp-card-title"}, "Validate Data"),
+            h("div", {className: "dm-btn-row"},
+              h("button", {
+                className: "btn btn-primary btn-sm",
+                disabled: loading || !records.length,
+                onClick: validateData
+              }, loading ? "Validating…" : "Validate Data"),
+              validation && validation.issues.length > 0 && h("button", {
+                className: "btn btn-secondary btn-sm",
+                onClick: downloadErrors
+              }, "Download error CSV"),
+              records.length > 0 && h("select", {
+                className: "dm-dupselect",
+                value: dupCheckKey,
+                onChange: e => setDupCheckKey(e.target.value),
+                title: "Client-side duplicate check column"
+              },
+                h("option", {value: ""}, "Duplicate check…"),
+                headers.map(c => h("option", {key: c, value: c}, c))),
+              dupCheckKey && h("button", {
+                className: "btn btn-secondary btn-sm",
+                onClick: runDupCheck
+              }, "Run duplicate check"))),
+          validation && h("div", {className: "dm-valstats"},
+            h("span", {className: "dm-pill dm-pill-ok"},
+              `${fmtNum(validation.okRows)} ok`),
+            h("span", {className: "dm-pill dm-pill-warn"},
+              `${fmtNum(validation.warnRows)} warning(s)`),
+            h("span", {className: "dm-pill dm-pill-error"},
+              `${fmtNum(validation.errorRows)} error(s)`),
+            h("span", {className: "insp-meta"},
+              "Client-side validation is preliminary — Salesforce decides the final result.")),
+          validation && validation.issues.length > 0 && h("div", {className: "insp-table-wrap"},
+            h("table", {className: "insp-table dm-valtable"},
+              h("thead", null, h("tr", null,
+                h("th", null, "Row"), h("th", null, "Field"),
+                h("th", null, "Problem"), h("th", null, "Severity"),
+                h("th", null, "Suggested fix"))),
+              h("tbody", null,
+                validation.issues.slice(0, 100).map((x, i) => h("tr", {key: i},
+                  h("td", null, x.row === 0 ? "—" : x.row),
+                  h("td", null, x.field),
+                  h("td", null, x.problem),
+                  h("td", null, h("span", {className: statusPill(
+                    x.severity === "error" ? "error" : "warn")}, x.severity)),
+                  h("td", null, x.suggestion || "—")))),
+              validation.issues.length > 100 && h("tfoot", null, h("tr", null,
+                h("td", {colSpan: 5},
+                  `Showing 100 of ${validation.issues.length} — download the error CSV for all.`)))))
+        ),
+
+        // Preview table with row indicators
+        previewRows.length > 0 && h("div", {className: "sq3-card"},
+          h("div", {className: "insp-card-title", style: {marginBottom: "8px"}},
+            `Import Preview · first ${previewRows.length} of ${fmtNum(records.length)}`),
+          h("div", {className: "insp-table-wrap"},
+            h("table", {className: "insp-table"},
+              h("thead", null, h("tr", null,
+                h("th", {className: "dm-sev-col"}, ""),
+                h("th", null, "#"),
+                headers.map(c => h("th", {key: c}, c)))),
+              h("tbody", null,
+                previewRows.map((r, i) => {
+                  const sev = previewRowIdx(i);
+                  return h("tr", {key: i,
+                    className: sev === "error" ? "dm-row-error"
+                      : sev === "warn" ? "dm-row-warn" : "",
+                    title: sev === "error" ? "This row has validation errors"
+                      : sev === "warn" ? "This row has validation warnings" : undefined},
+                    h("td", {className: "dm-sev-col"},
+                      sev ? h("span", {className: statusPill(sev), title: sev},
+                        sev === "error" ? "!" : sev === "warn" ? "△" : "✓") : ""),
+                    h("td", null, i + 2),
+                    headers.map(c => h("td", {key: c},
+                      String(r[c] == null ? "" : r[c]).slice(0, 60))));
+                })))),
+          records.length > previewRows.length && h("div", {className: "insp-more"},
+            `Showing first ${previewRows.length} of ${fmtNum(records.length)} rows.`)
+        ),
+
+        note && h("div", {className: "insp-meta"}, note),
+        error && h("div", {className: "insp-error"}, error),
+
+        // The action bar + destructive confirmation live at the end of the
+        // layout (see below), not inside this column — see the note there.
+
+        result && h("div", {
+          className: result.failed ? "insp-warn" : "insp-ok"
+        },
+          `Imported ${fmtNum(result.ok)}/${fmtNum(result.total)} — ` +
+          `${fmtNum(result.failed)} failed` +
+          (result.jobId ? ` · job ${result.jobId}` : "") +
+          (result.failures && result.failures.length
+            ? ` — first errors: ${result.failures.slice(0, 3)
+                .map(f => `row ${f.row}: ${f.message}`).join("; ")}`
+            : "") +
+          (result.failureSample && result.failureSample.length
+            ? ` — failed rows: ${result.failureSample.slice(0, 2).join(" | ")}`
+            : ""))
+      ),
+
+      // ── Right: Execution & Job Tracking ────────────────────
+      h("div", {className: "dm-adv"},
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_ZAP)),
+            h("span", {className: "sq3-card-t"}, "Execution")),
+          h("div", {className: "dm-job"},
+            h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Mode"),
+              h("span", {className: "dm-job-v"},
+                apiMode === "bulk" ? "Bulk API 2.0 ingest" : "Data API (batched REST)")),
+            h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Operation"),
+              h("span", {className: "dm-job-v"}, opDef.label)),
+            h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Object"),
+              h("span", {className: "dm-job-v"}, objectApi.trim() || "—")),
+            apiMode === "data" && h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Batch size"),
+              h("span", {className: "dm-job-v"}, batchSize)),
+            operation === "upsert" && h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "External ID"),
+              h("span", {className: "dm-job-v"}, externalId || "—"))
+          ),
+          apiMode === "data"
+            ? h("div", {className: "sq3-card-sub"},
+                "Records are sent in batches; every success and failure is captured from the individual Salesforce response. Partial success is reported honestly — never as full success.")
+            : h("div", {className: "sq3-card-sub"},
+                "Bulk ingest: create job → upload CSV → close → poll → download result files.")
+        ),
+
+        runJob && h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_CLOCK)),
+            h("span", {className: "sq3-card-t"}, "Import Job")),
+          h("div", {className: "dm-job"},
+            h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Job ID"),
+              h("span", {className: "dm-job-v dm-mono", title: runJob.id},
+                runJob.id || "—"),
+              h("button", {className: "btn btn-secondary btn-sm", onClick: copyJobId},
+                "Copy")),
+            h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Operation"),
+              h("span", {className: "dm-job-v"},
+                (FF_IMPORT_OPS.find(o => o.id === runJob.operation) || {}).label ||
+                runJob.operation)),
+            h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Object"),
+              h("span", {className: "dm-job-v"}, runJob.object || "—")),
+            h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "API"),
+              h("span", {className: "dm-job-v"}, runJob.api || "Bulk 2.0")),
+            h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Status"),
+              h("span", {className: "dm-job-v dm-state dm-state-" +
+                String(runJob.state || "").toLowerCase()},
+                runJob.state || "—")),
+            runJob.numberRecordsProcessed != null && h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Processed"),
+              h("span", {className: "dm-job-v"},
+                fmtNum(runJob.numberRecordsProcessed))),
+            runJob.numberRecordsFailed != null && h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Failed"),
+              h("span", {className: "dm-job-v"},
+                fmtNum(runJob.numberRecordsFailed))),
+            runJob.createdDate && h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Started"),
+              h("span", {className: "dm-job-v"}, fmtDateTime(runJob.createdDate))),
+            runJob.completedDate && h("div", {className: "dm-job-row"},
+              h("span", {className: "dm-job-k"}, "Completed"),
+              h("span", {className: "dm-job-v"}, fmtDateTime(runJob.completedDate))),
+            h("div", {className: "dm-btn-row"},
+              h("button", {
+                className: "btn btn-secondary btn-sm",
+                disabled: bulkBusy || ["JobComplete", "Failed", "Aborted"].includes(runJob.state),
+                onClick: cancelJob
+              }, bulkBusy ? "Cancelling…" : "Cancel Job"))
+          ),
+          bulkError && h("div", {className: "insp-error"}, bulkError),
+          resultFiles && h("div", {className: "dm-resultfiles"},
+            h("div", {className: "sq3-card-sub"}, "Result files (from Salesforce)"),
+            h("button", {className: "btn btn-secondary btn-sm",
+              onClick: () => downloadResultFile("success")},
+              "Download successful records"),
+            h("button", {className: "btn btn-secondary btn-sm",
+              onClick: () => downloadResultFile("failed")},
+              "Download failed records"),
+            h("button", {className: "btn btn-secondary btn-sm",
+              onClick: () => downloadResultFile("unprocessed")},
+              "Download unprocessed records"))
+        ),
+
+        h("div", {className: "sq3-card"},
+          h("div", {className: "sq3-card-h"},
+            h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_BOOKMARK)),
+            h("span", {className: "sq3-card-t"}, "Security notes")),
+          h("ul", {className: "dm-security"},
+            h("li", null, "Runs on your existing Salesforce session — no tokens stored."),
+            h("li", null, "CRUD/FLS still apply: Salesforce rejects what you can't do."),
+            h("li", null, "Destructive operations always ask for confirmation."),
+            h("li", null, "Saved configs are scoped to this org (localStorage key suffix)."))
+        )
+      ),
+
+      // ── Action bar (spans the full layout) ─────────────────
+      // It used to sit inside the centre column, whose height is smaller than
+      // the row: once the page scrolled past that column the bar scrolled out
+      // of the viewport and the Run button became unreachable. As its own
+      // full-width row at the end of the grid it is always the last thing in
+      // the scroll range, so it is reachable at every scroll position (and
+      // becomes a fixed bottom bar below 860px, where the columns stack).
+      h("div", {className: "dm-runbar"},
+        h("button", {
+          className: "btn btn-primary",
+          disabled: running || bulkBusy || !records.length,
+          onClick: onClickRun,
+          "data-testid": "dm-import-run"
+        },
+          running || bulkBusy
+            ? (apiMode === "bulk" ? "Bulk job running…" : `Importing…`)
+            : (confirming
+              ? `Click again to confirm ${opDef.label} of ${fmtNum(records.length)} rows`
+              : `${opDef.label} ${fmtNum(records.length)} row(s)`)),
+        confirming && h("button", {
+          className: "btn btn-secondary",
+          onClick: () => setConfirming(false)
+        }, "Cancel"),
+        needsConfirm && !confirming && h("span", {className: "insp-meta"},
+          "Destructive operation — you'll be asked to confirm.")),
+      needsConfirm && confirming && h("div", {className: "dm-danger"},
+        h("div", {className: "dm-danger-t"},
+          `Confirm ${opDef.label}: ${records.length} ${objectApi.trim()} record(s)`),
+        h("div", {className: "dm-danger-b"},
+          opDef.recoverable
+            ? "Deleted records go to the Salesforce Recycle Bin and can be restored within 15 days (subject to org setup)."
+            : "Hard Delete removes records permanently — they bypass the Recycle Bin and CANNOT be recovered."),
+        h("div", {className: "dm-danger-b"},
+          `API: ${apiMode === "bulk" ? "Bulk 2.0" : "Data API"} · ` +
+          "No automatic retries will be attempted for this operation."))
     )
   );
 }
@@ -8904,35 +11155,61 @@ function CoverageTab() {
     }
   };
 
-  return h(React.Fragment, null,
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("button", {
-        className: "btn btn-primary btn-sm",
-        disabled: running,
-        title: "Run all org tests, then reload the table",
-        onClick: () => runTests({testLevel: "RunLocalTests"}, "all tests")
-      }, running ? "Running…" : "Run All Tests"),
-      runMsg && h("span", {className: "insp-meta"}, runMsg),
-      filterNote && h("span", {className: "insp-meta"}, filterNote)
-    ),
-    running && h("div", {className: "cov-progress"},
-      h("div", {className: "cov-progress-fill"})
-    ),
-    h("div", {className: "insp-toolbar insp-toolbar-wrap"},
-      h("div", {className: "ff-multi", style: {flex: 1}},
-        h("label", {className: "insp-field insp-field-grow"},
-          h("span", null, "Test class name"),
-          h("input", {
-            value: quickName,
-            placeholder: "Type to search classes…",
-            disabled: running,
-            onChange: e => { setQuickName(e.target.value); searchClasses(e.target.value); },
-            onKeyDown: e => {
-              if (e.key === "Enter") quickRun();
-              if (e.key === "Escape") setSuggestOpen(false);
-            }
-          })),
-        suggestOpen && h("div", {className: "ff-multi-panel"},
+  // ─── Dashboard shell — presentation only. Every query, threshold and
+  //     handler above is exactly what the coverage tab always used.
+  const runAll = () => runTests({testLevel: "RunLocalTests"}, "all tests");
+
+  return h("div", {className: "covdash"},
+    h("aside", {className: "covdash-side"},
+      h("div", {className: "covdash-side-head"},
+        h("span", {className: "covdash-side-ico", "aria-hidden": "true"}, "</>"),
+        h("div", {className: "covdash-side-id"},
+          h("h2", {className: "covdash-side-t"}, "Code Coverage"),
+          h("p", {className: "covdash-side-sub"},
+            "View and analyse Apex code coverage for your org.")
+        )
+      ),
+      h("div", {className: "covdash-split"},
+        h("button", {
+          className: "covdash-run",
+          disabled: running,
+          title: "Run all org tests, then reload the table",
+          onClick: runAll
+        },
+          h("span", {className: "covdash-run-ico", "aria-hidden": "true"}, "▶"),
+          running ? "Running…" : "Run All Tests"),
+        h("button", {
+          className: "covdash-run-chev",
+          disabled: running,
+          tabIndex: -1,
+          "aria-label": "Run all org tests",
+          title: "Run all org tests, then reload the table",
+          onClick: runAll
+        }, "▾")
+      ),
+      running && h("div", {className: "cov-progress"},
+        h("div", {className: "cov-progress-fill"})
+      ),
+      (runMsg || filterNote) && h("div", {className: "covdash-status"},
+        runMsg && h("p", null, runMsg),
+        filterNote && h("p", {className: "covdash-status-note"}, filterNote)
+      ),
+      h("hr", {className: "covdash-rule"}),
+      h("h3", {className: "covdash-side-h"}, "Run specific test class"),
+      h("div", {className: "ff-multi covdash-search"},
+        h("input", {
+          className: "covdash-input",
+          value: quickName,
+          placeholder: "Search test class…",
+          "aria-label": "Search test class",
+          disabled: running,
+          onChange: e => { setQuickName(e.target.value); searchClasses(e.target.value); },
+          onKeyDown: e => {
+            if (e.key === "Enter") quickRun();
+            if (e.key === "Escape") setSuggestOpen(false);
+          }
+        }),
+        suggestOpen && h("div", {className: "ff-multi-panel covdash-panel"},
           h("div", {className: "ff-multi-list"},
             suggest.map(c => h("button", {
               key: c.Id,
@@ -8943,18 +11220,19 @@ function CoverageTab() {
             }, c.Name)),
             suggest.length === 0 && h("div", {className: "insp-empty"}, "No matching classes")
           )
-        )),
+        )
+      ),
       h("button", {
-        className: "btn btn-secondary btn-sm",
+        className: "covdash-runclass",
         disabled: running || !quickName.trim(),
         title: "Find the class and run its tests",
         onClick: quickRun
-      }, "Run Class")
+      },
+        h("span", {className: "covdash-run-ico", "aria-hidden": "true"}, "▶"),
+        "Run Class")
     ),
-    h(OrgLogCard, {
+    h(CoverageDataPanel, {
       key: "cov-" + seq,
-      icon: "📊",
-      title: "Code Coverage",
       tooling: true,
       soql: "SELECT ApexClassOrTriggerId, ApexClassOrTrigger.Name, NumLinesCovered, NumLinesUncovered, LastModifiedDate FROM ApexCodeCoverageAggregate ORDER BY ApexClassOrTrigger.Name",
       postFetch: async (rows) => {
@@ -8981,49 +11259,287 @@ function CoverageTab() {
       emptyText: "No coverage data yet — run your tests first.",
       placeholder: (n) => `Filter ${fmtNum(n)} classes…`,
       match: (r, needle) => nm(r).toLowerCase().includes(needle),
-      stats: (rows) => {
-        let c = 0, u = 0, ok = 0;
-        rows.forEach(r => {
-          c += r.NumLinesCovered || 0;
-          u += r.NumLinesUncovered || 0;
-          const p = pctOf(r);
-          if (p != null && p >= 76) ok++;
-        });
-        const avg = c + u > 0 ? Math.round(c / (c + u) * 100) : null;
-        return [
-          ["Listed", fmtNum(rows.length)],
-          ["Overall", avg == null ? "—" : avg + "%"],
-          ["Above 76%", fmtNum(ok)]
-        ];
-      },
-      row: (r, ctx) => {
-        const p = pctOf(r);
-        const good = p != null && p >= 76;
-        const key = r.ApexClassOrTriggerId || nm(r);
-        const total = (r.NumLinesCovered || 0) + (r.NumLinesUncovered || 0);
-        const line = `${nm(r)} — ${p == null ? "n/a" : p + "%"} (${fmtNum(r.NumLinesCovered || 0)}/${fmtNum(total)} lines)`;
-        return h("div", {
-          key,
-          className: "perm-row cov-" + (good ? "ok" : "bad"),
-          title: "Click to copy: " + line,
-          onClick: () => ctx.copy(key, line)
-        },
-          h("span", {className: "perm-l"}, nm(r)),
-          r._isTrigger && h(FFBadge, {kind: "off"}, "trigger"),
-          h(FFBadge, {kind: p == null ? "off" : good ? "ok" : "err"}, p == null ? "n/a" : p + "%"),
-          h("span", {className: "perm-n"},
-            ctx.copied === key ? "✓ copied" : `${fmtNum(r.NumLinesCovered || 0)}/${fmtNum(total)} lines`),
-          !r._isTrigger && h("button", {
-            className: "field-action-btn",
-            title: `Run tests in ${nm(r)}`,
-            onClick: (e) => {
-              e.stopPropagation();
-              runTests({tests: [{classId: r.ApexClassOrTriggerId}]}, nm(r), nm(r));
-            }
-          }, running ? "…" : "Run")
-        );
-      }
+      nameOf: nm,
+      pctOf,
+      running,
+      runRow: (r) => runTests({tests: [{classId: r.ApexClassOrTriggerId}]}, nm(r), nm(r))
     })
+  );
+}
+
+// ─── Code Coverage dashboard body ─────────────────────────────────────────
+// Same data flow as OrgLogCard (load → postFetch → filter → copy → run),
+// rendered as a summary card plus a sortable, paginated table. Nothing here
+// changes what is queried or counted: "Above 75%" is still coverage >= 76%.
+const COV_PAGE_SIZE = 10;
+
+// Relative "Last updated" label, derived from the rows' LastModifiedDate.
+function covAgo(ms) {
+  if (!ms) return "—";
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return "Just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+
+function CoverageDataPanel({tooling, soql, postFetch, emptyText, placeholder,
+  match, nameOf, pctOf, running, runRow}) {
+  const [rows, setRows] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [filter, setFilter] = React.useState("");
+  const [copied, setCopied] = React.useState(null);
+  const [sortDir, setSortDir] = React.useState(0); // 0 = the SOQL name order
+  const [page, setPage] = React.useState(1);
+  const [, setTick] = React.useState(0);
+
+  const load = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await sfConn.rest(`/services/data/v${apiVersion}/${tooling ? "tooling/" : ""}query/?q=` +
+        encodeURIComponent(soql), {useCache: false});
+      let recs = (res && res.records) || [];
+      if (postFetch) recs = await postFetch(recs);
+      setRows(recs);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  React.useEffect(() => { load(); }, []);
+  // "Last updated" ages along on its own — no extra query.
+  React.useEffect(() => {
+    const t = setInterval(() => setTick(v => v + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const copy = (key, text) => {
+    try { safeCopyText(text); } catch (e) { /* ignore */ }
+    setCopied(key);
+    setTimeout(() => setCopied(null), 1200);
+  };
+
+  const list = rows || [];
+  const needle = filter.trim().toLowerCase();
+  const shown = needle ? list.filter(r => match(r, needle)) : list;
+
+  const linesOf = (r) => (r.NumLinesCovered || 0) + (r.NumLinesUncovered || 0);
+
+  // Summary maths — the numbers the old stats list showed, as tiles.
+  let cov = 0, uncov = 0, ok = 0, low = 0;
+  list.forEach(r => {
+    cov += r.NumLinesCovered || 0;
+    uncov += r.NumLinesUncovered || 0;
+    const p = pctOf(r);
+    if (p == null) return;
+    if (p >= 76) ok++; else low++;
+  });
+  const allLines = cov + uncov;
+  const avg = allLines > 0 ? Math.round(cov / allLines * 100) : null;
+  const share = (n) => list.length ? Math.round(n / list.length * 100) : 0;
+  const lastMs = list.reduce((m, r) => Math.max(m, Date.parse(r.LastModifiedDate) || 0), 0);
+
+  // Client-side coverage sort (name order stays the default) + pagination.
+  const sorted = sortDir
+    ? shown.slice().sort((a, b) => {
+        const pa = pctOf(a), pb = pctOf(b);
+        if (pa == null && pb == null) return 0;
+        if (pa == null) return 1; // n/a sinks to the bottom either way
+        if (pb == null) return -1;
+        return (pa - pb) * sortDir;
+      })
+    : shown;
+  const pages = Math.max(1, Math.ceil(sorted.length / COV_PAGE_SIZE));
+  const cur = Math.min(page, pages);
+  const slice = sorted.slice((cur - 1) * COV_PAGE_SIZE, cur * COV_PAGE_SIZE);
+  const firstIdx = sorted.length ? (cur - 1) * COV_PAGE_SIZE + 1 : 0;
+  const lastIdx = Math.min(cur * COV_PAGE_SIZE, sorted.length);
+
+  // Windowed pager — 1 2 3 4 5 … 9 for a 9-page list on page 1.
+  const pageNums = [];
+  if (pages <= 7) {
+    for (let p = 1; p <= pages; p++) pageNums.push(p);
+  } else {
+    const start = Math.max(1, Math.min(cur - 2, pages - 4));
+    const end = Math.min(pages, start + 4);
+    if (start > 1) pageNums.push("…");
+    for (let p = start; p <= end; p++) pageNums.push(p);
+    if (end < pages) pageNums.push("…");
+  }
+
+  const tiles = [
+    {key: "total", ico: "📄", tone: "blue", label: "Total Classes",
+      value: fmtNum(list.length), sub: "Classes & Triggers"},
+    {key: "above", ico: "✅", tone: "green", label: "Above 75%",
+      value: fmtNum(ok), sub: `${share(ok)}% of total`, bar: share(ok)},
+    {key: "below", ico: "❌", tone: "red", label: "Below 75%",
+      value: fmtNum(low), sub: `${share(low)}% of total`, bar: share(low)},
+    {key: "overall", ico: "📈", tone: "violet", label: "Overall Coverage",
+      value: avg == null ? "—" : avg + "%", bar: avg == null ? 0 : avg}
+  ];
+
+  return h("div", {className: "covdash-main"},
+    h("section", {className: "covdash-card"},
+      h("div", {className: "covdash-sum-h"},
+        h("span", {className: "covdash-sum-ico", "aria-hidden": "true"}, "📊"),
+        h("h2", {className: "covdash-sum-t"}, "Code Coverage Summary"),
+        h("span", {
+          className: "covdash-i",
+          title: "Per-class coverage from ApexCodeCoverageAggregate — refreshed after every test run."
+        }, "i"),
+        h("span", {className: "covdash-tip"},
+          h("span", {className: "covdash-tip-i", "aria-hidden": "true"}, "i"),
+          "Coverage trend means how overall code coverage changes over time across test runs."),
+        h("div", {className: "audit-actions"},
+          h("span", {className: "covdash-at"}, "Last updated: " + covAgo(lastMs)),
+          h("button", {
+            className: "covdash-refresh",
+            disabled: busy,
+            title: "Reload the coverage table",
+            onClick: load
+          },
+            h("span", {"aria-hidden": "true"}, "⟳ "),
+            busy ? (rows ? "Refreshing…" : "Loading…") : "Refresh")
+        )
+      ),
+      error && h("div", {className: "insp-error"}, error),
+      rows === null && !error &&
+        h("div", {className: "insp-status-info"}, "Loading code coverage…"),
+      rows !== null && h("div", {className: "covdash-tiles"},
+        tiles.map(t => h("div", {key: t.key, className: "covdash-tile cov-tone-" + t.tone},
+          h("div", {className: "covdash-tile-top"},
+            h("span", {className: "covdash-tile-ico", "aria-hidden": "true"}, t.ico),
+            h("span", {className: "covdash-tile-label"}, t.label)),
+          h("div", {className: "covdash-tile-val"}, t.value),
+          t.sub && h("div", {className: "covdash-tile-sub"}, t.sub),
+          t.bar != null && h("div", {className: "covdash-bar"},
+            h("div", {
+              className: "covdash-bar-fill",
+              style: {width: Math.max(0, Math.min(100, t.bar)) + "%"}
+            }))
+        ))
+      )
+    ),
+    h("section", {className: "covdash-card"},
+      h("div", {className: "covdash-tab-h"},
+        h("h3", {className: "covdash-tab-t"}, `Classes & Triggers (${fmtNum(list.length)})`),
+        rows !== null && list.length > 0 && h("input", {
+          className: "covdash-filter",
+          type: "search",
+          placeholder: placeholder(list.length),
+          "aria-label": "Filter classes",
+          value: filter,
+          onChange: (e) => { setFilter(e.target.value); setPage(1); }
+        })
+      ),
+      rows === null && !error &&
+        h("div", {className: "insp-status-info"}, "Loading rows…"),
+      rows !== null && list.length === 0 &&
+        h("div", {className: "insp-empty"}, emptyText || "No records found."),
+      rows !== null && list.length > 0 && (slice.length === 0
+        ? h("div", {className: "insp-empty"}, "No matches")
+        : h("div", {className: "covdash-tablewrap"},
+          h("table", {className: "covdash-table"},
+            h("thead", null,
+              h("tr", null,
+                h("th", {className: "covdash-c-n", scope: "col"}, "#"),
+                h("th", {scope: "col"}, "Name"),
+                h("th", {className: "covdash-c-type", scope: "col"}, "Type"),
+                h("th", {className: "covdash-c-num", scope: "col"}, "Lines"),
+                h("th", {className: "covdash-c-num", scope: "col"}, "Covered"),
+                h("th", {
+                  className: "covdash-c-cov" + (sortDir ? " sorted" : ""),
+                  scope: "col",
+                  title: "Sort by coverage",
+                  onClick: () => { setSortDir(d => d === 1 ? -1 : 1); setPage(1); }
+                },
+                  "Coverage ",
+                  h("span", {"aria-hidden": "true"},
+                    sortDir ? (sortDir === 1 ? "▲" : "▼") : "⇅")),
+                h("th", {className: "covdash-c-act", scope: "col"}, "Actions")
+              )
+            ),
+            h("tbody", null,
+              slice.map((r, i) => {
+                const p = pctOf(r);
+                const key = r.ApexClassOrTriggerId || nameOf(r);
+                const total = linesOf(r);
+                const line = `${nameOf(r)} — ${p == null ? "n/a" : p + "%"} ` +
+                  `(${fmtNum(r.NumLinesCovered || 0)}/${fmtNum(total)} lines)`;
+                const tone = p == null ? "none" : p >= 76 ? "ok" : p < 1 ? "bad" : "warn";
+                return h("tr", {
+                  key,
+                  className: "covdash-row covt-" + tone,
+                  title: "Click to copy: " + line,
+                  onClick: () => copy(key, line)
+                },
+                  h("td", {className: "covdash-c-n"}, fmtNum(firstIdx + i)),
+                  h("td", {className: "covdash-name"},
+                    h("span", {className: "covdash-name-t"}, nameOf(r)),
+                    copied === key && h("span", {className: "covdash-copied"}, "✓ copied")),
+                  h("td", {className: "covdash-c-type"},
+                    r._isTrigger ? "Apex Trigger" : "Apex Class"),
+                  h("td", {className: "covdash-c-num"}, fmtNum(r.NumLinesCovered || 0)),
+                  h("td", {className: "covdash-c-num"}, fmtNum(total)),
+                  h("td", {className: "covdash-c-cov"},
+                    h("span", {className: "covdash-pct"}, p == null ? "n/a" : p + "%"),
+                    h("span", {className: "covdash-rowbar"},
+                      h("span", {
+                        className: "covdash-rowbar-fill",
+                        style: {width: (p == null ? 0 : p) + "%"}
+                      }))),
+                  h("td", {className: "covdash-c-act"},
+                    r._isTrigger
+                      ? h("span", {
+                          className: "covdash-noact",
+                          title: "Triggers are covered through their test classes — run the class instead"
+                        }, "—")
+                      : h("button", {
+                          className: "covdash-runbtn",
+                          title: `Run tests in ${nameOf(r)}`,
+                          onClick: (e) => {
+                            e.stopPropagation();
+                            runRow(r);
+                          }
+                        }, running ? "…" : "Run"))
+                );
+              })
+            )
+          ),
+          list.length >= 200 &&
+            h("div", {className: "perm-more"}, "Showing the newest 200 rows.")
+        )),
+      sorted.length > 0 && h("div", {className: "covdash-foot"},
+        h("span", {className: "covdash-foot-t"},
+          `Showing ${fmtNum(firstIdx)}–${fmtNum(lastIdx)} of ${fmtNum(sorted.length)} classes`),
+        pages > 1 && h("div", {className: "covdash-pager"},
+          h("button", {
+            className: "covdash-page covdash-step",
+            disabled: cur <= 1,
+            "aria-label": "Previous page",
+            onClick: () => setPage(cur - 1)
+          }, "‹"),
+          pageNums.map((pn, i) => pn === "…"
+            ? h("span", {key: "d" + i, className: "covdash-page-dots"}, "…")
+            : h("button", {
+                key: pn,
+                className: "covdash-page" + (pn === cur ? " cur" : ""),
+                "aria-label": "Page " + pn,
+                "aria-current": pn === cur ? "page" : undefined,
+                onClick: () => setPage(pn)
+              }, pn)),
+          h("button", {
+            className: "covdash-page covdash-step",
+            disabled: cur >= pages,
+            "aria-label": "Next page",
+            onClick: () => setPage(cur + 1)
+          }, "›")
+        )
+      )
+    )
   );
 }
 
