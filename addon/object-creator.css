@@ -5,9 +5,6 @@
 }
 
 body {
-  font-family: var(--font-ui);
-  background: #f3f2f2;
-  color: #333;
   height: 100vh;
   overflow: hidden;
 }
@@ -23,8 +20,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 20px;
-  background: #032d60;
   color: #fff;
   flex-shrink: 0;
 }
@@ -46,18 +41,7 @@ body {
 }
 
 .app-title {
-  font-size: 18px;
-  font-weight: 700;
   margin: 0;
-}
-
-.app-title-accent {
-  color: #38bdf8;
-}
-
-.app-subtitle {
-  font-size: 12px;
-  opacity: 0.8;
 }
 
 .user-info {
@@ -82,18 +66,11 @@ body {
   background: rgba(255,255,255,0.15);
   border: 1px solid rgba(255,255,255,0.3);
   color: #fff;
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
   font-family: var(--font-ui);
   white-space: nowrap;
-}
-
-.header-btn:hover {
-  background: rgba(255,255,255,0.3);
 }
 
 /* History Panel */
@@ -204,7 +181,6 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-width: 0;
 }
 
 .chat-messages {
@@ -274,11 +250,6 @@ body {
   margin-bottom: 2px;
   padding: 1px 7px;
   border-radius: 999px;
-}
-
-.user-avatar {
-  color: #0070d2;
-  background: rgba(0, 112, 210, 0.09);
 }
 
 .assistant-avatar {
@@ -1105,24 +1076,6 @@ td .plan-cell-input {
   padding: 4px;
 }
 
-.visibility-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed #d8dde6;
-}
-
-.visibility-actions .btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.app-section {
-  margin-top: 10px;
-}
-
 .app-section-hint {
   font-size: 11px;
   color: #54698d;
@@ -1139,11 +1092,6 @@ td .plan-cell-input {
   border: 1px solid #e3edfb;
   border-radius: 8px;
   padding: 8px 12px;
-}
-
-.app-picker {
-  max-height: 160px;
-  margin-bottom: 8px;
 }
 
 .app-empty-msg {
@@ -1175,64 +1123,27 @@ td .plan-cell-input {
   margin-bottom: 6px;
 }
 
-.targets-selected {
-  font-size: 11px;
-  color: #2e844a;
-  font-weight: 600;
-  margin-top: 6px;
-}
-
 /* Buttons */
 .btn {
   padding: 6px 13px;
-  border-radius: 7px;
-  font-size: 12px;
-  font-weight: 600;
   cursor: pointer;
   border: 1px solid transparent;
   white-space: nowrap;
   line-height: 1.45;
-  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
 }
 
 .btn-sm {
   padding: 4px 10px;
-  font-size: 11px;
   border-radius: 6px;
 }
 
 .btn-primary {
-  background: #0176d3;
   color: #fff;
-  border-color: #0176d3;
-  box-shadow: 0 1px 2px rgba(1, 44, 103, 0.28);
-}
-
-.btn-primary:hover {
-  background: #014486;
-  border-color: #014486;
-}
-
-.btn-primary:active {
-  background: #003d75;
 }
 
 .btn-primary:disabled {
-  background: #9dc9f2;
-  border-color: #9dc9f2;
   box-shadow: none;
   cursor: not-allowed;
-}
-
-.btn-secondary {
-  background: #fff;
-  color: #0176d3;
-  border-color: #c9d8ec;
-}
-
-.btn-secondary:hover {
-  background: #f3f8ff;
-  border-color: #0176d3;
 }
 
 .btn-secondary:disabled {
@@ -1280,7 +1191,6 @@ td .plan-cell-input {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  background: #f4f7fb;
   color: #1e2a3d;
   color-scheme: light;
   padding: 14px 18px 26px;
@@ -1290,16 +1200,9 @@ td .plan-cell-input {
   flex-shrink: 0;
   text-align: center;
   font-size: 11px;
-  color: #8894a8;
-  background: #f4f7fb;
   border-top: 1px solid #e6ebf3;
   padding: 6px 8px;
   user-select: none;
-}
-
-.insp-root {
-  max-width: 1600px;
-  margin: 0 auto;
 }
 
 /* Nav + scroller shell — the pill bar sits outside the scroller so the
@@ -1313,7 +1216,6 @@ td .plan-cell-input {
   max-width: 1600px;
   width: 100%;
   margin: 0 auto;
-  background: #f4f7fb;
 }
 
 .insp-tabs {
@@ -1323,7 +1225,6 @@ td .plan-cell-input {
   border: 1px solid #e2e8f2;
   border-radius: 10px;
   padding: 4px;
-  background: #e9eef6;
   color: #1e2a3d;
   color-scheme: light;
   overflow-x: auto;
@@ -1335,24 +1236,13 @@ td .plan-cell-input {
   background: transparent;
   border: none;
   border-radius: 7px;
-  color: #54698d;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 7px 13px;
   cursor: pointer;
   white-space: nowrap;
   font-family: var(--font-ui);
   transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.insp-tab.active {
-  color: #032d60;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.14);
-}
-
 .insp-tab:hover:not(.active) {
-  color: #0176d3;
   background: rgba(255, 255, 255, 0.65);
 }
 
@@ -1362,19 +1252,14 @@ td .plan-cell-input {
 }
 
 .insp-panel {
-  background: #fff;
   border: 1px solid #e6ebf3;
-  border-radius: 12px;
   padding: 16px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.05);
 }
 
 .insp-toolbar {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
   margin-bottom: 12px;
-  flex-wrap: wrap;
 }
 
 .insp-toolbar-wrap {
@@ -1395,8 +1280,7 @@ td .plan-cell-input {
 }
 
 .insp-field input,
-.insp-field select,
-.insp-map-row input {
+.insp-field select {
   font-size: 12px;
   padding: 6px 9px;
   border: 1px solid #cfd8e6;
@@ -1410,7 +1294,6 @@ td .plan-cell-input {
 
 .insp-field input:focus,
 .insp-field select:focus,
-.insp-map-row input:focus,
 .insp-soql:focus {
   outline: none;
   border-color: #0176d3;
@@ -1433,18 +1316,6 @@ td .plan-cell-input {
   outline: none;
   border-color: #0176d3;
   box-shadow: 0 0 0 3px rgba(1, 118, 211, 0.18);
-}
-
-.insp-field-checks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  max-height: 160px;
-  overflow: auto;
-  border: 1px solid #d8dde6;
-  border-radius: 4px;
-  padding: 8px;
-  background: #fafaf9;
 }
 
 .insp-check {
@@ -1502,12 +1373,6 @@ td .plan-cell-input {
   color: #0070d2;
 }
 
-.insp-detail {
-  margin-top: 12px;
-  border-top: 1px solid #d8dde6;
-  padding-top: 10px;
-}
-
 .insp-blank {
   color: #918f8d;
   font-style: italic;
@@ -1520,12 +1385,6 @@ td .plan-cell-input {
   margin-bottom: 8px;
   flex-wrap: wrap;
   font-size: 11px;
-}
-
-.insp-chips-label {
-  color: #54698d;
-  font-weight: 600;
-  white-space: nowrap;
 }
 
 .insp-chips {
@@ -1588,21 +1447,6 @@ td .plan-cell-input {
   background: #feefee;
 }
 
-.insp-chips-filter {
-  font-size: 11px;
-  padding: 3px 8px;
-  border: 1px solid #c9c7c5;
-  border-radius: 12px;
-  font-family: var(--font-ui);
-  min-width: 110px;
-}
-
-.insp-chips-filter:focus {
-  outline: none;
-  border-color: #0176d3;
-  box-shadow: 0 0 0 3px rgba(1, 118, 211, 0.18);
-}
-
 .insp-log {
   font-family: var(--font-code);
   font-size: 11px;
@@ -1634,12 +1478,6 @@ td .plan-cell-input {
 
 .insp-nowrap {
   white-space: nowrap;
-}
-
-.insp-wrap {
-  white-space: pre-wrap;
-  word-break: break-word;
-  min-width: 200px;
 }
 
 .insp-fix {
@@ -1740,13 +1578,6 @@ td .plan-cell-input {
 .apex-ai-toggle.is-on .apex-ai-thumb {
   transform: translateX(15px);
 }
-
-.apex-ai-hint {
-  font-size: 11px;
-  color: #7c6f9b;
-  font-style: italic;
-  align-self: center;
-}
 /* The SOQL textarea is a transparent overlay above .soql-hl (see the shared
    code-editor block) — it keeps the shared mono metrics so the mirror below
    stays pixel-aligned. */
@@ -1777,7 +1608,6 @@ td .plan-cell-input {
 
 .insp-meta {
   font-size: 11px;
-  color: #54698d;
   margin-bottom: 8px;
 }
 
@@ -1822,15 +1652,10 @@ td .plan-cell-input {
 .insp-table-wrap {
   overflow: auto;
   max-height: 420px;
-  border: 1px solid #e6ebf3;
-  border-radius: 10px;
-  background: #fff;
 }
 
 .insp-table {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 11px;
 }
 
 .insp-table th {
@@ -1869,45 +1694,6 @@ td .plan-cell-input {
   padding: 6px 8px;
 }
 
-.insp-map {
-  margin-bottom: 10px;
-}
-
-.insp-map-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: #444;
-  margin-bottom: 6px;
-}
-
-.insp-map-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 200px;
-  overflow: auto;
-}
-
-.insp-map-row {
-  display: grid;
-  grid-template-columns: 1fr 16px 1fr;
-  gap: 6px;
-  align-items: center;
-  font-size: 11px;
-}
-
-.insp-map-csv {
-  color: #54698d;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.insp-map-arrow {
-  text-align: center;
-  color: #706e6b;
-}
-
 .insp-details {
   margin-top: 8px;
   font-size: 12px;
@@ -1943,33 +1729,6 @@ td .plan-cell-input {
   font-weight: 700;
   margin-bottom: 10px;
   color: #032d60;
-}
-
-.insp-kv-row {
-  display: grid;
-  grid-template-columns: 170px 1fr;
-  gap: 12px;
-  font-size: 12.5px;
-  padding: 7px 0;
-  border-bottom: 1px solid #f1f4f9;
-}
-
-.insp-kv-row:last-child {
-  border-bottom: none;
-}
-
-.insp-kv-k {
-  color: #6b7a90;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding-top: 2px;
-}
-
-.insp-kv-v {
-  color: #1e2a3d;
-  word-break: break-word;
 }
 
 .insp-lookup-list {
@@ -2267,17 +2026,6 @@ td .plan-cell-input {
   margin-bottom: 6px;
 }
 
-.logs-ai-text {
-  white-space: pre-wrap;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #2e2e2e;
-  background: #fff;
-  border: 1px solid #e5e5e5;
-  border-radius: 4px;
-  padding: 8px;
-}
-
 .logs-chat {
   display: flex;
   flex-direction: column;
@@ -2362,7 +2110,6 @@ td .plan-cell-input {
   font: inherit;
   font-size: 13px;
   color: #181818;
-  background: #fff;
   border: 1px solid #0070d2;
   border-radius: 6px;
   padding: 5px 8px;
@@ -2415,7 +2162,6 @@ input[type="checkbox"].insp-edit-input {
 
 /* ─── Theme refresh (light) ─────────────────────────────────────────── */
 .app-header {
-  background: linear-gradient(180deg, #04307a 0%, #032d60 100%);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
@@ -2450,14 +2196,6 @@ input[type="checkbox"].insp-edit-input {
   background: #f4f8ff;
 }
 
-.insp-detail {
-  border: 1px solid #e6ebf3;
-  border-radius: 10px;
-  background: #fff;
-  color: #1e2a3d;
-  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
-}
-
 .insp-toolbar {
   gap: 10px;
   flex-wrap: wrap;
@@ -2475,31 +2213,24 @@ button:focus-visible {
   outline-offset: 1px;
 }
 
-.insp-meta {
-  color: #706e6b;
-}
-
 .history-panel,
 .enhance-preview {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
 .insp-table-wrap::-webkit-scrollbar,
-.insp-detail::-webkit-scrollbar,
 .logs-list::-webkit-scrollbar {
   height: 8px;
   width: 8px;
 }
 
 .insp-table-wrap::-webkit-scrollbar-thumb,
-.insp-detail::-webkit-scrollbar-thumb,
 .logs-list::-webkit-scrollbar-thumb {
   background: #c9c7c5;
   border-radius: 4px;
 }
 
 .insp-table-wrap::-webkit-scrollbar-thumb:hover,
-.insp-detail::-webkit-scrollbar-thumb:hover,
 .logs-list::-webkit-scrollbar-thumb:hover {
   background: #9c9c9c;
 }
@@ -2508,10 +2239,6 @@ button:focus-visible {
 .chat-panel,
 .preview-panel,
 .inspector-body {
-  min-width: 0;
-}
-
-.insp-root {
   min-width: 0;
 }
 
@@ -2700,14 +2427,6 @@ button:focus-visible {
 }
 
 /* ─── Material-inspired polish (visual only) ─────────────────────────── */
-.btn {
-  border-radius: 7px;
-  font-weight: 600;
-}
-
-.btn-primary {
-  box-shadow: 0 1px 2px rgba(1, 44, 103, 0.28);
-}
 
 /* Cancel = distinct red outline; Save = filled blue (Material pairing). */
 .insp-edit-bar .btn-danger {
@@ -2721,8 +2440,6 @@ button:focus-visible {
 }
 
 .insp-panel {
-  border-radius: 12px;
-  border-color: #e6ebf3;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.05);
 }
 
@@ -2864,54 +2581,9 @@ button:focus-visible {
   gap: 8px;
 }
 
-.insp-toolbar-end {
-  margin-left: auto;
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
-  flex-wrap: wrap;
-}
-
-.insp-cmdbar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-  margin-bottom: 12px;
-}
-
-.insp-cmdbar input {
-  flex: 1;
-  height: 34px;
-  font-size: 13px;
-  padding: 0 12px;
-  border: 1px solid #cfd8e6;
-  border-radius: 8px;
-  background: #fff;
-  color: #1e2a3d;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
-.insp-cmdbar input:focus {
-  outline: none;
-  border-color: #0176d3;
-  box-shadow: 0 0 0 3px rgba(1, 118, 211, 0.18);
-}
-
-.insp-cmdbar .btn {
-  height: 34px;
-  padding-top: 0;
-  padding-bottom: 0;
-}
-
 .ff-mono {
   font-family: var(--font-code);
   font-size: 0.95em;
-}
-
-.ff-date {
-  font-variant-numeric: tabular-nums;
 }
 
 .ff-badge {
@@ -2958,101 +2630,8 @@ button:focus-visible {
 }
 
 /* Org Info hero + limit tiles */
-.org-hero {
-  background: linear-gradient(135deg, #f7fbff 0%, #eef4fc 100%);
-  border: 1px solid #e3edfb;
-  border-radius: 10px;
-  padding: 14px 16px;
-  margin-bottom: 14px;
-}
-
-.org-hero-name {
-  font-size: 16px;
-  font-weight: 700;
-  color: #032d60;
-  margin-bottom: 8px;
-}
-
-.org-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.org-tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(195px, 1fr));
-  gap: 10px;
-}
-
-.org-tile {
-  border: 1px solid #e6ebf3;
-  border-radius: 10px;
-  background: linear-gradient(180deg, #ffffff 0%, #fafcff 100%);
-  padding: 12px 14px;
-}
-
-.org-tile-label {
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #6b7a90;
-  margin-bottom: 6px;
-}
-
-.org-tile-value {
-  font-size: 20px;
-  font-weight: 700;
-  color: #032d60;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-}
-
-.org-tile-cap {
-  font-size: 11px;
-  color: #8894a8;
-  margin-top: 3px;
-}
-
-.gauge {
-  height: 6px;
-  background: #edf1f7;
-  border-radius: 3px;
-  margin-top: 9px;
-  overflow: hidden;
-}
-
-.gauge-bar {
-  height: 100%;
-  border-radius: 3px;
-  background: #2e844a;
-}
-
-.gauge-bar.warn {
-  background: #fe9339;
-}
-
-.gauge-bar.crit {
-  background: #ea001e;
-}
 
 /* Users profile card */
-.user-card {
-  border: 1px solid #e6ebf3;
-  border-radius: 12px;
-  background: #fff;
-  padding: 16px;
-  margin-bottom: 12px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.05);
-}
-
-.user-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
 
 .user-avatar {
   width: 42px;
@@ -3067,26 +2646,6 @@ button:focus-visible {
   font-weight: 700;
   flex-shrink: 0;
   letter-spacing: 0.02em;
-}
-
-.user-name {
-  font-size: 15px;
-  font-weight: 700;
-  color: #032d60;
-  line-height: 1.3;
-}
-
-.user-handle {
-  font-size: 12px;
-  color: #54698d;
-  word-break: break-all;
-}
-
-.user-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
 }
 
 .user-actions {
@@ -3127,9 +2686,6 @@ button:focus-visible {
 
 /* SOQL deck */
 .soql-hint-row {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
   margin: -4px 2px 12px;
   font-size: 10.5px;
   color: #8894a8;
@@ -3147,14 +2703,6 @@ button:focus-visible {
 }
 
 /* ── SaralForce · App Tabs steps & current-tab chips ── */
-.insp-current {
-  margin-bottom: 4px;
-}
-
-.insp-current .insp-chips-label {
-  display: block;
-  margin-bottom: 6px;
-}
 
 .insp-toolbar .ff-badge {
   align-self: center;
@@ -3283,8 +2831,6 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   border: 0;
   padding: 12px 14px;
   font-family: var(--font-code);
-  font-size: 13px;
-  line-height: 1.55;
   white-space: pre;
   tab-size: 2;
   overflow: auto;
@@ -3540,12 +3086,6 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   margin-bottom: 12px;
 }
 
-.apex-bar-end {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
-}
-
 /* ─── Run-Apex two-column workspace (mirrors .soql-layout) ─────────────── */
 .apex-layout {
   display: grid;
@@ -3571,36 +3111,6 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
-}
-
-.apex-conn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: #172B4D;
-  margin-bottom: 8px;
-}
-
-.apex-conn-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #94A3B8;
-  flex: 0 0 auto;
-}
-
-.apex-conn-dot.on {
-  background: #16A34A;
-}
-
-.apex-org {
-  margin-left: auto;
-  font-size: 12px;
-  color: #64748B;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .apex-exec-btn {
@@ -3853,11 +3363,6 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   white-space: nowrap;
 }
 
-.apex-ai-hint {
-  font-size: 11px;
-  color: #64748B;
-}
-
 @media (max-width: 900px) {
   .apex-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -3897,21 +3402,8 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
     margin: 10px 10px 0;
   }
 
-  .insp-kv-row {
-    grid-template-columns: 1fr;
-    gap: 2px;
-  }
-
-  .org-tiles {
-    grid-template-columns: 1fr 1fr;
-  }
-
   .user-actions {
     justify-content: flex-start;
-  }
-
-  .insp-toolbar-end {
-    margin-left: 0;
   }
 }
 
@@ -4104,7 +3596,6 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   border: 1px solid #dddbda;
   border-radius: 6px;
   font-size: 12px;
-  color: #16325c;
 }
 
 .perm-search:focus {
@@ -4310,7 +3801,6 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-width: 0;
   position: sticky;
   top: 8px;
 }
@@ -4337,16 +3827,9 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   font-size: 12px;
   padding: 6px 9px;
   border: 1px solid #cfd8e6;
-  border-radius: 7px;
   font-family: var(--font-ui);
   background: #fff;
   color: #1e2a3d;
-}
-
-.soql-save-row .soql-save-input:focus {
-  outline: none;
-  border-color: #0176d3;
-  box-shadow: 0 0 0 3px rgba(1, 118, 211, 0.18);
 }
 
 .soql-save-row .btn {
@@ -4358,7 +3841,6 @@ html.dark .apex-term, html[data-theme="dark"] .apex-term {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-width: 0;
 }
 
 .soql-main .insp-card-header {
@@ -4632,11 +4114,6 @@ html.dark .soql-editor-box, html[data-theme="dark"] .soql-editor-box {
   font-weight: 400;
   line-height: 1;
   opacity: 0.85;
-}
-
-.rec-sum-sub {
-  font-size: 12px;
-  color: #64748b;
 }
 
 .rec-fresh {
@@ -5061,53 +4538,6 @@ html.dark .soql-editor-box, html[data-theme="dark"] .soql-editor-box {
 }
 
 /* Colourful tones — deterministic pastel per field/object name (image-style) */
-.soql-fields .insp-chip.t0 {
-  background: #dbeafe;
-  border-color: #93c5fd;
-  color: #1e40af;
-}
-
-.soql-fields .insp-chip.t1 {
-  background: #ffe4e6;
-  border-color: #fda4af;
-  color: #9f1239;
-}
-
-.soql-fields .insp-chip.t2 {
-  background: #ede9fe;
-  border-color: #c4b5fd;
-  color: #5b21b6;
-}
-
-.soql-fields .insp-chip.t3 {
-  background: #dcfce7;
-  border-color: #86efac;
-  color: #166534;
-}
-
-.soql-fields .insp-chip.t4 {
-  background: #fef3c7;
-  border-color: #fcd34d;
-  color: #92400e;
-}
-
-.soql-fields .insp-chip.t5 {
-  background: #ccfbf1;
-  border-color: #5eead4;
-  color: #115e59;
-}
-
-.soql-fields .insp-chip.t6 {
-  background: #ffedd5;
-  border-color: #fdba74;
-  color: #9a3412;
-}
-
-.soql-fields .insp-chip.t7 {
-  background: #e0f2fe;
-  border-color: #7dd3fc;
-  color: #075985;
-}
 
 .soql-fields .insp-chip-alt {
   background: #f1f5f9;
@@ -5214,11 +4644,6 @@ html.dark .app-header, html[data-theme="dark"] .app-header {
 html.dark .app-title, html[data-theme="dark"] .app-title {
   color: #fff;
   font-weight: 600;
-}
-
-html.dark .app-subtitle, html[data-theme="dark"] .app-subtitle {
-  color: var(--sf-text-dim);
-  opacity: 1;
 }
 
 /* Glassy pill buttons with glowing hover — Inspector, API Names, + New, history */
@@ -6944,7 +6369,6 @@ html[data-theme="dark"] .usr-filters select {
   border-color: #DCE5F2;
   color: #172B4D;
 }
-
 
 /* --- App Tab Manager (apptm-*) -----------------------------------------
    Azure Midnight tokens: navy #0B2F66 � blue #2878F0 � purple #635BFF �

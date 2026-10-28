@@ -147,10 +147,6 @@ export function validateApiName(name, what = "API name") {
   return null;
 }
 
-export function isValidApiName(name) {
-  return validateApiName(name) === null;
-}
-
 // Escape a value for a single-quoted SOQL string literal.
 export function escapeSoqlString(value) {
   return String(value == null ? "" : value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");

@@ -6,6 +6,7 @@ import {InspectorPanel, ffApplyRestore, ffTakeSnapshot, ffSetAppTabPrefill} from
 import {askAi, isAiConfigured} from "./core/llm.js";
 import {initSettings} from "./core/storage.js";
 import {openInspectorInNewTab} from "./core/preferences.js";
+import {getThemePreference, setThemePreference, applyTheme, resolveTheme, nextThemePreference, themeLabel, watchSystemTheme} from "./core/theme.js";
 import {getParentOrigin, isTrustedFrameOrigin, setTrustedParentOrigin, postToParent, isFromTrustedParent, queryHostRecord} from "./core/messaging.js";
 import {
   FIELD_TYPES, SHARING_MODELS, normalizeFieldType, escapeSoqlString,
@@ -75,7 +76,7 @@ class App extends React.Component {
       profilesLoading: false,
       recordTypesDone: saved?.recordTypesDone || false,
       builderMode: saved?.builderMode || "plan",
-      colorTheme: (typeof localStorage !== "undefined" && localStorage.getItem("sfoc_theme")) || "dark",
+      colorTheme: getThemePreference(),
       apiNamesOn: false
     };
     this.spinnerCount = 0;
@@ -93,20 +94,25 @@ class App extends React.Component {
     this.forceUpdate();
   }
 
-  applyColorTheme(theme) {
-    const t = theme || this.state.colorTheme || "dark";
-    try {
-      const root = document.documentElement;
-      root.classList.toggle("dark", t === "dark");
-      if (t === "dark") root.setAttribute("data-theme", "dark");
-      else root.removeAttribute("data-theme");
-      if (typeof localStorage !== "undefined") localStorage.setItem("sfoc_theme", t);
-    } catch (e) { /* ignore */ }
+  // Cycles System -> Light -> Dark. "System" follows the OS setting.
+  toggleColorTheme() {
+    const next = nextThemePreference(this.state.colorTheme);
+    setThemePreference(next);
+    this.setState({colorTheme: next});
   }
 
-  toggleColorTheme() {
-    const next = (this.state.colorTheme || "dark") === "dark" ? "light" : "dark";
-    this.setState({colorTheme: next}, () => this.applyColorTheme(next));
+  themeButtonProps() {
+    const pref = this.state.colorTheme;
+    const active = resolveTheme(pref);
+    const next = nextThemePreference(pref);
+    const label = `Theme: ${themeLabel(pref)}${pref === "system" ? ` (${active})` : ""}. Switch to ${themeLabel(next).toLowerCase()}`;
+    return {
+      className: "header-btn header-btn-icon",
+      onClick: () => this.toggleColorTheme(),
+      title: label,
+      "aria-label": label,
+      children: pref === "system" ? "\u25D0" : (pref === "dark" ? "\u263E" : "\u2600")
+    };
   }
 
   closePanel() {
@@ -199,7 +205,8 @@ class App extends React.Component {
   }
 
   componentDidMount() {
-    this.applyColorTheme(this.state.colorTheme || "dark");
+    applyTheme(this.state.colorTheme);
+    this._unwatchTheme = watchSystemTheme(() => this.state.colorTheme, () => this.forceUpdate());
     postToParent({type: "sfoc-query-api-names"});
     const isWelcome = (m) => m && m.role === "system" &&
       /configure your LLM provider/i.test(m.text || "");
@@ -237,6 +244,7 @@ class App extends React.Component {
   }
 
   componentWillUnmount() {
+    if (this._unwatchTheme) this._unwatchTheme();
     window.removeEventListener("storage", this._onStorage);
     saveInspectorState(this.props.sfHost, this.state,
       {hostBoot: urlParams.get("hostBoot"), takeSnapshot: ffTakeSnapshot});
@@ -1941,11 +1949,7 @@ class App extends React.Component {
               onClick: () => startSalesforceLogin(this.props.sfHost).catch(e => this.setState({error: "Login failed: " + e.message})),
               title: "Log in with Salesforce OAuth"
             }, "Connect"),
-            h("button", {
-              className: "header-btn header-btn-icon",
-              onClick: () => this.toggleColorTheme(),
-              title: `Switch to ${(this.state.colorTheme || "dark") === "dark" ? "light" : "dark"} theme`
-            }, (this.state.colorTheme || "dark") === "dark" ? "☾" : "☀"),
+            h("button", this.themeButtonProps()),
             h("span", {
               className: "user-info",
               title: `${this.userInfoModel.userFullName || "User"} — click for profile details`,
@@ -2007,11 +2011,7 @@ class App extends React.Component {
             onClick: () => this.setState({showHistory: !this.state.showHistory}),
             title: "Chat History"
           }, `\u23f3 ${this.state.chatHistory.length}`),
-          h("button", {
-            className: "header-btn header-btn-icon",
-            onClick: () => this.toggleColorTheme(),
-            title: "Toggle theme"
-          }, (this.state.colorTheme || "dark") === "dark" ? "☾" : "☀"),
+          h("button", this.themeButtonProps()),
           h("span", {
             className: "user-info",
             title: `${this.userInfoModel.userFullName || "User"} — click for profile details`,

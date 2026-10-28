@@ -75,19 +75,6 @@ export function parseSfInstant(value) {
   return new Date(t);
 }
 
-export function getCachedTimeZone() {
-  return _cachedTimeZone || null;
-}
-
-export function getCachedLocale() {
-  return _cachedLocale || null;
-}
-
-export function setCachedTimeZone(timeZone, locale) {
-  if (timeZone && isValidTimeZone(timeZone)) _cachedTimeZone = timeZone;
-  if (locale && typeof locale === "string" && locale.trim()) _cachedLocale = locale.trim();
-}
-
 export function getEffectiveTimeZone() {
   return _cachedTimeZone && isValidTimeZone(_cachedTimeZone)
     ? _cachedTimeZone

@@ -32,7 +32,11 @@ const centrals = [];
 let offset = 0;
 const {time, day} = dosDateTime(new Date());
 
-for (const name of listFiles(addonDir)) {
+// goodbye.html is the uninstall page served from GitHub Pages (its repo path
+// is the URL older installs point at), so it stays in addon/ but never ships.
+const EXCLUDE = new Set(["goodbye.html"]);
+
+for (const name of listFiles(addonDir).filter(n => !EXCLUDE.has(n))) {
   const data = fs.readFileSync(path.join(addonDir, name));
   const compressed = zlib.deflateRawSync(data, {level: 9});
   const crc = zlib.crc32(data);

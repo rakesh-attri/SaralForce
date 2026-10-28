@@ -261,6 +261,13 @@ debug-log analysis.
 ## What's New
 
 ### Unreleased (v2 branch)
+- **Theme follows your device** — new installs start in light or dark to match the OS
+  setting (no dark flash on load); the header button cycles System, Light and Dark.
+  The design itself is unchanged
+- **Lighter package** — about 10% smaller: unused and overridden CSS rules removed
+  (verified pixel-identical on every tab in both themes), PNGs recompressed losslessly,
+  logo design sources and the hosted farewell page left out of the store zip, dead
+  helper functions removed
 - **Bulk API 2.0 import fixed** — CSV upload now uses `PUT` and jobs close with
   `UploadComplete`, as the Bulk 2.0 API requires; Bulk requests share the panel's
   session handling, retries and cancellation

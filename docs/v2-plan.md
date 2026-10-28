@@ -46,7 +46,10 @@ Ship to both stores before the big UI work, so users get the fixes early.
 - Split `inspector-tools.js` and `object-creator.js` into the folders above, one tab per module; data-driven tab registry; delete ~700 lines of dead app-assignment code.
 - Unit tests for CSV, SOQL helpers, XML builders, proposal validation, API-name generation.
 
-## Phase 3 — UI 2.0 (≈3 weeks)
+## Phase 3 — UI 2.0 (≈3 weeks) — rescoped and done
+
+> Rescoped on 2026-10-28 at the owner's request: keep the current design. Done instead: the panel follows the OS theme (System/Light/Dark, no flash), and the code was made lighter with zero visual change (dead/overridden CSS removed, lossless image recompression, unshipped sources excluded), checked by pixel diffs of every tab (`npm run dev` + `npm run snapshots`). The items below were not done.
+
 
 - **Design tokens** (`ui/tokens.css`): color, spacing, radius, type scale, elevation, as CSS variables for light / dark / system (`prefers-color-scheme`), with no dark flash on load. `prefers-reduced-motion` respected.
 - **CSS rebuilt** on tokens, replacing the 9k-line stacked file module by module; target < 3k lines; no hex literals outside tokens.
