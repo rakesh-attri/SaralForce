@@ -61,7 +61,7 @@ Ship to both stores before the big UI work, so users get the fixes early.
 - **Accessibility pass**: aria labels on icon buttons, focus rings, `role="alert"` on errors, keyboard navigation everywhere.
 - Floating launcher redesign: draggable, remembers position, never covers page controls.
 
-## Phase 4 — Interactive onboarding tour (≈1 week, built on Phase 3 shell)
+## Phase 4 — Interactive onboarding tour (≈1 week) — done
 
 A dependency-free tour engine (`ui/tour.js`): spotlight overlay + popover anchored to elements tagged `data-tour="…"`; Next / Back / Skip, step dots, `Esc` to close, focus trap, keyboard and screen-reader friendly, reduced-motion aware.
 

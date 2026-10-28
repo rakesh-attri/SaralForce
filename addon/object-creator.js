@@ -6,6 +6,9 @@ import {InspectorPanel, ffApplyRestore, ffTakeSnapshot, ffSetAppTabPrefill} from
 import {askAi, isAiConfigured} from "./core/llm.js";
 import {initSettings} from "./core/storage.js";
 import {openInspectorInNewTab} from "./core/preferences.js";
+import {showMenu} from "./ui/tour.js";
+import {runTour, autoStartPanelTours, autoStartBuilderTour, showReleaseNotes} from "./ui/tour-runner.js";
+import {PANEL_TOUR, BUILDER_TOUR, tabTour} from "./ui/tour-content.js";
 import {getThemePreference, setThemePreference, applyTheme, resolveTheme, nextThemePreference, themeLabel, watchSystemTheme} from "./core/theme.js";
 import {getParentOrigin, isTrustedFrameOrigin, setTrustedParentOrigin, postToParent, isFromTrustedParent, queryHostRecord} from "./core/messaging.js";
 import {
@@ -32,6 +35,9 @@ import {
 } from "./builder/chat-history.js";
 
 let h = React.createElement;
+
+// "Help" in the ? menu: questions, bug reports and feature requests.
+const HELP_URL = "https://github.com/rakesh-attri/SaralForce/issues/";
 
 
 class App extends React.Component {
@@ -101,6 +107,35 @@ class App extends React.Component {
     this.setState({colorTheme: next});
   }
 
+  helpButtonProps() {
+    return {
+      className: "header-btn header-btn-icon",
+      title: "Help and tours",
+      "aria-label": "Help and tours",
+      "aria-haspopup": "menu",
+      "data-tour": "help",
+      onClick: (e) => this.openHelpMenu(e.currentTarget),
+      children: "?"
+    };
+  }
+
+  openHelpMenu(anchor) {
+    const inspector = (this.state.uiMode || "inspector") === "inspector";
+    const activeTab = document.querySelector(".insp-tabs [role=tab][aria-selected=true]");
+    const tabId = activeTab ? activeTab.id.replace(/^insp-tab-/, "") : null;
+    const items = [
+      {label: "Take the tour", onSelect: () => runTour(inspector ? PANEL_TOUR : BUILDER_TOUR)}
+    ];
+    if (inspector && tabId && tabTour(tabId)) {
+      const label = activeTab.textContent.trim();
+      items.push({label: `Tour this tool (${label})`, onSelect: () => runTour(tabTour(tabId))});
+    }
+    items.push({label: "What's new", onSelect: () => showReleaseNotes()});
+    items.push({label: "Open Settings", onSelect: () => chrome.runtime.sendMessage({message: "openOptions", host: this.props.sfHost})});
+    items.push({label: "Help", onSelect: () => window.open(HELP_URL, "_blank", "noopener,noreferrer")});
+    showMenu(anchor, items);
+  }
+
   themeButtonProps() {
     const pref = this.state.colorTheme;
     const active = resolveTheme(pref);
@@ -124,9 +159,16 @@ class App extends React.Component {
     } catch (e) { /* ignore */ }
   }
 
+  // The page (content script) owns the API-names state: it answers every
+  // toggle with "sfoc-api-names-state", so the button only says "Hide" once
+  // names are really on screen (never on non-record pages or failures).
   toggleApiNames() {
     postToParent({type: "sfoc-show-api-names"});
-    this.setState(prev => ({apiNamesOn: !prev.apiNamesOn}));
+    // Belt and braces: re-ask for the page's state while names load, in
+    // case the direct reply is missed.
+    (this._apiNamesChecks || []).forEach(clearTimeout);
+    this._apiNamesChecks = [1500, 4000, 8000, 15000].map(ms =>
+      setTimeout(() => postToParent({type: "sfoc-query-api-names"}), ms));
   }
 
   async copyProposalValue(text, e) {
@@ -207,6 +249,7 @@ class App extends React.Component {
   componentDidMount() {
     applyTheme(this.state.colorTheme);
     this._unwatchTheme = watchSystemTheme(() => this.state.colorTheme, () => this.forceUpdate());
+    autoStartPanelTours(this.state.uiMode || "inspector");
     postToParent({type: "sfoc-query-api-names"});
     const isWelcome = (m) => m && m.role === "system" &&
       /configure your LLM provider/i.test(m.text || "");
@@ -245,6 +288,7 @@ class App extends React.Component {
 
   componentWillUnmount() {
     if (this._unwatchTheme) this._unwatchTheme();
+    (this._apiNamesChecks || []).forEach(clearTimeout);
     window.removeEventListener("storage", this._onStorage);
     saveInspectorState(this.props.sfHost, this.state,
       {hostBoot: urlParams.get("hostBoot"), takeSnapshot: ffTakeSnapshot});
@@ -294,6 +338,7 @@ class App extends React.Component {
   }
 
   componentDidUpdate(prevProps, prevState) {
+    if (prevState.uiMode !== this.state.uiMode && this.state.uiMode === "builder") autoStartBuilderTour();
     this.sendUserCard();
     if (this.messagesEndRef.current) {
       this.messagesEndRef.current.scrollIntoView({behavior: "smooth"});
@@ -1937,12 +1982,14 @@ class App extends React.Component {
             h("button", {
               className: "header-btn",
               onClick: () => this.goBackFromInspector(),
-              title: "Back to AI Object Builder"
+              title: "Back to AI Object Builder",
+              "data-tour": "builder-btn"
             }, "← AI Object Builder"),
             h("button", {
               className: `header-btn${this.state.apiNamesOn ? " active" : ""}`,
               onClick: () => this.toggleApiNames(),
-              title: "Show API names on this Salesforce page (click again to hide)"
+              title: "Show API names on this Salesforce page (click again to hide)",
+              "data-tour": "api-names"
             }, this.state.apiNamesOn ? "Hide API Names" : "Show API Names"),
             !sfConn.sessionId && h("button", {
               className: "header-btn",
@@ -1950,6 +1997,7 @@ class App extends React.Component {
               title: "Log in with Salesforce OAuth"
             }, "Connect"),
             h("button", this.themeButtonProps()),
+            h("button", this.helpButtonProps()),
             h("span", {
               className: "user-info",
               title: `${this.userInfoModel.userFullName || "User"} — click for profile details`,
@@ -1989,12 +2037,14 @@ class App extends React.Component {
           h("button", {
             className: "header-btn",
             onClick: () => this.openInspector(),
-            title: "SOQL, Data Import/Export, Org Info"
+            title: "SOQL, Data Import/Export, Org Info",
+            "data-tour": "inspector-btn"
           }, "Inspector"),
           h("button", {
             className: `header-btn${this.state.apiNamesOn ? " active" : ""}`,
             onClick: () => this.toggleApiNames(),
-            title: "Show API names on this Salesforce page (click again to hide)"
+            title: "Show API names on this Salesforce page (click again to hide)",
+            "data-tour": "api-names"
           }, this.state.apiNamesOn ? "Hide API Names" : "Show API Names"),
           !sfConn.sessionId && h("button", {
             className: "header-btn",
@@ -2009,9 +2059,11 @@ class App extends React.Component {
           h("button", {
             className: `header-btn${this.state.showHistory ? " active" : ""}`,
             onClick: () => this.setState({showHistory: !this.state.showHistory}),
-            title: "Chat History"
+            title: "Chat History",
+            "data-tour": "history"
           }, `\u23f3 ${this.state.chatHistory.length}`),
           h("button", this.themeButtonProps()),
+          h("button", this.helpButtonProps()),
           h("span", {
             className: "user-info",
             title: `${this.userInfoModel.userFullName || "User"} — click for profile details`,
@@ -2122,7 +2174,7 @@ class App extends React.Component {
               )
             ),
             h("div", {className: "chat-input-row"},
-              h("div", {className: "chat-input-wrap"},
+              h("div", {className: "chat-input-wrap", "data-tour": "chat-input"},
                 h("textarea", {
                 className: "chat-input",
                 value: userInput,
@@ -2141,6 +2193,7 @@ class App extends React.Component {
               }),
                 h("button", {
                   className: "enhance-btn-inside",
+                  "data-tour": "enhance",
                   onClick: () => this.enhancePrompt(),
                   disabled: isEnhancing,
                   title: "Enhance prompt"

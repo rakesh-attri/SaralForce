@@ -98,6 +98,79 @@
     });
 
     document.body.appendChild(btn);
+    maybeShowLauncherTip(btn);
+  }
+
+  // ─── First-run tip next to the launcher ────────────────────────────
+  // Shown once per browser profile, top frame only, inside a Shadow DOM so
+  // the Salesforce page's CSS can't touch it.
+  const LAUNCHER_TIP_KEY = "sfoc_launcher_tip_seen";
+  let launcherTip = null;
+
+  function launcherTipSeen(cb) {
+    try {
+      chrome.storage.local.get(LAUNCHER_TIP_KEY, (items) => {
+        void chrome.runtime.lastError;
+        cb(!!(items && items[LAUNCHER_TIP_KEY]));
+      });
+    } catch (e) {
+      cb(true); // storage unavailable: never nag
+    }
+  }
+
+  function dismissLauncherTip() {
+    if (launcherTip) {
+      launcherTip.remove();
+      launcherTip = null;
+    }
+    try { chrome.storage.local.set({[LAUNCHER_TIP_KEY]: true}); } catch (e) { /* ignore */ }
+  }
+
+  function maybeShowLauncherTip(btn) {
+    if (window.top !== window) return;
+    launcherTipSeen((seen) => {
+      if (seen || launcherTip || sidebarOpen || !btn.isConnected) return;
+      const host = document.createElement("div");
+      host.id = "sf-object-creator-tip";
+      const r = btn.getBoundingClientRect();
+      host.style.cssText = `position:fixed;z-index:2147483647;top:${Math.max(8, r.top + r.height / 2 - 52)}px;right:${Math.max(8, window.innerWidth - r.left + 12)}px;`;
+      const shadow = host.attachShadow({mode: "open"});
+      const style = document.createElement("style");
+      style.textContent = `
+        .tip{box-sizing:border-box;width:260px;padding:12px 14px;background:#fff;color:#181818;border:1px solid #d8dde6;
+          border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.28);font:13px/1.45 "Salesforce Sans",Arial,sans-serif}
+        .t{margin:0 0 4px;font-weight:700;font-size:14px}
+        .b{margin:0 0 10px;color:#444b57}
+        kbd{font:inherit;font-size:12px;padding:0 4px;border:1px solid #d8dde6;border-radius:3px;background:#f3f3f3}
+        .row{display:flex;justify-content:flex-end}
+        button{font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:5px 12px;border-radius:4px;
+          border:1px solid #0176d3;background:#0176d3;color:#fff}
+        button:focus-visible{outline:2px solid #1b96ff;outline-offset:2px}`;
+      const tip = document.createElement("div");
+      tip.className = "tip";
+      tip.setAttribute("role", "dialog");
+      tip.setAttribute("aria-label", "SaralForce tip");
+      const title = document.createElement("p");
+      title.className = "t";
+      title.textContent = "SaralForce is here";
+      const body = document.createElement("p");
+      body.className = "b";
+      body.append("Click this button to open your Salesforce toolkit, or press ");
+      const kbd = document.createElement("kbd");
+      kbd.textContent = "Ctrl+Shift+S";
+      body.append(kbd, ".");
+      const row = document.createElement("div");
+      row.className = "row";
+      const ok = document.createElement("button");
+      ok.type = "button";
+      ok.textContent = "Got it";
+      ok.addEventListener("click", dismissLauncherTip);
+      row.append(ok);
+      tip.append(title, body, row);
+      shadow.append(style, tip);
+      document.body.appendChild(host);
+      launcherTip = host;
+    });
   }
 
   function toggleSidebar() {
@@ -110,6 +183,7 @@
 
   function openSidebar() {
     if (sidebarOpen || !sfHost) return;
+    if (launcherTip) dismissLauncherTip();
 
     chrome.runtime.sendMessage({message: "getSession", sfHost}, (session) => {
       if (!session) {
@@ -731,8 +805,29 @@
     return count;
   }
 
+  // Tells the panel whether API names are actually on screen, so its button
+  // label always matches the page.
+  // Replies to the panel window that asked (falls back to the sidebar iframe).
+  let apiNamesRequester = null;
+
+  function reportApiNamesState() {
+    const ifr = document.getElementById("sf-object-creator-iframe");
+    const target = apiNamesRequester || (ifr && ifr.contentWindow);
+    if (!target) return;
+    try {
+      target.postMessage({type: "sfoc-api-names-state", on: apiNamesActive}, PANEL_ORIGIN);
+    } catch (e) { /* panel closed */ }
+  }
+
   function toggleApiNames() {
     if (apiNamesBusy) return;
+    runApiNamesToggle();
+    // Synchronous outcomes (hidden, not a record page) report right away;
+    // async ones report when they finish (see the .then/.catch below).
+    if (!apiNamesBusy) reportApiNamesState();
+  }
+
+  function runApiNamesToggle() {
     const existing = deepElements(document.body)
       .filter(el => el.classList && el.classList.contains("sfapi-name-chip"));
     if (apiNamesActive && existing.length) {
@@ -741,6 +836,9 @@
       apiNamesToast("API names hidden.");
       return;
     }
+    // No chips on screen (never shown, or Salesforce re-rendered the page):
+    // names are off until this attempt succeeds.
+    apiNamesActive = false;
     const rec = getRecordInfo();
     if (!rec || !rec.id) {
       apiNamesToast("Open a Salesforce record page to show API names.", true);
@@ -752,6 +850,7 @@
       if (!session || !session.key) {
         apiNamesBusy = false;
         apiNamesToast("No active Salesforce session — log in first.", true);
+        reportApiNamesState();
         return;
       }
       const token = session.key;
@@ -817,7 +916,8 @@
           apiNamesBusy = false;
           apiNamesActive = false;
           apiNamesToast("Could not load API names: " + err.message, true);
-        });
+        })
+        .then(reportApiNamesState);
     });
   }
 
@@ -829,8 +929,13 @@
     const fromPanel = ifr && event.source === ifr.contentWindow && event.origin === PANEL_ORIGIN;
     if (!fromPanel) return;
     if (event.data.type === "sfoc-show-api-names") {
+      apiNamesRequester = event.source;
       toggleApiNames();
     } else if (event.data.type === "sfoc-query-api-names") {
+      // Re-check the page: chips vanish when Salesforce re-renders it.
+      if (apiNamesActive && !deepElements(document.body).some(el => el.classList && el.classList.contains("sfapi-name-chip"))) {
+        apiNamesActive = false;
+      }
       try { event.source.postMessage({type: "sfoc-api-names-state", on: apiNamesActive}, PANEL_ORIGIN); } catch (e) { /* ignore */ }
     } else if (event.data.type === "sfoc-query-open-record") {
       try { event.source.postMessage({type: "sfoc-open-record", rec: getRecordInfo()}, PANEL_ORIGIN); } catch (e) { /* ignore */ }

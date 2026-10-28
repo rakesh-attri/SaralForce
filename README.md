@@ -261,6 +261,16 @@ debug-log analysis.
 ## What's New
 
 ### Unreleased (v2 branch)
+- **Show API Names button tells the truth** — it switches to Hide API Names only after the
+  names actually appear on the page; on non-record pages, failures or after Salesforce
+  re-renders the page it stays (or returns to) Show API Names
+- **Guided tours** — a short welcome tour the first time the panel opens, a one-tip
+  intro the first time each tool is opened, an Object Builder tour, a setup tour on the
+  Settings page after install, and a "what is new" summary after updates. A small tip
+  points out the launcher on your first Salesforce page. Replay any of them from the new
+  **?** button in the header (Take the tour, Tour this tool, What is new, Open Settings, and Help, which opens
+  the GitHub issues page).
+  Keyboard friendly (arrows, Esc) and shown only once each
 - **Theme follows your device** — new installs start in light or dark to match the OS
   setting (no dark flash on load); the header button cycles System, Light and Dark.
   The design itself is unchanged

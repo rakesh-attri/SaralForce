@@ -6,7 +6,7 @@
 // Values that older versions stored in the extension's localStorage are
 // moved here on first run and then removed from localStorage.
 
-export const SETTING_KEYS = ["llmConfig", "llmModelCache", "sfoc_celebrate", "sfoc_open_inspector_tab"];
+export const SETTING_KEYS = ["llmConfig", "llmModelCache", "sfoc_celebrate", "sfoc_open_inspector_tab", "sfoc_tours"];
 
 const cache = new Map();
 let ready = false;
