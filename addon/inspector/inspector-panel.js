@@ -1,3 +1,4 @@
+import {autoStartTabTour} from "../ui/tour-runner.js";
 import {useSfTimeZoneTick} from "./shared/format.js";
 import {useFfSession} from "./shared/session-state.js";
 import {SoqlTab} from "./tabs/soql.js";
@@ -38,6 +39,10 @@ export function InspectorPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const tabs = INSPECTOR_TABS;
+  // First visit to a tool shows its one-step tour (after the main tour).
+  React.useEffect(() => {
+    autoStartTabTour(tab);
+  }, [tab]);
   // A restored snapshot may name a tab id that no longer exists.
   const active = tabs.some(t => t.id === tab) ? tab : "soql";
   const activeTab = tabs.find(t => t.id === active);
@@ -52,7 +57,7 @@ export function InspectorPanel() {
   // The pill bar lives OUTSIDE the scroller (shell = nav + body) so it can
   // never scroll away with the content.
   return h("div", {className: "insp-shell"},
-    h("div", {className: "insp-tabs", role: "tablist", "aria-label": "Inspector tools"},
+    h("div", {className: "insp-tabs", role: "tablist", "aria-label": "Inspector tools", "data-tour": "inspector-tabs"},
       tabs.map(t =>
         h("button", {
           key: t.id,

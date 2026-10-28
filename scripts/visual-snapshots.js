@@ -30,7 +30,13 @@ async function capture(name) {
     for (const theme of THEMES) {
       const context = await browser.newContext({viewport: {width: 1280, height: 860}, reducedMotion: "reduce"});
       await context.addInitScript((t) => {
-        globalThis.localStorage.setItem("sfoc_theme", t);
+        const ls = globalThis.localStorage;
+        ls.setItem("sfoc_theme", t);
+        // Screenshots show the UI, not the onboarding tours or launcher tip.
+        const seen = JSON.stringify({done: {}, disabled: true, lastSeenVersion: "9999.0.0"});
+        ls.setItem("sfoc_tours", seen);
+        ls.setItem("chrome.storage:sfoc_tours", seen);
+        ls.setItem("chrome.storage:sfoc_launcher_tip_seen", "true");
       }, theme);
       const page = await context.newPage();
       await page.clock.install({time: FROZEN_TIME});

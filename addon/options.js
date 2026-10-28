@@ -2,6 +2,9 @@ import {LLM_PROVIDERS, getSavedConfig, saveConfig, getCelebrateVariant, setCeleb
 
 import {initSettings} from "./core/storage.js";
 import {openInspectorInNewTab, setOpenInspectorInNewTab} from "./core/preferences.js";
+import {startTour} from "./ui/tour.js";
+import {SETTINGS_TOUR} from "./ui/tour-content.js";
+import {shouldAutoStart, markTourDone} from "./core/tours.js";
 
 let h = React.createElement;
 
@@ -65,6 +68,10 @@ class OptionsApp extends React.Component {
   }
 
   componentDidMount() {
+    // First visit (normally right after install): a short setup tour.
+    if (shouldAutoStart(SETTINGS_TOUR.id)) {
+      setTimeout(() => startTour(SETTINGS_TOUR).then(() => markTourDone(SETTINGS_TOUR.id)), 500);
+    }
     this.loadAppVersion();
     this.refreshPermStatus();
   }
@@ -342,7 +349,7 @@ class OptionsApp extends React.Component {
               : "Pick a suggested model or type any model ID. Refresh list loads the models your API key can use.")
         ),
 
-        h("div", {className: "button-group"},
+        h("div", {className: "button-group", "data-tour": "settings-actions"},
           h("button", {
             className: "btn btn-primary",
             onClick: () => this.saveConfig()

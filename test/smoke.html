@@ -128,6 +128,28 @@
       getURL: function (p) { return "/" + String(p || "").replace(/^\/+/, ""); },
       onMessage: {addListener: function () {}}
     };
+    // chrome.storage.local backed by localStorage (one key per item).
+    chrome.storage = {
+      local: {
+        get: function (keys, cb) {
+          var list = typeof keys === "string" ? [keys] : (Array.isArray(keys) ? keys : Object.keys(keys || {}));
+          var out = {};
+          list.forEach(function (k) {
+            var raw = localStorage.getItem("chrome.storage:" + k);
+            if (raw != null) out[k] = JSON.parse(raw);
+          });
+          if (typeof cb === "function") setTimeout(function () { cb(out); }, 0);
+        },
+        set: function (items, cb) {
+          Object.keys(items || {}).forEach(function (k) {
+            localStorage.setItem("chrome.storage:" + k, JSON.stringify(items[k]));
+          });
+          if (typeof cb === "function") setTimeout(cb, 0);
+        },
+        remove: function (k) { localStorage.removeItem("chrome.storage:" + k); }
+      },
+      onChanged: {addListener: function () {}}
+    };
     chrome.i18n = {
       getMessage: function (k) {
         return k === "@@extension_id" ? "fakeextensionid0000" : "";

@@ -172,7 +172,10 @@ http.createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   if (url.pathname.startsWith("/services/")) return api(req, res, url);
   // The harness stands in for both the Salesforce page and the panel page.
-  if (url.pathname === "/" || url.pathname === "/smoke.html" || url.pathname === "/object-creator.html") {
+  // /lightning/r/<Object>/<Id>/view mimics a record page for record-aware
+  // features such as Show API Names.
+  if (url.pathname === "/" || url.pathname === "/smoke.html" || url.pathname === "/object-creator.html" ||
+      url.pathname.startsWith("/lightning/")) {
     return serveFile(res, harness);
   }
   const filePath = path.normalize(path.join(addonDir, decodeURIComponent(url.pathname)));
