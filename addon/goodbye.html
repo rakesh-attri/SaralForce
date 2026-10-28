@@ -767,11 +767,11 @@ window.SARALFORCE_CONFIG = {
      Works with e.g. Formspree, a Google Apps Script web app, a Cloudflare
      Worker or your own API. Leave "" to disable sending (users will see an
      honest "not available" message — never a fake success). */
-  feedbackEndpoint: "",
+  feedbackEndpoint: "https://script.google.com/macros/s/AKfycbwr4pJcZlAQgbCm4E4wgGfG0B_CMo8gJi2cX6tIaA3XIUS4qcXB_fJk31konI4G9xYR9Q/exec",
 
   /* "json"  → Content-Type: application/json   (Formspree, Workers, most APIs)
      "form"  → application/x-www-form-urlencoded (Google Apps Script, no CORS preflight) */
-  feedbackFormat: "json",
+  feedbackFormat: "form",
 
   /* Official store listings. Fill these in with your published listing URLs.
      If left "", the Reinstall button opens a store search for "SaralForce". */
