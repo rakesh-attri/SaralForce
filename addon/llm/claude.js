@@ -27,7 +27,7 @@ export class ClaudeProvider {
     this.name = "Anthropic Claude";
   }
 
-  async sendMessage(messages, apiKey, model, onChunk) {
+  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal} = {}) {
     // Claude takes the system prompt separately from user/assistant turns.
     let systemMessage = "";
     const claudeMessages = [];
@@ -58,7 +58,8 @@ export class ClaudeProvider {
     const response = await fetch(`${API_BASE}/messages`, {
       method: "POST",
       headers: headers(apiKey),
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
 
     if (!response.ok) {

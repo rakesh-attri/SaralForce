@@ -20,7 +20,8 @@
   },
   "minimum_chrome_version": "88",
   "permissions": [
-    "cookies"
+    "cookies",
+    "storage"
   ],
   "host_permissions": [
     "https://*.salesforce.com/*",

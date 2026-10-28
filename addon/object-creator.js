@@ -1,399 +1,36 @@
 import {sfConn, apiVersion, startSalesforceLogin, getMyDomain} from "./inspector.js";
-import {hasValidConfig, getSavedConfig, getLLMProvider, getProviderConfig} from "./llm/llm-service.js";
+import {hasValidConfig, getSavedConfig, getProviderConfig} from "./llm/llm-service.js";
 import {SYSTEM_PROMPT, REFINEMENT_PROMPT, USER_MESSAGE_TEMPLATE, ENHANCE_SYSTEM_PROMPT} from "./prompts/system-prompt.js";
-import {createSpinForMethod, UserInfoModel, Constants, safeCopyText} from "./utils.js";
+import {createSpinForMethod, UserInfoModel, safeCopyText} from "./utils.js";
 import {InspectorPanel, ffApplyRestore, ffTakeSnapshot, ffSetAppTabPrefill} from "./inspector-tools.js";
+import {askAi, isAiConfigured} from "./core/llm.js";
+import {initSettings} from "./core/storage.js";
+import {openInspectorInNewTab} from "./core/preferences.js";
 import {getParentOrigin, isTrustedFrameOrigin, setTrustedParentOrigin, postToParent, isFromTrustedParent, queryHostRecord} from "./core/messaging.js";
 import {
-  FIELD_TYPES, SHARING_MODELS, normalizeFieldType, supportsRequired, escapeSoqlString,
+  FIELD_TYPES, SHARING_MODELS, normalizeFieldType, escapeSoqlString,
   suggestApiName, nextRetryName, resolveNameField, normalizeProposal, validateProposal,
   parseJSONFromText, isNonTransientDeployError
 } from "./core/object-builder-rules.js";
+import {
+  pickTabMotif, safeRelationshipName, buildObjectXml, buildFieldXml, buildRecordTypeXml,
+  buildTabXml, buildTabVisibilityXml, buildRecordTypeVisibilityXml, buildProfileXml, buildLayoutXml
+} from "./builder/metadata-xml.js";
+import {domLocal, domChildren, domFind, domFindAll, domToMetXml} from "./builder/metadata-dom.js";
+import {
+  ensureLayoutCustomLinks, removeEmptyLayoutColumns, fixCustomLinksWithFields, layoutNeedsRepair,
+  pickLayoutFieldColumn, findLayoutItemTemplate, buildLayoutItem
+} from "./builder/layout-repair.js";
+import {
+  isDuplicateError, isRelationshipCollisionError, relationshipCollisionName, matchProfileFullName
+} from "./builder/deploy-helpers.js";
+import * as metaSoap from "./builder/metadata-soap.js";
+import {
+  loadChatHistory, saveChatHistory, buildChatEntry, upsertChat, chatToState, loadPersistedState,
+  persistState, restoredDeployState, loadInspectorState, saveInspectorState
+} from "./builder/chat-history.js";
 
 let h = React.createElement;
-
-function openInspectorInNewTab() {
-  try { return localStorage.getItem("sfoc_open_inspector_tab") === "true"; } catch (e) { return false; }
-}
-
-function escXml(str) {
-  if (!str) return "";
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-// 15/18-char Salesforce Id — AppMenu sometimes returns Id in `name`;
-// updateMetadata needs a metadata fullName (developer name), never an Id.
-function isSfId(value) {
-  const v = String(value || "").trim();
-  return /^[a-zA-Z0-9]{15}$/.test(v) || /^[a-zA-Z0-9]{18}$/.test(v);
-}
-
-const RELATIONSHIP_OBJECTS = [
-  "Account", "Contact", "Opportunity", "Case", "Lead", "Campaign",
-  "Product2", "Contract", "Asset", "Activity", "User"
-];
-
-// Valid CustomTab motifs: format MUST be "CustomNN: IconName" (bare "CustomNN"
-// is rejected). Object tabs allow ONLY customObject + motif (+ optional
-// description) — <label> on object tabs causes a deployment error.
-const TAB_MOTIFS = [
-  "Custom1: Heart", "Custom2: Fan", "Custom3: Sun", "Custom4: Hexagon",
-  "Custom5: Leaf", "Custom6: Triangle", "Custom7: Square", "Custom8: Diamond",
-  "Custom9: Lightbulb", "Custom10: Cup", "Custom11: Star", "Custom12: Music",
-  "Custom13: Phone", "Custom14: Flag", "Custom15: Airplane", "Custom16: Trophy",
-  "Custom17: Envelope", "Custom18: Umbrella", "Custom19: Bell", "Custom20: Book",
-  "Custom21: Camera", "Custom22: Clock", "Custom23: Cloud", "Custom24: Compass",
-  "Custom25: Computer", "Custom26: CreditCard", "Custom27: Desk", "Custom28: Globe",
-  "Custom29: Keys", "Custom30: Map", "Custom31: Pencil", "Custom32: People",
-  "Custom33: Puzzle", "Custom34: Truck", "Custom35: Wrench", "Custom36: Briefcase",
-  "Custom37: Calculator", "Custom38: Car", "Custom39: Telescope", "Custom40: Factory",
-  "Custom41: Building", "Custom42: Bank", "Custom43: Bridge", "Custom44: Castle",
-  "Custom45: Medal", "Custom46: Computer", "Custom47: Chip", "Custom48: Trophy",
-  "Custom49: CD/DVD", "Custom50: Bigtop", "Custom51: Apple", "Custom52: Balls",
-  "Custom53: Bell", "Custom54: Boat", "Custom55: Books", "Custom56: Bottle",
-  "Custom57: Desert", "Custom58: Caduceus", "Custom59: Can", "Custom60: Umbrella",
-  "Custom61: Castle", "Custom62: Chalkboard", "Custom63: Chip", "Custom64: Compass",
-  "Custom65: Cup", "Custom66: Dice", "Custom67: Gears", "Custom68: Globe",
-  "Custom69: Guitar", "Custom70: Handsaw", "Custom71: Headset", "Custom72: Helicopter",
-  "Custom73: HighwaySign", "Custom74: HotAirBalloon", "Custom75: IPPhone",
-  "Custom76: Keys", "Custom77: Locked", "Custom78: Map", "Custom79: MeasuringTape",
-  "Custom80: Motorcycle", "Custom81: MusicalNote", "Custom82: Whistle",
-  "Custom83: Pencil", "Custom84: Presenter", "Custom85: RealEstateSign",
-  "Custom86: RedCross", "Custom87: Safe", "Custom88: Sailboat", "Custom89: Saxophone",
-  "Custom90: Scales", "Custom91: Shield", "Custom92: Ship", "Custom93: ShoppingCart",
-  "Custom94: Stethoscope", "Custom95: Stopwatch", "Custom96: StreetSign",
-  "Custom97: Thermometer", "Custom98: Truck", "Custom99: TVCRT",
-  "Custom100: TVWidescreen"
-];
-
-function pickTabMotif(objectName) {
-  let hash = 0;
-  for (let i = 0; i < objectName.length; i++) {
-    hash = ((hash << 5) - hash + objectName.charCodeAt(i)) | 0;
-  }
-  return TAB_MOTIFS[Math.abs(hash) % TAB_MOTIFS.length];
-}
-
-function isDuplicateError(err) {
-  const msg = (err?.message || "") + " " + (err?.statusCode || "") + " " + (err?.detail ? JSON.stringify(err.detail) : "");
-  return /DUPLICATE_DEVELOPER_NAME|DUPLICATE_VALUE|already exists|duplicate value|DUPLICATE_CUSTOM_FIELD/i.test(msg);
-}
-
-// Soft-deleted fields keep their child-relationship name for ~15 days.
-// "There is already a Child Relationship named IT_Asset_Assigned_To on User."
-function isRelationshipCollisionError(err) {
-  return /already a Child Relationship named/i.test(err?.message || "");
-}
-
-function relationshipCollisionName(err) {
-  const m = (err?.message || "").match(/already a Child Relationship named\s+(\S+)\s+on\s+(\S+)/i);
-  return m ? {name: m[1], parent: m[2].replace(/[.,;]+$/, "")} : null;
-}
-
-// CustomApplication child order matters for updateMetadata XSD. `tabs` sits
-// after these and before the later ones — used when the app has no tabs yet.
-const CUSTOM_APP_AFTER_TABS = new Set([
-  "uiType", "workspace", "actionOverrides", "profileActionOverrides",
-  "objectTabs", "listViews", "navType", "formFactors", "brand", "brandColor",
-  "customTab", "logo", "palette", "platform", "urlTarget", "type",
-  "showInAppLauncher", "showInMobileSearch", "showLightningRuntime",
-  "ssoAttemptLogin", "headerColor", "dataServiceUrl", "scriptLocs",
-  "oAuthCustomScope", "platformActionOverrides", "microsite"
-]);
-
-// safeCopyText lives in utils.js (shared with inspector-tools.js).
-
-// Namespace-agnostic DOM helpers for Metadata SOAP responses. Server
-// responses mix prefixes (met:/sf:/unprefixed), so match on localName.
-function domLocal(el) {
-  if (!el) return "";
-  return el.localName || String(el.tagName || "").split(":").pop();
-}
-
-function domChildren(el) {
-  if (!el || !el.childNodes) return [];
-  return Array.from(el.childNodes).filter(n => n.nodeType === 1);
-}
-
-function domFind(root, local) {
-  if (!root) return null;
-  if (domLocal(root) === local) return root;
-  const stack = domChildren(root);
-  while (stack.length > 0) {
-    const el = stack.shift();
-    if (domLocal(el) === local) return el;
-    stack.unshift(...domChildren(el));
-  }
-  return null;
-}
-
-function domFindAll(root, local, out = []) {
-  if (!root) return out;
-  if (domLocal(root) === local) out.push(root);
-  for (const c of domChildren(root)) domFindAll(c, local, out);
-  return out;
-}
-
-function domMakeEl(doc, tag, text) {
-  const el = doc.createElement(tag);
-  if (text !== undefined && text !== null) el.textContent = text;
-  return el;
-}
-
-// Layout metadata requires every layoutItems to carry a customLink child
-// (valued or xsi:nil). Some readMetadata responses omit it on untouched
-// rows; updateMetadata validates the whole layout, so one bare row fails
-// the entire write with "Required field is missing: customLink".
-function ensureLayoutCustomLinks(root) {
-  const XSI = "http://www.w3.org/2001/XMLSchema-instance";
-  for (const li of domFindAll(root, "layoutItems")) {
-    let has = false;
-    const fieldEl = domFind(li, "field");
-    const hasField = !!(fieldEl && fieldEl.textContent);
-    for (const c of domChildren(li)) {
-      if (domLocal(c) === "customLink") {
-        has = true;
-        // Field rows: customLink must be nil. Link rows (no field): keep value.
-        if (hasField) {
-          c.textContent = "";
-          c.setAttributeNS(XSI, "xsi:nil", "true");
-        }
-      }
-    }
-    if (!has) {
-      const cl = li.ownerDocument.createElement("customLink");
-      cl.setAttributeNS(XSI, "xsi:nil", "true");
-      const fieldNode = domFind(li, "field");
-      const beh = domFind(li, "behavior");
-      if (fieldNode) li.insertBefore(cl, fieldNode);
-      else if (beh) li.insertBefore(cl, beh.nextSibling);
-      else li.appendChild(cl);
-    }
-  }
-}
-
-// Drop empty layoutColumns (updateMetadata rejects / mis-validates them).
-function removeEmptyLayoutColumns(root) {
-  for (const sec of domFindAll(root, "layoutSections")) {
-    for (const col of domChildren(sec)) {
-      if (domLocal(col) !== "layoutColumns") continue;
-      if (domChildren(col).length === 0) sec.removeChild(col);
-    }
-  }
-}
-
-// A CustomLinks section must only hold link items. Prior runs appended
-// field rows into the trailing CustomLinks column — that combination fails
-// updateMetadata with "Required field is missing: customLink". Rewrite the
-// style so field rows validate as a normal detail section.
-function fixCustomLinksWithFields(root) {
-  for (const sec of domFindAll(root, "layoutSections")) {
-    const styleEl = domFind(sec, "style");
-    if (!styleEl || styleEl.textContent !== "CustomLinks") continue;
-    const fieldItems = domFindAll(sec, "layoutItems").filter(li => {
-      const f = domFind(li, "field");
-      return f && f.textContent;
-    });
-    if (fieldItems.length > 0) {
-      styleEl.textContent = "TwoColumnsTopToBottom";
-      // Ensure section has a label (some CustomLinks sections omit it).
-      if (!domFind(sec, "label")) {
-        const label = sec.ownerDocument.createElement("label");
-        label.textContent = "Fields";
-        const heading = domFind(sec, "editHeading") || domFind(sec, "detailHeading");
-        if (heading && heading.nextSibling) sec.insertBefore(label, heading.nextSibling);
-        else sec.insertBefore(label, sec.firstChild);
-      }
-    }
-  }
-}
-
-// Pick a column in a section that actually holds field items — never a
-// pure CustomLinks section (field rows there fail customLink validation).
-function pickLayoutFieldColumn(records) {
-  const sections = domFindAll(records, "layoutSections");
-  let fallback = null;
-  for (const sec of sections) {
-    const styleEl = domFind(sec, "style");
-    const style = styleEl ? styleEl.textContent : "";
-    const cols = domChildren(sec).filter(n => domLocal(n) === "layoutColumns");
-    if (!cols.length) continue;
-    const hasFieldItem = cols.some(col =>
-      domFindAll(col, "layoutItems").some(li => {
-        const f = domFind(li, "field");
-        return f && f.textContent;
-      }));
-    if (style === "CustomLinks" && !hasFieldItem) continue;
-    if (hasFieldItem) {
-      for (let i = cols.length - 1; i >= 0; i--) {
-        if (domChildren(cols[i]).length > 0) return cols[i];
-      }
-      return cols[cols.length - 1];
-    }
-    if (!fallback) fallback = cols[cols.length - 1];
-  }
-  if (fallback) return fallback;
-  const all = domFindAll(records, "layoutColumns").filter(c => domChildren(c).length > 0);
-  return all.length ? all[all.length - 1] : null;
-}
-
-// Metadata API relationshipName is the child-relationship developer name on
-// the PARENT (relatedTo) object — it must be unique across that parent.
-// "Assigned_To" already exists on User for many orgs → always prefix the
-// child object name: IT_Asset__c.Assigned_To__c → IT_Asset_Assigned_To.
-function safeRelationshipName(fieldDef, objectName) {
-  const sanitize = s => String(s || "")
-    .replace(/__(?:c|r)$/i, "")
-    .replace(/[^A-Za-z0-9_]/g, "_")
-    .replace(/_{2,}/g, "_")
-    .replace(/^_+|_+$/g, "");
-  let rel = sanitize(fieldDef.relationshipName);
-  if (!rel || !/^[A-Za-z]/.test(rel)) {
-    rel = sanitize(fieldDef.name);
-  }
-  if (!rel) rel = "Rel";
-  const objBase = sanitize(objectName);
-  if (objBase) {
-    const lower = rel.toLowerCase();
-    const objLower = objBase.toLowerCase();
-    if (lower !== objLower && !lower.startsWith(objLower + "_")) {
-      rel = objBase + "_" + rel;
-    }
-  }
-  // relationshipName max length is 40 in Metadata API.
-  if (rel.length > 40) {
-    if (objBase && objBase.length < 30) {
-      const tailLen = Math.max(8, 40 - objBase.length - 1);
-      rel = objBase + "_" + rel.slice(-tailLen);
-      rel = rel.replace(/_+$/g, "").replace(/^_+/g, "");
-      if (rel.length > 40) rel = rel.slice(0, 40).replace(/_+$/g, "");
-    } else {
-      rel = rel.slice(0, 40).replace(/_+$/g, "");
-    }
-  }
-  if (!rel || !/^[A-Za-z]/.test(rel)) rel = "Rel" + rel.replace(/[^A-Za-z0-9]/g, "");
-  if (!rel) rel = "RelField";
-  return rel;
-}
-
-// Serialize a response DOM element to met:-prefixed Metadata XML. Operates
-// on the raw readMetadata records so a full round-trip preserves every
-// field byte-for-byte (no wipe risk on Profile/Layout updates).
-function domToMetXml(el) {
-  const tag = domLocal(el);
-  let attrs = "";
-  if (el.attributes) {
-    for (const a of Array.from(el.attributes)) {
-      if (a.name === "xmlns" || a.name.startsWith("xmlns:")) continue;
-      attrs += ` ${a.name}="${escXml(a.value)}"`;
-    }
-  }
-  const kids = domChildren(el);
-  let text = "";
-  for (const n of Array.from(el.childNodes || [])) {
-    if (n.nodeType === 3 || n.nodeType === 4) text += n.data;
-  }
-  if (kids.length > 0) {
-    if (text.trim() === "") text = "";
-    else text = escXml(text);
-    return `<met:${tag}${attrs}>${text}${kids.map(domToMetXml).join("")}</met:${tag}>`;
-  }
-  if (text === "") return `<met:${tag}${attrs}/>`;
-  return `<met:${tag}${attrs}>${escXml(text)}</met:${tag}>`;
-}
-
-// parseJSONFromText / validateProposal live in core/object-builder-rules.js.
-
-const CHAT_HISTORY_KEY = "sfoc_chat_history";
-
-const INTERRUPTED_DEPLOY_MSG = "The previous deployment was interrupted before it finished. " +
-  "Use Resume deploy to finish the remaining steps.";
-
-function loadChatHistory(sfHost) {
-  try {
-    const raw = localStorage.getItem(CHAT_HISTORY_KEY + "_" + sfHost);
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) { return []; }
-}
-
-function saveChatHistory(sfHost, chats) {
-  try {
-    localStorage.setItem(CHAT_HISTORY_KEY + "_" + sfHost, JSON.stringify(chats));
-  } catch (e) { /* quota exceeded, ignore */ }
-}
-
-function loadPersistedState(sfHost) {
-  try {
-    const raw = sessionStorage.getItem(sfHost + "_sidebar_state");
-    if (raw) {
-      sessionStorage.removeItem(sfHost + "_sidebar_state");
-      return JSON.parse(raw);
-    }
-  } catch (e) { /* ignore */ }
-  return null;
-}
-
-function persistState(sfHost, state) {
-  try {
-    const toSave = {
-      messages: state.messages,
-      currentProposal: state.currentProposal,
-      deploymentStatus: state.deploymentStatus,
-      deploymentStep: state.deploymentStep,
-      deploymentProgress: state.deploymentProgress,
-      deploymentResults: state.deploymentResults,
-      deployError: state.deployError,
-      deployedObjectName: state.deployedObjectName,
-      selectedFields: state.selectedFields,
-      visibilityMode: state.visibilityMode,
-      selectedProfiles: state.selectedProfiles,
-      availableProfiles: state.availableProfiles,
-      selectedApp: state.selectedApp && !isSfId(state.selectedApp) ? state.selectedApp : null,
-      availableApps: (state.availableApps || []).filter(a =>
-        a && a.developerName && !isSfId(a.developerName)),
-      recordTypesDone: state.recordTypesDone,
-      builderMode: state.builderMode || "plan"
-    };
-    sessionStorage.setItem(sfHost + "_sidebar_state", JSON.stringify(toSave));
-  } catch (e) { /* ignore */ }
-}
-
-// Inspector page + loaded data, saved only when the sidebar minimizes so a
-// refresh of the host page resets it (key is consumed on read). Parsed once
-// per document — initApp can construct App twice (session fallback race), and
-// the second construction must see the same snapshot.
-let _inspectorStateCache;
-function loadInspectorState(sfHost) {
-  if (_inspectorStateCache !== undefined) return _inspectorStateCache;
-  _inspectorStateCache = null;
-  try {
-    const raw = sessionStorage.getItem(sfHost + "_inspector_state");
-    if (raw) {
-      sessionStorage.removeItem(sfHost + "_inspector_state");
-      _inspectorStateCache = JSON.parse(raw);
-    }
-  } catch (e) { /* ignore */ }
-  return _inspectorStateCache;
-}
-
-function saveInspectorState(sfHost, state) {
-  const payload = {uiMode: state.uiMode || "inspector",
-    hostBoot: urlParams.get("hostBoot") || null, ff: null};
-  try { payload.ff = ffTakeSnapshot(); } catch (e) { /* ignore */ }
-  // Quota: retry without the snapshot rather than lose the current page too.
-  const attempts = [payload, {...payload, ff: null}];
-  for (const attempt of attempts) {
-    try {
-      sessionStorage.setItem(sfHost + "_inspector_state", JSON.stringify(attempt));
-      return;
-    } catch (e) { /* try next */ }
-  }
-}
 
 
 class App extends React.Component {
@@ -424,14 +61,8 @@ class App extends React.Component {
       isEnhancing: false,
       enhancedPreview: null,
       lastFailedPrompt: null,
-      // A saved mid-deploy flag means the run was interrupted (the frame
-      // was torn down), not that it finished.
-      deploymentStatus: saved?.deploymentStatus === "deploying" ? "failed" : (saved?.deploymentStatus || null),
-      deploymentStep: saved?.deploymentStatus === "deploying" ? "Deployment interrupted" : (saved?.deploymentStep || null),
-      deploymentProgress: saved?.deploymentProgress || 0,
-      deploymentResults: saved?.deploymentResults || [],
-      deployError: saved?.deploymentStatus === "deploying" ? INTERRUPTED_DEPLOY_MSG : (saved?.deployError || null),
-      deployedObjectName: saved?.deployedObjectName || null,
+      // deploymentStatus/Step/Progress/Results, deployError, deployedObjectName
+      ...restoredDeployState(saved),
       error: null,
       userInput: "",
       chatHistory: loadChatHistory(props.sfHost),
@@ -443,18 +74,10 @@ class App extends React.Component {
       availableProfiles: saved?.availableProfiles || [],
       profilesLoading: false,
       recordTypesDone: saved?.recordTypesDone || false,
-      availableApps: (saved?.availableApps || []).filter(a =>
-        a && a.developerName && !isSfId(a.developerName)),
-      appsLoading: false,
-      selectedApp: saved?.selectedApp && !isSfId(saved.selectedApp) ? saved.selectedApp : null,
-      appAssigned: false,
-      appLoadError: null,
-      _appsTried: false,
       builderMode: saved?.builderMode || "plan",
       colorTheme: (typeof localStorage !== "undefined" && localStorage.getItem("sfoc_theme")) || "dark",
       apiNamesOn: false
     };
-    this._appsLoading = false;
     this.spinnerCount = 0;
     this.fromTabId = (() => {
       const v = parseInt(urlParams.get("fromTab"), 10);
@@ -615,7 +238,8 @@ class App extends React.Component {
 
   componentWillUnmount() {
     window.removeEventListener("storage", this._onStorage);
-    saveInspectorState(this.props.sfHost, this.state);
+    saveInspectorState(this.props.sfHost, this.state,
+      {hostBoot: urlParams.get("hostBoot"), takeSnapshot: ffTakeSnapshot});
     this._saveState();
   }
 
@@ -679,38 +303,11 @@ class App extends React.Component {
     }
   }
 
-  _tabWasCreated(results) {
-    return (results || []).some(r => r.type === "tab" && r.status === "success");
-  }
-
   _autoSaveChat() {
-    const {messages, currentProposal, deploymentResults, deploymentStatus, activeChatId, selectedFields,
-      visibilityMode, selectedProfiles, selectedApp, builderMode, deployError, deployedObjectName} = this.state;
-    if (messages.length <= 1) return;
-    const chatHistory = [...this.state.chatHistory];
-    const chatEntry = {
-      id: activeChatId || Date.now().toString(),
-      timestamp: Date.now(),
-      messages,
-      currentProposal,
-      deploymentResults,
-      deploymentStatus,
-      deployError,
-      deployedObjectName,
-      selectedFields,
-      visibilityMode,
-      selectedProfiles,
-      builderMode: builderMode || "plan",
-      selectedApp: selectedApp && !isSfId(selectedApp) ? selectedApp : null
-    };
-    const existingIdx = chatHistory.findIndex(c => c.id === chatEntry.id);
-    if (existingIdx >= 0) {
-      chatHistory[existingIdx] = chatEntry;
-    } else {
-      chatHistory.unshift(chatEntry);
-    }
-    // Keep last 20 chats
-    const trimmed = chatHistory.slice(0, 20);
+    if (this.state.messages.length <= 1) return;
+    const chatEntry = buildChatEntry(this.state);
+    // Keeps the last 20 chats.
+    const trimmed = upsertChat(this.state.chatHistory, chatEntry);
     this.setState({chatHistory: trimmed, activeChatId: chatEntry.id});
     saveChatHistory(this.props.sfHost, trimmed);
   }
@@ -731,17 +328,10 @@ class App extends React.Component {
       visibilityMode: "all",
       selectedProfiles: [],
       recordTypesDone: false,
-      availableApps: [],
-      appsLoading: false,
-      selectedApp: null,
-      appAssigned: false,
-      appLoadError: null,
-      _appsTried: false,
       builderMode: "plan",
       isEnhancing: false,
       enhancedPreview: null
     }, () => {
-      this._appsLoading = false;
       if (!hasValidConfig()) {
         this.addSystemMessage("Welcome! Before we begin, please open Settings (top-right) and configure your LLM provider.");
       } else {
@@ -845,32 +435,7 @@ class App extends React.Component {
   loadChat(chatId) {
     const chat = this.state.chatHistory.find(c => c.id === chatId);
     if (!chat) return;
-    // Never restore a mid-deploy flag — the previous run is gone.
-    const st = chat.deploymentStatus === "deploying" ? "failed" : (chat.deploymentStatus || null);
-    this.setState({
-      messages: chat.messages || [],
-      currentProposal: chat.currentProposal || null,
-      deploymentStatus: st,
-      deploymentStep: st === "complete" ? (chat.deploymentStep || "Deployment complete!") : (chat.deploymentStep || null),
-      deploymentProgress: chat.deploymentProgress || 0,
-      deploymentResults: chat.deploymentResults || [],
-      deployError: chat.deploymentStatus === "deploying" ? INTERRUPTED_DEPLOY_MSG : (chat.deployError || null),
-      deployedObjectName: chat.deployedObjectName || null,
-      selectedFields: chat.selectedFields || (chat.currentProposal?.fields || []).map(f => f.name),
-      visibilityMode: chat.visibilityMode || "all",
-      selectedProfiles: chat.selectedProfiles || [],
-      recordTypesDone: false,
-      availableApps: [],
-      appsLoading: false,
-      selectedApp: chat.selectedApp && !isSfId(chat.selectedApp) ? chat.selectedApp : null,
-      appAssigned: false,
-      appLoadError: null,
-      _appsTried: false,
-      builderMode: chat.builderMode || "plan",
-      error: null,
-      activeChatId: chat.id
-    }, () => {
-      this._appsLoading = false;
+    this.setState(chatToState(chat), () => {
       if (chat.currentProposal) {
         this.loadProfiles().catch(() => {});
       }
@@ -902,13 +467,12 @@ class App extends React.Component {
   }
 
   async sendMessage(promptOverride, opts = {}) {
-    const {currentProposal, messages} = this.state;
+    const {currentProposal} = this.state;
     const userInput = promptOverride != null ? String(promptOverride) : this.state.userInput;
     const echo = !opts || opts.echo !== false;
     if (!userInput.trim() || this.state.isGenerating) return;
 
-    const config = getSavedConfig();
-    if (!config || !hasValidConfig()) {
+    if (!isAiConfigured()) {
       this.setState({error: "Please configure your LLM provider in Options first."});
       return;
     }
@@ -917,8 +481,6 @@ class App extends React.Component {
     this.setState({userInput: "", isGenerating: true, error: null, streamingText: "", enhancedPreview: null, lastFailedPrompt: null});
 
     try {
-      const provider = getLLMProvider(config.provider);
-
       const apiMessages = [
         {role: "system", content: currentProposal ? REFINEMENT_PROMPT : SYSTEM_PROMPT},
         ...this.buildConversationHistory(),
@@ -929,12 +491,7 @@ class App extends React.Component {
         this.setState({streamingText: text});
       };
 
-      let response;
-      if (config.provider === "openai_compatible" || config.provider === "openrouter") {
-        response = await provider.sendMessage(apiMessages, config.apiKey, config.model, onChunk, config.baseUrl);
-      } else {
-        response = await provider.sendMessage(apiMessages, config.apiKey, config.model, onChunk);
-      }
+      const response = await askAi({messages: apiMessages, onChunk});
 
       this.setState({streamingText: ""});
 
@@ -995,15 +552,13 @@ class App extends React.Component {
     }
     if (this.state.isEnhancing) return;
 
-    const config = getSavedConfig();
-    if (!config || !hasValidConfig()) {
+    if (!isAiConfigured()) {
       this.setState({error: "Please configure your LLM provider in Options first."});
       return;
     }
 
     this.setState({isEnhancing: true, enhancedPreview: null, error: null});
     try {
-      const provider = getLLMProvider(config.provider);
       const proposalCtx = this.state.currentProposal
         ? `\nCurrent object draft for context (do not redesign it, only improve the request below): label="${this.state.currentProposal.object?.label || ""}", fields=[${(this.state.currentProposal.fields || []).map(f => f.label || f.name).join(", ")}]`
         : "";
@@ -1012,12 +567,7 @@ class App extends React.Component {
         {role: "user", content: `Draft request to improve:${proposalCtx}\n\n"${draft}"`}
       ];
 
-      let response;
-      if (config.provider === "openai_compatible" || config.provider === "openrouter") {
-        response = await provider.sendMessage(apiMessages, config.apiKey, config.model, null, config.baseUrl);
-      } else {
-        response = await provider.sendMessage(apiMessages, config.apiKey, config.model, null);
-      }
+      const response = await askAi({messages: apiMessages});
 
       const enhanced = String(response || "").trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
       if (!enhanced) throw new Error("LLM returned an empty enhancement.");
@@ -1207,7 +757,7 @@ class App extends React.Component {
           try {
             let fieldXml;
             try {
-              fieldXml = this.buildFieldXml(objectName, field);
+              fieldXml = buildFieldXml(objectName, field);
             } catch (buildErr) {
               buildErr.nonTransient = true;
               throw buildErr;
@@ -1485,141 +1035,21 @@ class App extends React.Component {
     });
   }
 
-  async metaSoapRequest(action, metadataXml) {
-    const url = "https://" + sfConn.instanceHostname + "/services/Soap/m/" + apiVersion;
-    console.log("[SaralForce] SOAP request to:", url, "Action:", action);
+  // Metadata SOAP transport lives in builder/metadata-soap.js; these thin
+  // wrappers bind it to the current deploy's abort state and debug sink.
+  _soapCtx() {
+    return {
+      conn: sfConn,
+      apiVersion,
+      signal: this._abortController ? this._abortController.signal : null,
+      isAborted: () => !!this._deployAborted,
+      onDebug: (action, requestXml, responseText) => this.noteSoapDebug(action, requestXml, responseText),
+      delay: ms => this.delay(ms)
+    };
+  }
 
-    const envelope = `<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:met="http://soap.sforce.com/2006/04/metadata" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <soapenv:Header>
-    <met:SessionHeader>
-      <met:sessionId>${sfConn.sessionId}</met:sessionId>
-    </met:SessionHeader>
-  </soapenv:Header>
-  <soapenv:Body>
-    <met:${action}>
-      ${metadataXml}
-    </met:${action}>
-  </soapenv:Body>
-</soapenv:Envelope>`;
-
-    console.log("[SaralForce] SOAP envelope length:", envelope.length);
-
-    // Per-request AbortController: timeout must NOT abort the shared deploy
-    // controller (that permanently kills every later SOAP call). Listen to
-    // the shared cancel signal instead so "Cancel" still works.
-    const local = new AbortController();
-    let onSharedAbort = null;
-    if (this._abortController) {
-      if (this._abortController.signal.aborted) local.abort();
-      else {
-        onSharedAbort = () => local.abort();
-        this._abortController.signal.addEventListener("abort", onSharedAbort, {once: true});
-      }
-    }
-    const timeoutId = setTimeout(() => local.abort(), 60000);
-
-    let response;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/xml",
-          "SOAPAction": '""'
-        },
-        body: envelope,
-        signal: local.signal
-      });
-    } catch (fetchErr) {
-      clearTimeout(timeoutId);
-      if (fetchErr.name === "AbortError") {
-        if (this._deployAborted) throw new Error("Deployment cancelled");
-        this.noteSoapDebug(action, metadataXml, "TIMED OUT after 60s (no response body)");
-        throw new Error(`Request timed out after 60s (${action})`);
-      }
-      throw new Error("Network error: " + fetchErr.message);
-    } finally {
-      clearTimeout(timeoutId);
-      if (onSharedAbort && this._abortController) {
-        this._abortController.signal.removeEventListener("abort", onSharedAbort);
-      }
-    }
-
-    console.log("[SaralForce] SOAP response status:", response.status);
-
-    const responseText = await response.text();
-    console.log("[SaralForce] SOAP response (first 500 chars):", responseText.substring(0, 500));
-
-    if (response.status !== 200) {
-      const faultMatch = responseText.match(/<faultstring[^>]*>([^<]*)<\/faultstring>/);
-      const faultMsg = faultMatch ? faultMatch[1] : "HTTP " + response.status;
-      this.noteSoapDebug(action, metadataXml, responseText);
-      throw new Error(faultMsg);
-    }
-
-    // Parse as XML DOM to handle namespace prefixes like met:id, met:done etc.
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(responseText, "text/xml");
-    const parseError = doc.querySelector("parsererror");
-    if (parseError) {
-      console.error("[SaralForce] XML parse error:", parseError.textContent);
-      this.noteSoapDebug(action, metadataXml, responseText);
-      throw new Error("Failed to parse Metadata API response XML");
-    }
-
-    if (action === "checkDeployStatus") {
-      const doneEl = doc.querySelector("done");
-      const successEl = doc.querySelector("success");
-      const errorMessageEl = doc.querySelector("errorMessage");
-      const problemEl = doc.querySelector("problem");
-      const done = doneEl ? doneEl.textContent : "true";
-      const status = successEl ? (successEl.textContent === "true" ? "Succeeded" : "Failed") : "Failed";
-      const errorMsg = errorMessageEl ? errorMessageEl.textContent : (problemEl ? problemEl.textContent : null);
-      return {done, status, errorMessage: errorMsg};
-    }
-
-    // For create/createResponse - find the result element
-    const resultEl = doc.querySelector("result");
-    if (resultEl) {
-      const idEl = resultEl.querySelector("id");
-      const doneEl = resultEl.querySelector("done");
-      const stateEl = resultEl.querySelector("state");
-      const successEl = resultEl.querySelector("success");
-      const errorsEl = resultEl.querySelector("errors");
-      const messageEl = resultEl.querySelector("message");
-      const statusCodeEl = resultEl.querySelector("statusCode");
-
-      const id = idEl ? idEl.textContent : null;
-      const done = doneEl ? doneEl.textContent : "true";
-      const state = stateEl ? stateEl.textContent : "Completed";
-      const success = successEl ? successEl.textContent : "true";
-      const message = messageEl ? messageEl.textContent : null;
-      const statusCode = statusCodeEl ? statusCodeEl.textContent : null;
-
-      console.log("[SaralForce] Parsed result:", {id, done, state, success, message, statusCode});
-
-      if (success === "false" && errorsEl) {
-        const msgEl = errorsEl.querySelector("message");
-        const codeEl = errorsEl.querySelector("statusCode");
-        const errMsg = msgEl ? msgEl.textContent : "Metadata API returned error";
-        this.noteSoapDebug(action, metadataXml, responseText);
-        const err = new Error(errMsg);
-        if (codeEl) err.statusCode = codeEl.textContent;
-        throw err;
-      }
-
-      return {id, done, state, success, message, statusCode};
-    }
-
-    // Check for SOAP fault
-    const faultEl = doc.querySelector("faultstring");
-    if (faultEl) {
-      this.noteSoapDebug(action, metadataXml, responseText);
-      throw new Error(faultEl.textContent);
-    }
-
-    this.noteSoapDebug(action, metadataXml, responseText);
-    throw new Error("Could not parse Metadata API response: " + responseText.substring(0, 300));
+  metaSoapRequest(action, metadataXml) {
+    return metaSoap.metaSoapRequest(this._soapCtx(), action, metadataXml);
   }
 
   // Stash last SOAP request/response (truncated, no session ids — those
@@ -1641,295 +1071,26 @@ class App extends React.Component {
     return `SOAP action: ${d.action}\n--- request (tail) ---\n${d.request}\n--- response (head) ---\n${d.response}`;
   }
 
-  // Raw SOAP POST returning a parsed DOM. Used for readMetadata (whose
-  // records response doesn't fit metaSoapRequest's create-style parser).
-  async soapPostDom(bodyInnerXml) {
-    const url = "https://" + sfConn.instanceHostname + "/services/Soap/m/" + apiVersion;
-    const envelope = `<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:met="http://soap.sforce.com/2006/04/metadata" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <soapenv:Header>
-    <met:SessionHeader>
-      <met:sessionId>${sfConn.sessionId}</met:sessionId>
-    </met:SessionHeader>
-  </soapenv:Header>
-  <soapenv:Body>
-    ${bodyInnerXml}
-  </soapenv:Body>
-</soapenv:Envelope>`;
-    // Same per-request abort pattern as metaSoapRequest (see above).
-    const local = new AbortController();
-    let onSharedAbort = null;
-    if (this._abortController) {
-      if (this._abortController.signal.aborted) local.abort();
-      else {
-        onSharedAbort = () => local.abort();
-        this._abortController.signal.addEventListener("abort", onSharedAbort, {once: true});
-      }
-    }
-    const timeoutId = setTimeout(() => local.abort(), 60000);
-    let response;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: {"Content-Type": "text/xml", "SOAPAction": '""'},
-        body: envelope,
-        signal: local.signal
-      });
-    } catch (fetchErr) {
-      clearTimeout(timeoutId);
-      if (fetchErr.name === "AbortError") {
-        if (this._deployAborted) throw new Error("Deployment cancelled");
-        this.noteSoapDebug("soapPostDom", bodyInnerXml, "TIMED OUT after 60s (no response body)");
-        throw new Error("Request timed out after 60s (soapPostDom)");
-      }
-      throw new Error("Network error: " + fetchErr.message);
-    } finally {
-      clearTimeout(timeoutId);
-      if (onSharedAbort && this._abortController) {
-        this._abortController.signal.removeEventListener("abort", onSharedAbort);
-      }
-    }
-    const text = await response.text();
-    const doc = new DOMParser().parseFromString(text, "text/xml");
-    if (doc.querySelector("parsererror")) {
-      this.noteSoapDebug("raw", bodyInnerXml, text);
-      throw new Error("Failed to parse Metadata API response XML");
-    }
-    const fault = domFind(doc.documentElement, "Fault");
-    if (fault) {
-      const fs = domFind(fault, "faultstring");
-      const msg = fs ? fs.textContent : "Metadata API SOAP fault";
-      this.noteSoapDebug("raw", bodyInnerXml, text);
-      throw new Error(msg);
-    }
-    return doc;
+  metadataReadRecords(type, fullName) {
+    return metaSoap.metadataReadRecords(this._soapCtx(), type, fullName);
   }
 
-  // Read one metadata component, returning its <records> DOM element (or
-  // null when the fullName doesn't exist). Namespace-agnostic.
-  async metadataReadRecords(type, fullName) {
-    const body = `<met:readMetadata><met:type>${escXml(type)}</met:type>` +
-      `<met:fullNames>${escXml(fullName)}</met:fullNames></met:readMetadata>`;
-    const doc = await this.soapPostDom(body);
-    return domFind(doc.documentElement, "records") || null;
+  metadataUpdateRecords(xsiType, fullName, recordsEl) {
+    return metaSoap.metadataUpdateRecords(this._soapCtx(), xsiType, fullName, recordsEl);
   }
 
-  // Write back a records element previously obtained via metadataReadRecords
-  // (optionally mutated) using the SYNC updateMetadata call, which supports
-  // every metadata type (unlike async update()). Full round-trip: nothing
-  // outside the mutation is lost, so Profile/Layout updates can't wipe data.
-  async metadataUpdateRecords(xsiType, fullName, recordsEl) {
-    // CustomApplication (and others) must use metadata fullName, never a record Id.
-    if (isSfId(fullName)) {
-      throw new Error(
-        `Refusing updateMetadata: fullName "${fullName}" is a Salesforce Id, not a metadata name`
-      );
-    }
-    const parts = [];
-    for (const child of domChildren(recordsEl)) {
-      if (domLocal(child) === "fullName") continue;
-      parts.push(domToMetXml(child));
-    }
-    const xml = `<met:metadata xsi:type="met:${xsiType}">` +
-      `<met:fullName>${escXml(fullName)}</met:fullName>${parts.join("")}</met:metadata>`;
-    const result = await this.metaSoapRequest("updateMetadata", xml);
-    // updateMetadata can run async — poll or the caller verifies too early.
-    if (result && result.id && (result.done === "false" || result.state === "InProgress")) {
-      console.log(`[SaralForce] updateMetadata(${xsiType}) async, polling ${result.id}...`);
-      await this.pollDeployStatus(result.id);
-    }
-    return result;
+  metadataCreate(metadataXml) {
+    return metaSoap.metadataCreate(this._soapCtx(), metadataXml);
   }
 
-  // Create one metadata component. Primary path is the synchronous
-  // createMetadata() call (SaveResult) — the async CRUD create()/checkStatus()
-  // pair is documented as available only in API 30.0 and earlier, and this
-  // app talks to /services/Soap/m/<apiVersion> (67.0 by default). The legacy
-  // create() + checkStatus() polling is kept only as a fallback for an org
-  // or endpoint that rejects createMetadata as an unknown operation.
-  async metadataCreate(metadataXml) {
-    try {
-      return await this.metaSoapRequest("createMetadata", metadataXml);
-    } catch (err) {
-      if (!/No operation available|INVALID_OPERATION|Unknown operation|not a valid operation/i.test(err.message || "")) {
-        throw err;
-      }
-      console.warn("[SaralForce] createMetadata unavailable, falling back to create():", err.message);
-      const res = await this.metaSoapRequest("create", metadataXml);
-      if (res && res.id && (res.done === "false" || res.state === "InProgress")) {
-        await this.pollDeployStatus(res.id);
-      }
-      return res;
-    }
-  }
-
-  async pollDeployStatus(deployId, maxAttempts = 30) {
-    for (let i = 0; i < maxAttempts; i++) {
-      if (this._deployAborted) throw new Error("Deployment cancelled");
-      await this.delay(3000);
-      console.log(`[SaralForce] Polling create status (${i + 1}/${maxAttempts})...`);
-
-      const checkXml = `<met:id>${deployId}</met:id>`;
-
-      let result;
-      try {
-        result = await this.metaSoapRequest("checkStatus", checkXml);
-      } catch (netErr) {
-        console.warn("[SaralForce] Poll network error:", netErr.message);
-        if (i === maxAttempts - 1) throw netErr;
-        continue;
-      }
-
-      console.log("[SaralForce] Create status:", result);
-
-      if (result.state === "Failed" || result.state === "Error") {
-        throw new Error(result.message || result.errorMessage || "Metadata creation failed");
-      }
-      if (result.done === "true" || result.state === "Completed") {
-        console.log("[SaralForce] Create completed successfully");
-        return;
-      }
-    }
-    throw new Error("Deployment timed out waiting for completion");
+  pollDeployStatus(deployId, maxAttempts = 30) {
+    return metaSoap.pollDeployStatus(this._soapCtx(), deployId, maxAttempts);
   }
 
   buildObjectXml(objectDef) {
-    // Prompt/plan contract is object.nameField.{label,type,format}; the flat
-    // nameFieldType/nameFieldLabel/displayFormat keys are a legacy fallback.
-    const nameField = resolveNameField(objectDef);
-    const nameFieldXml = nameField.type === "AutoNumber"
-      ? `<met:nameField><met:displayFormat>${escXml(nameField.displayFormat)}</met:displayFormat><met:label>${escXml(nameField.label)}</met:label><met:type>AutoNumber</met:type></met:nameField>`
-      : `<met:nameField><met:label>${escXml(nameField.label)}</met:label><met:type>Text</met:type></met:nameField>`;
-
-    const parts = [
-      `<met:metadata xsi:type="met:CustomObject">`,
-      `  <met:fullName>${escXml(objectDef.name)}</met:fullName>`,
-      `  <met:label>${escXml(objectDef.label)}</met:label>`,
-      `  <met:pluralLabel>${escXml(objectDef.pluralLabel || objectDef.label + "s")}</met:pluralLabel>`,
-      `  <met:deploymentStatus>Deployed</met:deploymentStatus>`,
-      `  <met:sharingModel>${escXml(objectDef.sharingModel || "ReadWrite")}</met:sharingModel>`,
-    ];
-    if (objectDef.description) {
-      parts.push(`  <met:description>${escXml(objectDef.description)}</met:description>`);
-    }
-    parts.push(`  ${nameFieldXml}`);
-    parts.push(`</met:metadata>`);
-
-    console.log("[SaralForce] Object XML:", parts.join("\n"));
-    return parts.join("\n");
-  }
-
-  buildFieldXml(objectName, fieldDef) {
-    const fullName = `${objectName}.${fieldDef.name}`;
-    const type = normalizeFieldType(fieldDef.type);
-    if (!type) throw new Error(`Unsupported field type: ${fieldDef.type}`);
-    const parts = [
-      `<met:metadata xsi:type="met:CustomField">`,
-      `  <met:fullName>${escXml(fullName)}</met:fullName>`,
-      `  <met:label>${escXml(fieldDef.label)}</met:label>`,
-      `  <met:type>${type}</met:type>`,
-    ];
-
-    if (fieldDef.description) {
-      parts.push(`  <met:description>${escXml(fieldDef.description)}</met:description>`);
-    }
-
-    const required = !!fieldDef.required && fieldDef.required !== "false" && supportsRequired(type);
-    if (required) parts.push(`  <met:required>true</met:required>`);
-
-    switch (type) {
-      case "Text":
-        parts.push(`  <met:length>${fieldDef.length || 255}</met:length>`);
-        if (fieldDef.unique) parts.push(`  <met:unique>true</met:unique>`);
-        if (fieldDef.externalId) parts.push(`  <met:externalId>true</met:externalId>`);
-        break;
-      case "TextArea":
-        break;
-      case "LongTextArea":
-        parts.push(`  <met:length>${fieldDef.length || 32768}</met:length>`);
-        parts.push(`  <met:visibleLines>${fieldDef.visibleLines || 6}</met:visibleLines>`);
-        break;
-      case "Number":
-      case "Currency":
-      case "Percent":
-        parts.push(`  <met:precision>${parseInt(fieldDef.precision) || 18}</met:precision>`);
-        parts.push(`  <met:scale>${parseInt(fieldDef.scale) || 0}</met:scale>`);
-        if (type === "Number") {
-          if (fieldDef.unique) parts.push(`  <met:unique>true</met:unique>`);
-          if (fieldDef.externalId) parts.push(`  <met:externalId>true</met:externalId>`);
-        }
-        break;
-      case "Date":
-      case "DateTime":
-      case "Email":
-      case "Phone":
-      case "Url":
-        break;
-      case "Checkbox":
-        parts.push(`  <met:defaultValue>${fieldDef.defaultValue === true || fieldDef.defaultValue === "true" ? "true" : "false"}</met:defaultValue>`);
-        break;
-      case "Picklist":
-      case "MultiselectPicklist": {
-        // Empty/null values or a defaultValue outside the set →
-        // INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST on create.
-        const raw = Array.isArray(fieldDef.values) ? fieldDef.values : [];
-        const values = [];
-        const seen = new Set();
-        for (const v of raw) {
-          const s = String(v == null ? "" : v).trim();
-          if (!s) continue;
-          const key = s.toLowerCase();
-          if (seen.has(key)) continue;
-          seen.add(key);
-          values.push(s);
-        }
-        if (!values.length) {
-          throw new Error(
-            `Picklist field "${fieldDef.name}" has no values — provide 2-5 options`
-          );
-        }
-        let defVal = String(fieldDef.defaultValue == null ? "" : fieldDef.defaultValue).trim();
-        if (defVal && !values.some(v => v.toLowerCase() === defVal.toLowerCase())) {
-          defVal = "";
-        }
-        if (!defVal) defVal = values[0];
-        parts.push(`  <met:valueSet>`);
-        parts.push(`    <met:valueSetDefinition>`);
-        parts.push(`      <met:sorted>${fieldDef.sortValues ? "true" : "false"}</met:sorted>`);
-        for (const v of values) {
-          const isDefault = v.toLowerCase() === defVal.toLowerCase();
-          parts.push(`      <met:value>`);
-          parts.push(`        <met:fullName>${escXml(v)}</met:fullName>`);
-          parts.push(`        <met:default>${isDefault ? "true" : "false"}</met:default>`);
-          parts.push(`        <met:label>${escXml(v)}</met:label>`);
-          parts.push(`      </met:value>`);
-        }
-        parts.push(`    </met:valueSetDefinition>`);
-        parts.push(`  </met:valueSet>`);
-        if (type === "MultiselectPicklist") {
-          parts.push(`  <met:visibleLines>${parseInt(fieldDef.visibleLines) || 4}</met:visibleLines>`);
-        }
-        break;
-      }
-      case "Lookup":
-      case "MasterDetail": {
-        const relName = safeRelationshipName(fieldDef, objectName);
-        parts.push(`  <met:relationshipLabel>${escXml(fieldDef.label)}</met:relationshipLabel>`);
-        parts.push(`  <met:relationshipName>${escXml(relName)}</met:relationshipName>`);
-        parts.push(`  <met:referenceTo>${escXml(fieldDef.relatedTo)}</met:referenceTo>`);
-        // A required lookup cannot keep the default SetNull delete
-        // constraint, so pair it with Restrict.
-        if (type === "Lookup" && required) {
-          parts.push(`  <met:deleteConstraint>Restrict</met:deleteConstraint>`);
-        }
-        break;
-      }
-      default:
-        throw new Error(`Unsupported field type: ${fieldDef.type}`);
-    }
-
-    parts.push(`</met:metadata>`);
-    return parts.join("\n");
+    const xml = buildObjectXml(objectDef);
+    console.log("[SaralForce] Object XML:", xml);
+    return xml;
   }
 
   async resolveCurrentUserId() {
@@ -1954,23 +1115,6 @@ class App extends React.Component {
       }
     }
     throw new Error("Could not get user identity (tried userinfo and /id, last status " + lastStatus + ")");
-  }
-
-  buildRecordTypeXml(objectName, rt) {
-    // Standalone RecordType create: fullName is ObjectApi.DeveloperName
-    // (DeveloperName has NO __c suffix). Omit businessProcess — custom
-    // objects have none. Deployed via metadataCreate (createMetadata).
-    const parts = [
-      `<met:metadata xsi:type="met:RecordType">`,
-      `  <met:fullName>${escXml(objectName)}.${escXml(rt.name)}</met:fullName>`,
-      `  <met:label>${escXml(rt.label)}</met:label>`,
-      `  <met:active>${rt.active === false ? "false" : "true"}</met:active>`,
-    ];
-    if (rt.description) {
-      parts.push(`  <met:description>${escXml(rt.description)}</met:description>`);
-    }
-    parts.push(`</met:metadata>`);
-    return parts.join("\n");
   }
 
   async grantFieldPermissions(objectName, fieldNames) {
@@ -2086,27 +1230,7 @@ class App extends React.Component {
 
       // Snapshot: does this layout need structural repair before we decide
       // whether a no-op update is safe? (Must run BEFORE fixes apply.)
-      let needsRepair = false;
-      for (const sec of domFindAll(records, "layoutSections")) {
-        const st = domFind(sec, "style");
-        if (st && st.textContent === "CustomLinks" &&
-            domFindAll(sec, "layoutItems").some(li => {
-              const f = domFind(li, "field");
-              return f && f.textContent;
-            })) {
-          needsRepair = true;
-        }
-      }
-      if (domFindAll(records, "layoutColumns").some(c => domChildren(c).length === 0)) {
-        needsRepair = true;
-      }
-      for (const li of domFindAll(records, "layoutItems")) {
-        const f = domFind(li, "field");
-        if (f && f.textContent && !domFind(li, "customLink")) {
-          needsRepair = true;
-          break;
-        }
-      }
+      const needsRepair = layoutNeedsRepair(records);
 
       // Repair known-bad shapes from prior runs BEFORE appending/serializing.
       fixCustomLinksWithFields(records);
@@ -2130,10 +1254,10 @@ class App extends React.Component {
       if (!target && toAdd.length > 0) {
         return {ok: false, error: "Layout has no field column to extend (add fields manually in Setup)"};
       }
-      const template = this.findLayoutItemTemplate(records);
+      const template = findLayoutItemTemplate(records);
       if (target) {
         for (const f of toAdd) {
-          target.appendChild(this.buildLayoutItem(doc, template, f));
+          target.appendChild(buildLayoutItem(doc, template, f));
         }
       }
       // Final pass on the tree we are about to serialize.
@@ -2167,63 +1291,6 @@ class App extends React.Component {
     }
   }
 
-  // Template = first existing field item. Cloning its exact shape preserves
-  // schema order and required elements: reads carry
-  // <customLink xsi:nil="true"/> (required-but-nullable), so a hand-built
-  // (behavior, field) item is rejected with "Required field is missing:
-  // customLink". A valued customLink is reset to nil so we never duplicate
-  // another row's link.
-  findLayoutItemTemplate(records) {
-    for (const li of domFindAll(records, "layoutItems")) {
-      const f = domFind(li, "field");
-      if (f && f.textContent) return li;
-    }
-    return null;
-  }
-
-  buildLayoutItem(doc, template, fieldName) {
-    const XSI = "http://www.w3.org/2001/XMLSchema-instance";
-    // Never emit "Object.Field" in layoutItems — Metadata API wants the bare
-    // API name here (qualified names fail with "no CustomField named …").
-    const short = String(fieldName || "").split(".").pop();
-    fieldName = short;
-    // Metadata API rejects layoutItems without a valued-or-nil customLink
-    // ("Required field is missing: customLink"). The Name field must also be
-    // behavior=Required when authoring a fresh layout ("Field Name must be
-    // Required"). Clone templates still force both so round-trips are safe.
-    const behavior = fieldName === "Name" ? "Required" : "Edit";
-    let item;
-    if (template) {
-      item = template.cloneNode(true);
-      let hasCustomLink = false;
-      for (const c of domChildren(item)) {
-        const ln = domLocal(c);
-        if (ln === "field") c.textContent = fieldName;
-        else if (ln === "behavior") c.textContent = behavior;
-        else if (ln === "customLink") {
-          hasCustomLink = true;
-          c.textContent = "";
-          c.setAttributeNS(XSI, "xsi:nil", "true");
-        }
-      }
-      if (!hasCustomLink) {
-        const cl = doc.createElement("customLink");
-        cl.setAttributeNS(XSI, "xsi:nil", "true");
-        const beh = domFind(item, "behavior");
-        if (beh && beh.nextSibling) item.insertBefore(cl, beh.nextSibling);
-        else item.appendChild(cl);
-      }
-    } else {
-      item = domMakeEl(doc, "layoutItems");
-      item.appendChild(domMakeEl(doc, "behavior", behavior));
-      const cl = doc.createElement("customLink");
-      cl.setAttributeNS(XSI, "xsi:nil", "true");
-      item.appendChild(cl);
-      item.appendChild(domMakeEl(doc, "field", fieldName));
-    }
-    return item;
-  }
-
   // Fallback layout creation: fresh "{Object}-SF Creator Layout" containing
   // Name + the new fields, via async create(). The section style is cloned
   // from the existing layout so it renders correctly. NOTE: a new layout is
@@ -2242,7 +1309,7 @@ class App extends React.Component {
         section.appendChild(c.cloneNode(true));
       }
       const col = doc.createElement("layoutColumns");
-      const template = this.findLayoutItemTemplate(records);
+      const template = findLayoutItemTemplate(records);
       // LayoutItem.field must be the bare API name for custom fields on this
       // object. A leftover "Object.Field" from a prior read is rejected with
       // "no CustomField named IT_Asset__c.Assigned_To__c found" when the
@@ -2251,7 +1318,7 @@ class App extends React.Component {
       const fields = ["Name", ...Array.from(new Set(toAdd.map(shortName)))
         .filter(f => f && f !== "Name")];
       for (const f of fields) {
-        col.appendChild(this.buildLayoutItem(doc, template, f));
+        col.appendChild(buildLayoutItem(doc, template, f));
       }
       section.appendChild(col);
       // fullName for a custom layout is Object.LayoutDeveloperName — a
@@ -2259,9 +1326,7 @@ class App extends React.Component {
       // confuses field resolution ("no CustomField named Object.Field").
       const layoutDevName = "ForceForge_Layout";
       const newName = `${objectName}.${layoutDevName}`;
-      const xml = `<met:metadata xsi:type="met:Layout">` +
-        `<met:fullName>${escXml(newName)}</met:fullName>` +
-        `${domToMetXml(section)}</met:metadata>`;
+      const xml = buildLayoutXml(newName, domToMetXml(section));
       await this.metadataCreate(xml);
       console.log("[SaralForce] Fallback layout created:", newName);
       return {ok: true, method: "create-fallback", added: toAdd.length, layoutName: newName};
@@ -2279,7 +1344,7 @@ class App extends React.Component {
     // When the org's Profile fullName list is already known (all-profiles
     // visibility loop), match first — avoids a doomed readMetadata per label.
     if (this._profileMetadataNames && this._profileMetadataNames.length) {
-      const found = this.matchProfileFullName(label, this._profileMetadataNames);
+      const found = matchProfileFullName(label, this._profileMetadataNames);
       if (found) {
         try {
           const records = await this.metadataReadRecords("Profile", found);
@@ -2318,7 +1383,7 @@ class App extends React.Component {
         this._profileMetadataNames = await this.listMetadataFullNames("Profile");
       }
       const names = this._profileMetadataNames;
-      const found = this.matchProfileFullName(label, names);
+      const found = matchProfileFullName(label, names);
       if (found) {
         const records = await this.metadataReadRecords("Profile", found);
         if (records) return {fullName: found, records};
@@ -2334,59 +1399,8 @@ class App extends React.Component {
     return {error: attempts.join("; ") || "no candidates tried"};
   }
 
-  // listMetadata → array of fullNames for a metadata type.
-  async listMetadataFullNames(type) {
-    const body = `<met:listMetadata><met:queries><met:type>${escXml(type)}</met:type></met:queries></met:listMetadata>`;
-    const doc = await this.soapPostDom(body);
-    const names = [];
-    for (const fp of domFindAll(doc.documentElement, "fileProperties")) {
-      const fn = domFind(fp, "fullName");
-      if (fn && fn.textContent) names.push(fn.textContent);
-    }
-    if (names.length === 0) {
-      // Some orgs return fullNames without a fileProperties wrapper.
-      for (const fn of domFindAll(doc.documentElement, "fullName")) {
-        if (fn.textContent) names.push(fn.textContent);
-      }
-    }
-    return names;
-  }
-
-  // Case-insensitive / punctuation-insensitive match of a profile label
-  // against metadata fullNames (e.g. "System Administrator" → "Admin").
-  matchProfileFullName(label, names) {
-    const norm = s => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    // "System Administrator (non-API user)" → also try the base before "(".
-    const baseLabel = String(label || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
-    const targets = [norm(label), norm(baseLabel)].filter(Boolean);
-    if (targets.includes("systemadministrator")) {
-      const aliases = ["admin", "systemadministrator"];
-      for (const a of aliases) {
-        const hit = names.find(n => norm(n) === a);
-        if (hit) return hit;
-      }
-    }
-    for (const target of targets) {
-      const exact = names.find(n => norm(n) === target);
-      if (exact) return exact;
-      const loose = names.find(n => {
-        const nn = norm(n);
-        return nn && (nn.startsWith(target) || target.startsWith(nn));
-      });
-      if (loose) return loose;
-    }
-    // Base label only (drop qualifier): "Marketing User (API)" → "Marketing User".
-    if (baseLabel && baseLabel !== label) {
-      const base = norm(baseLabel);
-      const exact = names.find(n => norm(n) === base);
-      if (exact) return exact;
-      const loose = names.find(n => {
-        const nn = norm(n);
-        return nn && (nn.startsWith(base) || base.startsWith(nn));
-      });
-      if (loose) return loose;
-    }
-    return null;
+  listMetadataFullNames(type) {
+    return metaSoap.listMetadataFullNames(this._soapCtx(), type);
   }
 
   async setTabVisibilityForProfiles(objectName, labels, recordTypes = []) {
@@ -2421,7 +1435,7 @@ class App extends React.Component {
         let fullName;
         let records = null;
         if (bulk && this._profileMetadataNames?.length) {
-          fullName = this.matchProfileFullName(label, this._profileMetadataNames);
+          fullName = matchProfileFullName(label, this._profileMetadataNames);
           if (!fullName) {
             // Parenthetical / odd labels still need a full resolve attempt.
             try {
@@ -2470,32 +1484,22 @@ class App extends React.Component {
             }
           }
           if (!tabOn) {
-            parts.push(`<met:tabVisibilities><met:tab>${escXml(objectName)}</met:tab>` +
-              `<met:visibility>DefaultOn</met:visibility></met:tabVisibilities>`);
+            parts.push(buildTabVisibilityXml(objectName));
           }
           const missingRTs = recordTypes.filter(rt =>
             !visibleRTs.has(`${objectName}.${rt.name}`));
           for (const rt of missingRTs) {
-            parts.push(`<met:recordTypeVisibilities>` +
-              `<met:default>false</met:default>` +
-              `<met:recordType>${escXml(objectName)}.${escXml(rt.name)}</met:recordType>` +
-              `<met:visible>true</met:visible></met:recordTypeVisibilities>`);
+            parts.push(buildRecordTypeVisibilityXml(objectName, rt.name));
           }
         } else {
           // Bulk / no pre-read: always send the tab visibility entry (idempotent).
-          parts.push(`<met:tabVisibilities><met:tab>${escXml(objectName)}</met:tab>` +
-            `<met:visibility>DefaultOn</met:visibility></met:tabVisibilities>`);
+          parts.push(buildTabVisibilityXml(objectName));
           for (const rt of recordTypes) {
-            parts.push(`<met:recordTypeVisibilities>` +
-              `<met:default>false</met:default>` +
-              `<met:recordType>${escXml(objectName)}.${escXml(rt.name)}</met:recordType>` +
-              `<met:visible>true</met:visible></met:recordTypeVisibilities>`);
+            parts.push(buildRecordTypeVisibilityXml(objectName, rt.name));
           }
         }
         if (parts.length > 0) {
-          const xml = `<met:metadata xsi:type="met:Profile">` +
-            `<met:fullName>${escXml(fullName)}</met:fullName>` +
-            `${parts.join("")}</met:metadata>`;
+          const xml = buildProfileXml(fullName, parts);
           const upd = await this.metaSoapRequest("updateMetadata", xml);
           // updateMetadata can run async — poll or visibility isn't applied
           // when the user opens App Launcher right after deploy.
@@ -2577,19 +1581,6 @@ class App extends React.Component {
     return `https://${sfHost}/lightning/setup/ManageTabs/home`;
   }
 
-  buildTabXml(objectName, objectLabel) {
-    const motif = pickTabMotif(objectName);
-    // NOTE: object tabs must NOT include <met:label> — only customObject +
-    // motif (+ optional description). Label causes deployment errors.
-    // fullName for an object tab is the object API name.
-    return `<met:metadata xsi:type="met:CustomTab">\n` +
-      `  <met:fullName>${escXml(objectName)}</met:fullName>\n` +
-      `  <met:customObject>true</met:customObject>\n` +
-      `  <met:motif>${escXml(motif)}</met:motif>\n` +
-      `  <met:description>${escXml("Tab for " + objectLabel)}</met:description>\n` +
-      `</met:metadata>`;
-  }
-
   async createTab(objectName, objectLabel) {
     // Strategy: Metadata SOAP first (documented format), then Tooling REST.
     // Returns {ok, method, error} so the UI can show the real failure reason.
@@ -2612,7 +1603,7 @@ class App extends React.Component {
     };
     try {
       console.log("[SaralForce] Creating tab via Metadata API...", tabDetail);
-      await this.metadataCreate(this.buildTabXml(objectName, objectLabel));
+      await this.metadataCreate(buildTabXml(objectName, objectLabel));
       console.log("[SaralForce] Tab created via Metadata API for:", objectName);
       if (!(await verifyTab())) {
         return {ok: false, error: `Tab creation reported success but "${objectName}" not found in CustomTab metadata after re-reads — wait a minute and retry, or check Setup → Tabs.`};
@@ -2792,28 +1783,6 @@ class App extends React.Component {
     }
   }
 
-  // After deploy: pin the tab to the app chosen in Deployment Targets.
-  async _autoAssignSelectedApp() {
-    if (this._autoAssignRunning) return;
-    if (!this.state.selectedApp || this.state.appAssigned || this.state.appsLoading ||
-        this.state.deploymentStatus === "deploying") {
-      return;
-    }
-    this._autoAssignRunning = true;
-    try {
-      if (!this.state.availableApps.length) {
-        await this.loadApps();
-      }
-      if (!this.state.selectedApp || !this.state.availableApps.length) return;
-      console.log("[SaralForce] Auto-assigning tab to pre-selected app:", this.state.selectedApp);
-      await this.assignTabToApp();
-    } catch (e) {
-      console.warn("[SaralForce] Auto-assign failed:", e.message);
-    } finally {
-      this._autoAssignRunning = false;
-    }
-  }
-
   setVisibilityMode(mode) {
     this.setState({visibilityMode: mode}, () => {
       if (mode === "selected") this.loadProfiles();
@@ -2861,711 +1830,6 @@ class App extends React.Component {
     }
   }
 
-  tabWasCreated() {
-    return (this.state.deploymentResults || [])
-      .some(r => r.type === "tab" && r.status === "success");
-  }
-
-  // CustomApplication record Id → metadata fullName (developer name).
-  async resolveCustomAppFullNameById(appId) {
-    if (!isSfId(appId)) return null;
-    try {
-      const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
-        encodeURIComponent(
-          `SELECT Id, DeveloperName, Name FROM CustomApplication WHERE Id = '${appId}'`));
-      const row = res && res.records && res.records[0];
-      if (!row) return null;
-      return String(row.DeveloperName || row.Name || "").trim() || null;
-    } catch (e) {
-      console.warn("[SaralForce] resolveCustomAppFullNameById failed:", e.message);
-      return null;
-    }
-  }
-
-  // Normalize for loose label ↔ developerName matching.
-  _normAppName(s) {
-    return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  }
-
-  // Build map: normalized(label|developerName) → real metadata fullName.
-  // AppMenu only returns the display label; readMetadata needs DeveloperName.
-  async fetchCustomAppDeveloperMap() {
-    if (this._appDevMap && this._appDevMap.size) return this._appDevMap;
-    const map = new Map();
-    const put = (keys, fullName) => {
-      const fn = String(fullName || "").trim();
-      if (!fn || isSfId(fn)) return;
-      for (const k of keys) {
-        const nk = this._normAppName(k);
-        if (nk && !map.has(nk)) map.set(nk, fn);
-      }
-    };
-    // Tooling: Name is the label, DeveloperName is metadata fullName.
-    for (const soql of [
-      `SELECT Id, DeveloperName, Name FROM CustomApplication ORDER BY Name`,
-      `SELECT Id, DeveloperName, MasterLabel FROM CustomApplication ORDER BY MasterLabel`,
-      `SELECT Id, DeveloperName FROM CustomApplication ORDER BY DeveloperName`
-    ]) {
-      try {
-        const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
-          encodeURIComponent(soql));
-        const rows = res.records || [];
-        if (!rows.length) continue;
-        for (const a of rows) {
-          const dn = a.DeveloperName || a.Name || a.MasterLabel;
-          put([a.DeveloperName, a.Name, a.MasterLabel, dn], dn);
-        }
-        console.log(`[SaralForce] CustomApp developer map Tooling: ${map.size} (${soql})`);
-        if (map.size) break;
-      } catch (e) {
-        console.warn("[SaralForce] Tooling CustomApplication map failed:", e.message);
-      }
-    }
-    // listMetadata fullNames (metadata truth).
-    try {
-      const names = await this.listMetadataFullNames("CustomApplication");
-      for (const n of names) put([n, n.replace(/_/g, " ")], n);
-      if (names.length) console.log(`[SaralForce] CustomApp map +listMetadata: ${map.size}`);
-    } catch (e) {
-      console.warn("[SaralForce] listMetadata CustomApplication map failed:", e.message);
-    }
-    // AppMenuItem: Label ↔ Name for TabSet apps.
-    try {
-      const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-        encodeURIComponent(`SELECT Name, Label FROM AppMenuItem WHERE Type = 'TabSet'`));
-      for (const a of (res.records || [])) {
-        // Prefer existing Tooling fullNames; only seed if we don't have a better hit.
-        put([a.Label, a.Name], a.Name);
-      }
-    } catch (e) {
-      console.warn("[SaralForce] AppMenuItem map failed:", e.message);
-    }
-    this._appDevMap = map;
-    return map;
-  }
-
-  // Label/name candidates → ordered real fullNames (DeveloperName first).
-  async resolveAppFullNameCandidates(names, label) {
-    const out = [];
-    const seen = new Set();
-    const add = n => {
-      const s = String(n || "").trim();
-      if (s && !isSfId(s) && !seen.has(s.toLowerCase())) {
-        seen.add(s.toLowerCase());
-        out.push(s);
-      }
-    };
-    let map = null;
-    try {
-      map = await this.fetchCustomAppDeveloperMap();
-    } catch (e) {
-      console.warn("[SaralForce] resolveAppFullNameCandidates map:", e.message);
-    }
-    const probes = [...(names || []), label].filter(Boolean);
-    if (map && map.size) {
-      for (const p of probes) {
-        const hit = map.get(this._normAppName(p));
-        if (hit) add(hit);
-      }
-      // Label "Shivam App" → try developer-style variants against the map.
-      for (const p of probes) {
-        const variants = [
-          String(p).replace(/\s+/g, "_"),
-          String(p).replace(/\s+/g, ""),
-          String(p).replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "")
-        ];
-        for (const v of variants) {
-          const hit = map.get(this._normAppName(v));
-          if (hit) add(hit);
-        }
-      }
-    }
-    for (const p of probes) add(p);
-    return out;
-  }
-
-  // Post-deploy: list Lightning apps so the user can pin the new tab.
-  // Prefer AppMenu + AppMenuItem (user-visible, includes standard apps like
-  // Sales). CustomApplication Tooling/SOQL/listMetadata are fallbacks —
-  // listMetadata often omits standard apps; plain SOQL has no Name column.
-  async loadApps() {
-    if (this.state.appsLoading || this._appsLoading) return;
-    this._appsLoading = true;
-    this._appsTried = true;
-    this.setState({appsLoading: true, error: null, appLoadError: null});
-    const apps = [];
-    const seen = new Set();
-    const attempts = [];
-    const push = (candidates, displayName) => {
-      // Metadata fullName must never be a Salesforce Id.
-      const names = (Array.isArray(candidates) ? candidates : [candidates])
-        .map(s => String(s || "").trim())
-        .filter(Boolean)
-        .filter(s => !isSfId(s));
-      if (!names.length) return;
-      const primary = names[0];
-      const key = primary.toLowerCase();
-      if (seen.has(key)) {
-        const existing = apps.find(a => a.id.toLowerCase() === key);
-        if (existing) {
-          for (const n of names) {
-            if (n && !existing.candidates.some(c => c.toLowerCase() === n.toLowerCase())) {
-              existing.candidates.push(n);
-            }
-          }
-        }
-        return;
-      }
-      seen.add(key);
-      const disp = String(displayName || primary).trim();
-      apps.push({
-        id: primary,
-        name: isSfId(disp) ? primary : (disp || primary),
-        developerName: primary,
-        candidates: [...names]
-      });
-    };
-    const note = (label, err) => {
-      const msg = err && err.message ? err.message : String(err || "empty");
-      attempts.push(`${label}: ${msg}`);
-      console.warn(`[SaralForce] loadApps ${label} failed:`, msg);
-    };
-
-    try {
-      // 1) App Menu REST — what the user actually sees in the App Launcher.
-      try {
-        const res = await sfConn.rest(`/services/data/v${apiVersion}/appMenu/AppSwitcher/`);
-        let items = [];
-        if (Array.isArray(res)) items = res;
-        else if (res && Array.isArray(res.items)) items = res.items;
-        else if (res && Array.isArray(res.records)) items = res.records;
-        else if (res && typeof res === "object") {
-          // Some orgs nest under menu keys or return a single object map.
-          for (const v of Object.values(res)) {
-            if (Array.isArray(v) && v.length && (v[0].label || v[0].name)) {
-              items = v;
-              break;
-            }
-          }
-          if (!items.length && (res.label || res.name)) items = [res];
-        }
-        if (!items.length) throw new Error("no items in response: " + JSON.stringify(res).slice(0, 200));
-        for (const it of items) {
-          const label = it.label || it.Name || it.title || "";
-          const rawName = it.name || it.Name || it.apiName || it.DeveloperName || "";
-          const rawId = it.id || it.Id || (isSfId(rawName) ? rawName : "") || (isSfId(label) ? label : "");
-          // Prefer developer-name-ish fields; AppMenu may put record Id in `name`.
-          let ordered = [it.DeveloperName, it.apiName, rawName, label]
-            .map(s => String(s || "").trim())
-            .filter(s => s && !isSfId(s));
-          // Id-only item: resolve CustomApplication.DeveloperName via Tooling.
-          if (!ordered.length && rawId) {
-            const resolved = await this.resolveCustomAppFullNameById(rawId);
-            if (resolved && !isSfId(resolved)) ordered = [resolved];
-            if (resolved && label && !isSfId(label)) ordered.push(label);
-          }
-          const deduped = ordered.filter((s, i) =>
-            ordered.findIndex(t => t.toLowerCase() === s.toLowerCase()) === i);
-          if (!deduped.length) continue;
-          const disp = String(label && !isSfId(label) ? label : deduped[0]).trim();
-          push(deduped, isSfId(disp) ? deduped[0] : disp);
-        }
-        if (!apps.length) throw new Error("parsed 0 apps from AppMenu");
-        console.log(`[SaralForce] loadApps AppMenu: ${apps.length} apps`);
-      } catch (e) {
-        note("AppMenu AppSwitcher", e);
-      }
-
-      // 2) AppMenuItem SOQL — Type=TabSet is the app list; Name ≈ developer name.
-      if (!apps.length) {
-        try {
-          const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-            encodeURIComponent(`SELECT Name, Label, Type FROM AppMenuItem WHERE Type = 'TabSet' ORDER BY Label`));
-          const rows = res.records || [];
-          if (!rows.length) throw new Error("0 rows");
-          for (const a of rows) {
-            const label = a.Label || a.Name;
-            push([a.Name, a.Label, a.DeveloperName], label);
-          }
-          if (!apps.length) throw new Error("parsed 0 apps from AppMenuItem");
-          console.log(`[SaralForce] loadApps AppMenuItem: ${apps.length} apps`);
-        } catch (e) {
-          note("AppMenuItem SOQL", e);
-        }
-      }
-
-      // 3) Tooling CustomApplication (MasterLabel + DeveloperName).
-      if (!apps.length) {
-        try {
-          const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
-            encodeURIComponent(`SELECT Id, MasterLabel, DeveloperName FROM CustomApplication ORDER BY MasterLabel`));
-          for (const a of (res.records || [])) push([a.DeveloperName, a.MasterLabel], a.MasterLabel || a.DeveloperName);
-          console.log(`[SaralForce] loadApps Tooling: ${apps.length} apps`);
-        } catch (e) {
-          note("Tooling CustomApplication", e);
-        }
-      }
-
-      // 4) Plain SOQL (DeveloperName only — no Name column on this object).
-      if (!apps.length) {
-        try {
-          const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-            encodeURIComponent(`SELECT Id, DeveloperName FROM CustomApplication ORDER BY DeveloperName`));
-          for (const a of (res.records || [])) push(a.DeveloperName, a.DeveloperName);
-          console.log(`[SaralForce] loadApps SOQL: ${apps.length} apps`);
-        } catch (e) {
-          note("CustomApplication SOQL", e);
-        }
-      }
-
-      // 5) Metadata listMetadata fullNames (often custom-only; last resort).
-      if (!apps.length) {
-        try {
-          const names = await this.listMetadataFullNames("CustomApplication");
-          if (!names.length) throw new Error("0 fullNames");
-          for (const n of names) push(n, n.replace(/_/g, " "));
-          console.log(`[SaralForce] loadApps listMetadata: ${apps.length} apps`);
-        } catch (e) {
-          note("listMetadata CustomApplication", e);
-        }
-      }
-
-      // Always map labels → real CustomApplication DeveloperNames so
-      // readMetadata(update) never gets "Shivam" when fullName is "Shivam_App".
-      try {
-        const map = await this.fetchCustomAppDeveloperMap();
-        for (const app of apps) {
-          const keys = [app.name, app.developerName, ...(app.candidates || [])];
-          for (const k of keys) {
-            const hit = map.get(this._normAppName(k));
-            if (hit && !app.candidates.some(c => c.toLowerCase() === hit.toLowerCase())) {
-              app.candidates.unshift(hit);
-            }
-            if (hit) app.developerName = hit;
-          }
-          // Prefer real DeveloperName as the radio value / primary id.
-          const primaryHit = map.get(this._normAppName(app.name)) ||
-            map.get(this._normAppName(app.developerName));
-          if (primaryHit) {
-            app.developerName = primaryHit;
-            app.id = primaryHit;
-            if (!app.candidates.some(c => c.toLowerCase() === primaryHit.toLowerCase())) {
-              app.candidates.unshift(primaryHit);
-            } else {
-              app.candidates = [
-                primaryHit,
-                ...app.candidates.filter(c => c.toLowerCase() !== primaryHit.toLowerCase())
-              ];
-            }
-          }
-        }
-        console.log(`[SaralForce] loadApps enriched with developer map (${map.size} entries)`);
-      } catch (e) {
-        console.warn("[SaralForce] loadApps developer-map enrich failed:", e.message);
-      }
-
-      const loadError = apps.length
-        ? null
-        : (attempts.length
-            ? "No apps returned — " + attempts.join(" | ")
-            : "No Lightning apps found.");
-      this._appsLoading = false;
-      this.setState({
-        availableApps: apps,
-        appsLoading: false,
-        appLoadError: loadError,
-        error: apps.length ? null : loadError
-      });
-    } catch (e) {
-      const extra = attempts.length ? " (" + attempts.join(" | ") + ")" : "";
-      const msg = "Could not load apps: " + e.message + extra;
-      this._appsLoading = false;
-      this.setState({appsLoading: false, appLoadError: msg, error: msg});
-    }
-  }
-
-  toggleApp(developerName) {
-    this.setState(prev => ({
-      selectedApp: prev.selectedApp === developerName ? null : developerName
-    }));
-  }
-
-  // Append the object tab to the chosen app's navigation (CustomApplication.tabs).
-  async assignTabToApp() {
-    const {currentProposal, selectedApp, deploymentStatus, availableApps} = this.state;
-    if (!currentProposal || deploymentStatus === "deploying") return;
-    if (!this.tabWasCreated()) {
-      this.setState({error: "Deploy the object first (tab must exist), then assign it to an app."});
-      return;
-    }
-    if (!selectedApp) {
-      this.setState({error: "Select an app to assign the tab to."});
-      return;
-    }
-    const tabName = currentProposal.object.name;
-    const app = availableApps.find(a => a.developerName === selectedApp || a.name === selectedApp || a.id === selectedApp);
-    const appLabel = app ? app.name : selectedApp;
-    // CustomApplication fullName may be DeveloperName, Label, or a known alias
-    // (standard apps: AppMenuItem.Name often differs from metadata fullName).
-    const candidateNames = [];
-    const seenFn = new Set();
-    const addFn = n => {
-      const s = String(n || "").trim();
-      if (s && !seenFn.has(s.toLowerCase())) {
-        seenFn.add(s.toLowerCase());
-        candidateNames.push(s);
-      }
-    };
-    if (app && Array.isArray(app.candidates)) app.candidates.forEach(addFn);
-    addFn(selectedApp);
-    if (app) addFn(app.name);
-    if (app && app.developerName) addFn(app.developerName);
-    // Common standard-app metadata fullNames when list only had labels.
-    if (app && /^sales$/i.test(app.name || "")) {
-      ["LightningSales", "Sales", "SalesCloud"].forEach(addFn);
-    }
-    if (app && /^service$/i.test(app.name || "")) {
-      ["LightningService", "Service", "ServiceCloud"].forEach(addFn);
-    }
-    // Resolve label → real DeveloperName (AppMenu only returns the label).
-    try {
-      const resolved = await this.resolveAppFullNameCandidates(
-        candidateNames, appLabel);
-      for (const r of resolved) addFn(r);
-      // Put resolved fullNames first so readMetadata tries the real name first.
-      const resolvedSet = new Set(resolved.map(s => s.toLowerCase()));
-      candidateNames.sort((a, b) => {
-        const ar = resolvedSet.has(a.toLowerCase()) ? 0 : 1;
-        const br = resolvedSet.has(b.toLowerCase()) ? 0 : 1;
-        return ar - br;
-      });
-      console.log(`[SaralForce] assign candidates for "${appLabel}":`, candidateNames);
-    } catch (e) {
-      console.warn("[SaralForce] resolveAppFullNameCandidates:", e.message);
-    }
-    // Never send a Salesforce Id as CustomApplication fullName.
-    const usableNames = candidateNames.filter(n => !isSfId(n));
-    if (!usableNames.length) {
-      this.setState({
-        deploymentStatus: "complete",
-        deploymentStep: "App assignment failed",
-        error: `"${appLabel}" has no metadata developer name (got Salesforce Id only). ` +
-          `Reload apps or pick a different app.`,
-        deploymentResults: [...this.state.deploymentResults.filter(r => r.type !== "app"), {
-          type: "app",
-          name: currentProposal.object.name + "_app",
-          label: `App (${appLabel})`,
-          status: "error",
-          error: "No usable CustomApplication fullName (Salesforce Id filtered out)"
-        }]
-      });
-      return;
-    }
-    candidateNames.length = 0;
-    usableNames.forEach(addFn);
-    this._deployAborted = false;
-    this._abortController = new AbortController();
-    this.setState({
-      deploymentStatus: "deploying",
-      deploymentStep: `Assigning tab to "${appLabel}"...`,
-      error: null
-    });
-    try {
-      let records = null;
-      let fullName = null;
-      const readErrors = [];
-      for (const name of candidateNames) {
-        try {
-          const rec = await this.metadataReadRecords("CustomApplication", name);
-          if (rec) {
-            records = rec;
-            fullName = name;
-            break;
-          }
-          readErrors.push(`${name}: not found`);
-        } catch (e) {
-          readErrors.push(`${name}: ${e.message}`);
-        }
-      }
-      if (!records) {
-        // Last resort: fuzzy-match label against listMetadata fullNames.
-        try {
-          const names = await this.listMetadataFullNames("CustomApplication");
-          const norm = s => this._normAppName(s);
-          const probes = [appLabel, selectedApp, app && app.name, app && app.developerName]
-            .map(norm).filter(Boolean);
-          let hit = null;
-          for (const n of names) {
-            const nn = norm(n);
-            if (probes.some(p => nn === p || nn.startsWith(p) || p.startsWith(nn))) {
-              hit = n;
-              break;
-            }
-          }
-          if (hit) {
-            const rec = await this.metadataReadRecords("CustomApplication", hit);
-            if (rec) {
-              records = rec;
-              fullName = hit;
-              console.log(`[SaralForce] assign fuzzy-resolved "${appLabel}" → "${hit}"`);
-            }
-          }
-        } catch (e2) {
-          readErrors.push(`listMetadata fuzzy: ${e2.message}`);
-        }
-      }
-      if (!records) {
-        throw new Error(
-          `Could not read CustomApplication metadata for "${appLabel}"` +
-          (readErrors.length ? ` — tried ${readErrors.join("; ")}` : "") +
-          `. Open Setup → App Manager → edit the app and check its Developer Name, ` +
-          `or reload apps and pick it again.`
-        );
-      }
-      const existingTabs = [];
-      let lastTabsEl = null;
-      for (const child of domChildren(records)) {
-        if (domLocal(child) === "tabs") {
-          if (child.textContent) existingTabs.push(child.textContent.trim());
-          lastTabsEl = child;
-        }
-      }
-      const fnBefore = domFind(records, "fullName");
-      if (fnBefore && fnBefore.textContent && !isSfId(fnBefore.textContent)) {
-        fullName = fnBefore.textContent;
-      }
-      if (isSfId(fullName)) {
-        throw new Error(
-          `Read "${appLabel}" but got Salesforce Id "${fullName}" as fullName — ` +
-          `CustomApplication metadata fullName must be a developer name, not an Id.`
-        );
-      }
-      console.log(`[SaralForce] assignTabToApp read "${fullName}": tabs=[${existingTabs.join(", ")}]`);
-      if (existingTabs.includes(tabName)) {
-        this.setState({
-          deploymentStatus: "complete",
-          deploymentStep: `Tab already on "${appLabel}"`,
-          appAssigned: true,
-          deploymentResults: [...this.state.deploymentResults.filter(r => r.type !== "app"), {
-            type: "app",
-            name: currentProposal.object.name + "_app",
-            label: `App (${appLabel} — already included)`,
-            status: "success"
-          }]
-        });
-        return;
-      }
-      // Empty nav is already broken ("No Items") — seed Home + new tab so the
-      // app is usable instead of writing a single unknown entry into a void.
-      const desiredTabs = existingTabs.length
-        ? [...existingTabs, tabName]
-        : ["standard-home", tabName];
-      const doc = records.ownerDocument;
-      // Capture insert position BEFORE removing tabs (removed nodes lose parent).
-      // XSD order: insert <tabs> before the first sibling that must follow it;
-      // if none, append at the end. Never insert after <label> blindly.
-      let insertParent = null;
-      let insertRef = null;
-      if (lastTabsEl && lastTabsEl.parentNode) {
-        insertParent = lastTabsEl.parentNode;
-        insertRef = lastTabsEl.nextSibling;
-      } else {
-        insertParent = records;
-        insertRef = null;
-        for (const child of domChildren(records)) {
-          const ln = domLocal(child);
-          if (ln === "tabs" || ln === "fullName") continue;
-          if (CUSTOM_APP_AFTER_TABS.has(ln)) {
-            insertRef = child;
-            break;
-          }
-        }
-      }
-      // Remove every existing tabs element, then re-insert the full desired list.
-      for (const child of [...domChildren(records)]) {
-        if (domLocal(child) === "tabs") child.remove();
-      }
-      const tabEls = desiredTabs.map(t => {
-        const el = doc.createElement("tabs");
-        el.textContent = t;
-        return el;
-      });
-      if (insertParent) {
-        // Advance past the just-inserted node, otherwise each insert lands
-        // BEFORE the previous one and the whole nav order gets reversed.
-        let cursor = insertRef;
-        for (const el of tabEls) {
-          insertParent.insertBefore(el, cursor);
-          cursor = el.nextSibling;
-        }
-      } else {
-        for (const el of tabEls) records.appendChild(el);
-      }
-      const fnEl = domFind(records, "fullName");
-      if (fnEl && fnEl.textContent && !isSfId(fnEl.textContent)) fullName = fnEl.textContent;
-      if (isSfId(fullName)) {
-        throw new Error(`Refusing updateMetadata with Salesforce Id as fullName: ${fullName}`);
-      }
-      const preCount = existingTabs.length;
-      await this.metadataUpdateRecords("CustomApplication", fullName, records);
-      // Metadata writes can lag — brief settle before verify.
-      await this.delay(1500);
-      // Verify: re-read and ensure we didn't lose navigation items.
-      try {
-        const verify = await this.metadataReadRecords("CustomApplication", fullName);
-        const postTabs = [];
-        if (verify) {
-          for (const child of domChildren(verify)) {
-            if (domLocal(child) === "tabs" && child.textContent) postTabs.push(child.textContent.trim());
-          }
-        }
-        console.log(`[SaralForce] assignTabToApp verify "${fullName}" tabs=[${postTabs.join(", ")}] (was ${preCount})`);
-        if (!postTabs.includes(tabName)) {
-          // Cross-check via Tooling so we don't false-fail on a flaky read.
-          let toolingHas = false;
-          try {
-            const tRes = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
-              encodeURIComponent(
-                `SELECT Id, DeveloperName, Name FROM CustomApplication WHERE DeveloperName = '${fullName.replace(/'/g, "\\'")}' OR Name = '${appLabel.replace(/'/g, "\\'")}' LIMIT 1`));
-            toolingHas = !!(tRes.records && tRes.records.length);
-          } catch (te) {
-            console.warn("[SaralForce] Tooling app cross-check failed:", te.message);
-          }
-          throw new Error(
-            `Update reported success but "${tabName}" is missing from "${appLabel}" ` +
-            `(fullName="${fullName}", tabs now: ${postTabs.join(", ") || "none"}). ` +
-            (toolingHas
-              ? `App exists — open App Manager → Navigation Items and add the tab, or switch apps once to refresh the nav bar.`
-              : `Could not confirm the app in Tooling — the label may map to a different DeveloperName.`)
-          );
-        }
-        if (preCount > 0 && postTabs.length < preCount) {
-          throw new Error(
-            `Navigation shrank on "${appLabel}" (${preCount} → ${postTabs.length}). ` +
-            `Fix in App Manager → Navigation Items.`
-          );
-        }
-        if (preCount === 0 && postTabs.length < 2) {
-          throw new Error(
-            `App "${appLabel}" still has no usable navigation (tabs: ${postTabs.join(", ") || "none"}). ` +
-            `Open App Manager → edit the app → Navigation Items and add Home + your tab.`
-          );
-        }
-      } catch (verifyErr) {
-        if (/cancelled/i.test(verifyErr.message)) throw verifyErr;
-        console.warn("[SaralForce] assignTabToApp verify failed:", verifyErr.message);
-        // Still surface verify problems — a "success" that dropped tabs is worse than an error.
-        throw verifyErr;
-      }
-      this.setState(prev => ({
-        deploymentStatus: "complete",
-        deploymentStep: `Tab assigned to "${appLabel}" (${fullName}) — switch apps or refresh to see it`,
-        appAssigned: true,
-        deploymentResults: [...prev.deploymentResults.filter(r => r.type !== "app"), {
-          type: "app",
-          name: currentProposal.object.name + "_app",
-          label: `App (${appLabel} → ${fullName})`,
-          status: "success"
-        }]
-      }));
-      // Tab must be visible on the running profile or it won't show in the nav bar.
-      try {
-        await this.ensureCurrentUserVisibility(currentProposal.object.name);
-      } catch (visErr) {
-        console.warn("[SaralForce] post-assign visibility:", visErr.message);
-      }
-    } catch (err) {
-      if (/cancelled/i.test(err.message)) {
-        this.setState({deploymentStatus: "complete", deploymentStep: "Cancelled"});
-        return;
-      }
-      this.setState(prev => ({
-        deploymentStatus: "complete",
-        deploymentStep: "App assignment failed",
-        error: err.message,
-        deploymentResults: [...prev.deploymentResults.filter(r => r.type !== "app"), {
-          type: "app",
-          name: currentProposal.object.name + "_app",
-          label: `App (${selectedApp})`,
-          status: "error",
-          error: err.message,
-          debug: this.lastSoapDebugText()
-        }]
-      }));
-    }
-  }
-
-  // Post-deploy (or after Redeploy): apply tab visibility without redoing
-  // object/fields/layout. Enabled once the Tab row is a success.
-  async applyTabVisibility() {
-    const {currentProposal, visibilityMode, selectedProfiles, deploymentStatus} = this.state;
-    if (!currentProposal || deploymentStatus === "deploying") return;
-    const tabOk = this.state.deploymentResults.some(r => r.type === "tab" && r.status === "success");
-    if (!tabOk) {
-      this.setState({error: "Deploy the object first — the tab must exist before visibility can be set."});
-      return;
-    }
-    let visLabels = this.getVisibilityLabels();
-    if (visibilityMode !== "selected") {
-      try {
-        const pres = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-          encodeURIComponent(`SELECT Name FROM Profile ORDER BY Name`));
-        const all = (pres.records || []).map(r => r.Name).filter(Boolean);
-        if (all.length) {
-          visLabels = all;
-          this.setState({availableProfiles: all});
-        }
-      } catch (e) {
-        console.warn("[SaralForce] Profile list query failed:", e.message);
-      }
-    }
-    if (visLabels.length === 0) visLabels = ["System Administrator"];
-    const modeLabel = visibilityMode === "selected"
-      ? `${visLabels.length} selected profile${visLabels.length === 1 ? "" : "s"}`
-      : `all profiles (${visLabels.length})`;
-    this._deployAborted = false;
-    this._abortController = new AbortController();
-    this.setState({
-      deploymentStatus: "deploying",
-      deploymentStep: `Setting tab visibility (${modeLabel})...`,
-      error: null
-    });
-    try {
-      const visResult = await this.setTabVisibilityForProfiles(
-        currentProposal.object.name, visLabels, []);
-      try {
-        await this.ensureCurrentUserVisibility(currentProposal.object.name);
-      } catch (curErr) {
-        console.warn("[SaralForce] ensureCurrentUserVisibility:", curErr.message);
-      }
-      const visCount = visResult.ok ? (visResult.updated || []).length : 0;
-      this.setState(prev => ({
-        deploymentResults: [...prev.deploymentResults.filter(r => r.type !== "visibility"), {
-          type: "visibility",
-          name: currentProposal.object.name + "_visibility",
-          label: visResult.ok
-            ? `Tab Visibility (${visCount} profile${visCount === 1 ? "" : "s"})`
-            : "Tab Visibility",
-          status: visResult.ok ? "success" : "error",
-          error: visResult.ok ? visResult.warning : visResult.error,
-          debug: visResult.ok ? undefined : visResult.debug
-        }],
-        deploymentStatus: "complete",
-        deploymentStep: visResult.ok ? "Tab visibility applied" : "Tab visibility failed"
-      }));
-    } catch (visErr) {
-      if (/cancelled/i.test(visErr.message)) {
-        this.setState({deploymentStatus: "complete", deploymentStep: "Cancelled"});
-        return;
-      }
-      this.setState({
-        deploymentStatus: "complete",
-        deploymentStep: "Tab visibility failed",
-        error: visErr.message
-      });
-    }
-  }
-
   // Record types only need the object itself: allow them once a deploy run
   // finished and its object step succeeded (field/layout errors don't block).
   objectDeploySucceeded() {
@@ -3597,7 +1861,7 @@ class App extends React.Component {
       const rt = rts[i];
       this.setState({deploymentStep: `Creating record type ${i + 1}/${rts.length}: "${rt.label}"...`});
       try {
-        const rtResult = await this.metadataCreate(this.buildRecordTypeXml(currentProposal.object.name, rt));
+        const rtResult = await this.metadataCreate(buildRecordTypeXml(currentProposal.object.name, rt));
         okCount++;
         this.setState(prev => ({
           deploymentResults: [...prev.deploymentResults, {
@@ -3637,12 +1901,10 @@ class App extends React.Component {
   }
 
   render() {
-    const {sfHost} = this.props;
     const {
       messages, currentProposal, isGenerating, streamingText, isEnhancing, enhancedPreview,
-      deploymentStatus, deploymentStep, deploymentProgress, deploymentResults, error, userInput, llmConfig, lastFailedPrompt,
-      selectedFields, visibilityMode, selectedProfiles, availableProfiles, profilesLoading, recordTypesDone,
-      availableApps, appsLoading, selectedApp
+      deploymentStatus, deploymentStep, deploymentProgress, deploymentResults, error, userInput, lastFailedPrompt,
+      selectedFields, visibilityMode, selectedProfiles, availableProfiles, profilesLoading, recordTypesDone
     } = this.state;
 
     const setupLink = this.getSetupLink();
@@ -4493,7 +2755,8 @@ if (!sfHost) {
     return true;
   }
 
-  verifyParent().then(ok => {
+  // Settings (AI config, preferences) load from chrome.storage before render.
+  Promise.all([verifyParent(), initSettings()]).then(([ok]) => {
     if (!ok) {
       showFatal("SaralForce can only be opened from a page of the Salesforce org it works with.");
       return;

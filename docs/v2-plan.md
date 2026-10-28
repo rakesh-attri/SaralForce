@@ -8,7 +8,7 @@ _Drafted 2026-10-28. Companion to [v2-discovery.md](v2-discovery.md)._
 
 ---
 
-## Phase 0 — Foundation (≈1 week)
+## Phase 0 — Foundation (≈1 week) — done
 
 - Work from a git clone of `github.com/rakesh-attri/SaralForce` (the local folder is not a git repo; it matches `main` except two newer `goodbye.html` edits and `privacy.html` on GitHub, and `test/` locally). Branch `v2`.
 - Delete stray `System.Drawing.Drawing2D.GraphicsPath`; fix `package.json` (`build` script points to a missing file).
@@ -24,7 +24,7 @@ _Drafted 2026-10-28. Companion to [v2-discovery.md](v2-discovery.md)._
     shell/     app-shell.js, nav.js, command-palette.js, settings.js
   ```
 
-## Phase 1 — Critical fixes and security (release as v1.7.0, ≈1-2 weeks)
+## Phase 1 — Critical fixes and security (release as v1.7.0, ≈1-2 weeks) — done
 
 Ship to both stores before the big UI work, so users get the fixes early.
 
@@ -38,7 +38,7 @@ Ship to both stores before the big UI work, so users get the fixes early.
 8. Options: model lists fetched from provider `/models` endpoints (fallback to a curated list including `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`), custom model entry, provider-switch model reset, refuse plain-http endpoints; move settings to `chrome.storage.local` (add `storage` permission back, with migration).
 9. Verify Metadata SOAP `create`/`checkStatus` on a real org at API 67; switch to `createMetadata`/`upsertMetadata` if needed.
 
-## Phase 2 — Core refactor (≈2-3 weeks)
+## Phase 2 — Core refactor (≈2-3 weeks) — done (needs real-org testing)
 
 - **`core/sf-client.js`**: one client for REST, Tooling, Composite/Collections, Bulk 2.0, Metadata SOAP and Partner SOAP: `AbortSignal`, retry with backoff on 503/`REQUEST_LIMIT_EXCEEDED`, consistent 401 handling, describe cache.
 - **`core/llm.js`**: replaces the 3 copy-pasted LLM blocks; streaming, cancel, JSON-schema validation of AI output with a repair pass, smart log excerpting (FATAL/EXCEPTION windows instead of the first 12k characters).
