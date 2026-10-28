@@ -2,6 +2,7 @@ import {OpenAIProvider} from "./openai.js";
 import {ClaudeProvider} from "./claude.js";
 import {GeminiProvider} from "./gemini.js";
 import {OpenAICompatibleProvider} from "./openai-compatible.js";
+import {getSetting, setSetting} from "../core/storage.js";
 
 export const LLM_PROVIDERS = {
   openai: {
@@ -158,10 +159,10 @@ async function ensureProviderAccess(providerId, baseUrl) {
 
 function wrapProviderAccess(providerId, impl) {
   const origSend = impl.sendMessage.bind(impl);
-  impl.sendMessage = async (messages, apiKey, model, onChunk, baseUrl) => {
+  impl.sendMessage = async (messages, apiKey, model, onChunk, baseUrl, options) => {
     const url = effectiveBaseUrl(providerId, baseUrl);
     await ensureProviderAccess(providerId, url);
-    return origSend(messages, apiKey, model, onChunk, url);
+    return origSend(messages, apiKey, model, onChunk, url, options || {});
   };
   if (impl.listModels) {
     const origList = impl.listModels.bind(impl);
@@ -191,20 +192,15 @@ export function getLLMProvider(providerId) {
   }
 }
 
+// Settings live in chrome.storage via core/storage.js; pages await
+// initSettings() before rendering so these reads are synchronous.
 export function getSavedConfig() {
-  const config = localStorage.getItem("llmConfig");
-  if (config) {
-    try {
-      return JSON.parse(config);
-    } catch (e) {
-      return null;
-    }
-  }
-  return null;
+  const config = getSetting("llmConfig", null);
+  return config && typeof config === "object" ? config : null;
 }
 
 export function saveConfig(config) {
-  localStorage.setItem("llmConfig", JSON.stringify(config));
+  setSetting("llmConfig", config);
 }
 
 export function hasValidConfig() {
@@ -221,21 +217,18 @@ export function hasValidConfig() {
 // Model IDs last fetched from the provider's models endpoint, per provider.
 const MODEL_CACHE_KEY = "llmModelCache";
 
+function modelCache() {
+  const cache = getSetting(MODEL_CACHE_KEY, {});
+  return cache && typeof cache === "object" ? cache : {};
+}
+
 export function getCachedModels(providerId) {
-  try {
-    const cache = JSON.parse(localStorage.getItem(MODEL_CACHE_KEY) || "{}");
-    return Array.isArray(cache[providerId]) ? cache[providerId] : [];
-  } catch (e) {
-    return [];
-  }
+  const list = modelCache()[providerId];
+  return Array.isArray(list) ? list : [];
 }
 
 export function setCachedModels(providerId, models) {
-  try {
-    const cache = JSON.parse(localStorage.getItem(MODEL_CACHE_KEY) || "{}");
-    cache[providerId] = models;
-    localStorage.setItem(MODEL_CACHE_KEY, JSON.stringify(cache));
-  } catch (e) { /* storage full or unavailable: the curated list still works */ }
+  setSetting(MODEL_CACHE_KEY, {...modelCache(), [providerId]: models});
 }
 
 // Models to offer for a provider: fetched ones first, then the curated list.
@@ -246,23 +239,15 @@ export function getModelOptions(providerId) {
 }
 
 // Editor success celebration: "plane" (default), "confetti", "thor" or
-// "spidey". Lives in localStorage (shared across the options page and the
-// panel like llmConfig) instead of ffUseSession, because the setting is
-// changed from options.html.
+// "spidey". A shared setting because it is changed from options.html.
 export const CELEBRATE_VARIANT_KEY = "sfoc_celebrate";
 export const CELEBRATE_VARIANTS = ["plane", "confetti", "thor", "spidey"];
 
 export function getCelebrateVariant() {
-  try {
-    const v = localStorage.getItem(CELEBRATE_VARIANT_KEY);
-    return CELEBRATE_VARIANTS.includes(v) ? v : "plane";
-  } catch (e) {
-    return "plane";
-  }
+  const v = getSetting(CELEBRATE_VARIANT_KEY, "plane");
+  return CELEBRATE_VARIANTS.includes(v) ? v : "plane";
 }
 
 export function setCelebrateVariant(variant) {
-  try {
-    localStorage.setItem(CELEBRATE_VARIANT_KEY, CELEBRATE_VARIANTS.includes(variant) ? variant : "plane");
-  } catch (e) { /* ignore */ }
+  setSetting(CELEBRATE_VARIANT_KEY, CELEBRATE_VARIANTS.includes(variant) ? variant : "plane");
 }

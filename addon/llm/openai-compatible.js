@@ -52,7 +52,7 @@ export class OpenAICompatibleProvider {
     });
   }
 
-  async _post(endpoint, headers, body, stream) {
+  async _post(endpoint, headers, body, stream, signal) {
     // Non-stream: always go through background (host_permissions, no page CORS).
     if (!stream) {
       let res;
@@ -102,8 +102,9 @@ export class OpenAICompatibleProvider {
     // Streaming still uses page fetch (needs host_permissions for opencode.ai).
     let response;
     try {
-      response = await fetch(endpoint, {method: "POST", headers, body});
+      response = await fetch(endpoint, {method: "POST", headers, body, signal});
     } catch (e) {
+      if (signal && signal.aborted) throw e;
       throw new Error(
         `Stream fetch failed for ${endpoint} — reload the extension and check Base URL. (${e.message})`
       );
@@ -115,7 +116,7 @@ export class OpenAICompatibleProvider {
     return response;
   }
 
-  async sendMessage(messages, apiKey, model, onChunk, baseUrl) {
+  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal} = {}) {
     const endpoint = this._endpoint(baseUrl);
     const headers = {
       "Content-Type": "application/json",
@@ -130,7 +131,7 @@ export class OpenAICompatibleProvider {
     });
 
     if (onChunk) {
-      const response = await this._post(endpoint, headers, body, true);
+      const response = await this._post(endpoint, headers, body, true, signal);
       return this._handleStream(response, onChunk);
     }
 

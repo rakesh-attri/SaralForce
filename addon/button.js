@@ -611,7 +611,7 @@
       /\/(?:lightning\/r|sObject|r)\/([A-Za-z0-9_.]+)\/([a-zA-Z0-9]{15,18})(?:\/view)?/);
     if (lit) return {obj: lit[1], id: lit[2]};
     // Bare record URL — /{15-18 id} at the very start of the target …
-    const bare = target.match(/^[=?\/]+([a-zA-Z0-9]{15,18})(?=$|[\/?&#])/);
+    const bare = target.match(/^[=?/]+([a-zA-Z0-9]{15,18})(?=$|[/?&#])/);
     if (bare) return {obj: null, id: bare[1]};
     // … or behind a classic ?id= style parameter inside it.
     const byParam = target.match(/[?&#](?:id|recordId|cid)=([a-zA-Z0-9]{15,18})(?=$|[^a-zA-Z0-9])/);

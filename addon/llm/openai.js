@@ -14,7 +14,7 @@ export class OpenAIProvider {
     this.name = "OpenAI";
   }
 
-  async sendMessage(messages, apiKey, model, onChunk) {
+  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal} = {}) {
     const response = await fetch(`${API_BASE}/chat/completions`, {
       method: "POST",
       headers: {
@@ -26,7 +26,8 @@ export class OpenAIProvider {
         messages: messages,
         max_completion_tokens: MAX_COMPLETION_TOKENS,
         stream: !!onChunk
-      })
+      }),
+      signal
     });
 
     if (!response.ok) {

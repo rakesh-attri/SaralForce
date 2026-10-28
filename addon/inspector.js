@@ -2,19 +2,30 @@
 // (https://github.com/tprouvot/Salesforce-Inspector-reloaded)
 // MIT License, Copyright (c) 2023 Thomas Prouvot. See LICENSE.
 import {getRedirectUri, getClientId, getPKCEParameters, Constants} from "./utils.js";
+import {createSfClient} from "./core/sf-client.js";
 
 export let defaultApiVersion = "67.0";
 export let apiVersion = localStorage.getItem("apiVersion") == null ? defaultApiVersion : localStorage.getItem("apiVersion");
 
 export let sessionError;
 
-function getCallOptionsClientId() {
-  return "SaralForce";
-}
-
-function firstErrorMessage(response) {
-  return Array.isArray(response) && response.length > 0 && response[0] ? response[0].message : null;
-}
+// Shared Salesforce API client bound to the current session (see sfConn).
+export const sf = createSfClient({
+  getHost: () => sfConn.instanceHostname,
+  getSessionId: () => sfConn.sessionId,
+  getApiVersion: () => apiVersion,
+  onAuthError(kind, message) {
+    if (kind === "unauthorized") {
+      // Only OAuth tokens can be renewed from the panel; a cookie session
+      // expiring is handled by logging in to Salesforce again.
+      if (localStorage.getItem(sfConn.instanceHostname + Constants.ACCESS_TOKEN)) {
+        sessionError = {text: "Access Token Expired", title: "Generate New Token", type: "warning", icon: "warning"};
+      }
+    } else {
+      sessionError = {text: message, type: "error", icon: "error"};
+    }
+  }
+});
 
 export let sfConn = {
 
@@ -110,93 +121,13 @@ export let sfConn = {
     return tokenData.access_token;
   },
 
-  async rest(url, {logErrors = true, method = "GET", body = undefined, bodyType = "json", responseType = "json", headers = {},
-    useCache = true, suppressSessionError = false, timeoutMs = 0} = {}) {
-    if (!this.instanceHostname) {
-      throw new Error("Instance Hostname not found");
-    }
-
-    let xhr = new XMLHttpRequest();
-    if (useCache) {
-      url += (url.includes("?") ? "&" : "?") + "cache=" + Math.random();
-    }
-    const sfHost = "https://" + this.instanceHostname;
-    const fullUrl = new URL(url, sfHost);
-    xhr.open(method, fullUrl.toString(), true);
-
-    xhr.setRequestHeader("Authorization", "Bearer " + this.sessionId);
-
-    for (let [name, value] of Object.entries(headers)) {
-      xhr.setRequestHeader(name, value);
-    }
-
-    if (body !== undefined && !headers.hasOwnProperty("Content-Type")) {
-      xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
-    }
-
-    if (body !== undefined) {
-      if (bodyType == "json") {
-        body = JSON.stringify(body);
-      }
-    }
-
-    if (!headers.hasOwnProperty("Accept")) {
-      xhr.setRequestHeader("Accept", "application/json; charset=UTF-8");
-    }
-
-    xhr.setRequestHeader("Sforce-Call-Options", `client=${getCallOptionsClientId()}`);
-
-    xhr.responseType = responseType;
-    if (timeoutMs > 0) {
-      try { xhr.timeout = timeoutMs; } catch (e) { /* unsupported, ignore */ }
-    }
-    await new Promise((resolve, reject) => {
-      xhr.onreadystatechange = () => {
-        if (xhr.readyState == 4) {
-          resolve();
-        }
-      };
-      xhr.send(body);
-    });
-
-    if (xhr.status >= 200 && xhr.status < 400) {
-      return xhr.response;
-    } else if (xhr.status == 0) {
-      if (!logErrors) { console.error("Received no response from Salesforce REST API", xhr); }
-      let err = new Error();
-      err.name = "SalesforceRestError";
-      err.message = "Network error, offline or timeout";
-      throw err;
-    } else if (xhr.status == 401) {
-      let error = firstErrorMessage(xhr.response) || "New access token needed";
-      if (!suppressSessionError && localStorage.getItem(this.instanceHostname + Constants.ACCESS_TOKEN)){
-        sessionError = {text: "Access Token Expired", title: "Generate New Token", type: "warning", icon: "warning"};
-      }
-      let err = new Error();
-      err.name = "Unauthorized";
-      err.message = error;
-      throw err;
-    } else if (xhr.status == 403) {
-      let error = firstErrorMessage(xhr.response) || "Error";
-      if (!suppressSessionError) {
-        sessionError = {text: error, type: "error", icon: "error"};
-      }
-      let err = new Error();
-      err.name = "Forbidden";
-      err.message = error;
-      throw err;
-    } else {
-      if (!logErrors) { console.error("Received error response from Salesforce REST API", xhr); }
-      let err = new Error();
-      err.name = "SalesforceRestError";
-      err.detail = xhr.response;
-      try {
-        err.message = err.detail.map(err => `${err.errorCode}: ${err.message}${err.fields && err.fields.length > 0 ? ` [${err.fields.join(", ")}]` : ""}`).join("\n");
-      } catch (ex) {
-        err.message = JSON.stringify(xhr.response);
-      }
-      throw err;
-    }
+  // Every REST/Tooling call goes through the shared client (core/sf-client.js):
+  // same signature and errors as before, plus signal (AbortSignal), retries
+  // for GET/HEAD on network errors and 429/5xx, and timeoutMs.
+  async rest(url, {method = "GET", body = undefined, bodyType = "json", responseType = "json", headers = {},
+    useCache = true, suppressSessionError = false, timeoutMs = 0, signal = undefined, retries = undefined} = {}) {
+    return sf.request(url, {method, body, bodyType, responseType, headers, useCache, suppressSessionError,
+      timeoutMs, signal, retries});
   },
 
   wsdl(apiVersion, apiName) {

@@ -20,7 +20,7 @@ export class GeminiProvider {
     this.name = "Google Gemini";
   }
 
-  async sendMessage(messages, apiKey, model, onChunk) {
+  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal} = {}) {
     const modelId = encodeURIComponent(model || GEMINI_DEFAULT_MODEL);
 
     let systemInstruction = null;
@@ -51,13 +51,14 @@ export class GeminiProvider {
     }
 
     if (onChunk) {
-      return this._handleStream(`${API_BASE}/models/${modelId}:streamGenerateContent?alt=sse`, apiKey, body, onChunk);
+      return this._handleStream(`${API_BASE}/models/${modelId}:streamGenerateContent?alt=sse`, apiKey, body, onChunk, signal);
     }
 
     const response = await fetch(`${API_BASE}/models/${modelId}:generateContent`, {
       method: "POST",
       headers: headers(apiKey),
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
 
     if (!response.ok) {
@@ -96,11 +97,12 @@ export class GeminiProvider {
     return ids;
   }
 
-  async _handleStream(url, apiKey, body, onChunk) {
+  async _handleStream(url, apiKey, body, onChunk, signal) {
     const response = await fetch(url, {
       method: "POST",
       headers: headers(apiKey),
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
 
     if (!response.ok) {

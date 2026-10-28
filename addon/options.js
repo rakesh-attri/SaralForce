@@ -1,14 +1,10 @@
 import {LLM_PROVIDERS, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant, getLLMProvider, providerPermissionOrigin, checkProviderNetworkAccess, validateBaseUrl, getModelOptions, setCachedModels} from "./llm/llm-service.js";
 
+import {initSettings} from "./core/storage.js";
+import {openInspectorInNewTab, setOpenInspectorInNewTab} from "./core/preferences.js";
+
 let h = React.createElement;
 
-const INSPECTOR_TAB_KEY = "sfoc_open_inspector_tab";
-function openInspectorInNewTab() {
-  try { return localStorage.getItem(INSPECTOR_TAB_KEY) === "true"; } catch (e) { return false; }
-}
-function setOpenInspectorTab(on) {
-  try { localStorage.setItem(INSPECTOR_TAB_KEY, on ? "true" : "false"); } catch (e) { /* ignore */ }
-}
 
 const MODEL_DESCRIPTIONS = {
   // OpenAI
@@ -148,7 +144,7 @@ class OptionsApp extends React.Component {
 
   onInspectorTabChange(e) {
     const on = e.target.checked;
-    setOpenInspectorTab(on);
+    setOpenInspectorInNewTab(on);
     this.setState({openInspectorTab: on});
   }
 
@@ -435,7 +431,9 @@ class OptionsApp extends React.Component {
 const urlParams = new URLSearchParams(window.location.search);
 const sfHost = urlParams.get("host");
 
-ReactDOM.render(
-  h(OptionsApp, {sfHost}),
-  document.getElementById("root")
-);
+initSettings().then(() => {
+  ReactDOM.render(
+    h(OptionsApp, {sfHost}),
+    document.getElementById("root")
+  );
+});

@@ -1,7 +1,6 @@
 // Service worker: session pickup derived in part from Salesforce-Inspector-reloaded
 // (https://github.com/tprouvot/Salesforce-Inspector-reloaded)
 // MIT License, Copyright (c) 2023 Thomas Prouvot. See LICENSE.
-let sfHost;
 let inspectorTabId = null;
 
 const SESSION_COOKIE_DOMAINS = ["salesforce.com", "cloudforce.com", "salesforce.mil", "cloudforce.mil", "sfcrmproducts.cn", "force.com"];
@@ -65,7 +64,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.message == "getSession") {
-    sfHost = request.sfHost;
     chrome.cookies.get({url: "https://" + request.sfHost, name: "sid", storeId: sender.tab.cookieStoreId}, sessionCookie => {
       if (!sessionCookie) {
         sendResponse(null);

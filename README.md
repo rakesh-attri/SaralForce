@@ -260,6 +260,26 @@ debug-log analysis.
 
 ## What's New
 
+### Unreleased (v2 branch)
+- **Bulk API 2.0 import fixed** — CSV upload now uses `PUT` and jobs close with
+  `UploadComplete`, as the Bulk 2.0 API requires; Bulk requests share the panel's
+  session handling, retries and cancellation
+- **Faster Data API import** — records go through sObject Collections, up to 200 per call
+  (was one call per row), with live progress, a Stop button, success/failed result files
+  and real record ids for upserts
+- **Spreadsheet formula protection** — CSV exports (on by default in Export, always for
+  quick downloads) prefix cells that start with `=`, `+`, `-` or `@` with an apostrophe;
+  plain numbers are kept
+- **Smarter AI** — malformed JSON replies get one automatic repair attempt; debug-log AI
+  analysis keeps the errors near the end of long logs instead of only the first 12k
+  characters; AI requests can be cancelled
+- **Settings in extension storage** — AI provider settings and preferences move from page
+  storage to `chrome.storage` (migrated automatically) and stay in sync across open panels
+- **Under the hood** — the Inspector is split into one module per tool with a tab
+  registry and accessible tabs; the Object Builder's Metadata XML/SOAP code lives in
+  `addon/builder/`; ~700 lines of dead code removed; one shared Salesforce API client
+  (`addon/core/sf-client.js`) with retries for reads, timeouts and cancellation
+
 ### v1.7.0
 - **Security hardening** — the Salesforce session is no longer written into the Salesforce
   page's storage or posted across frames; the panel looks it up itself and only runs when
