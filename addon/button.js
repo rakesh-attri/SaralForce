@@ -1,6 +1,13 @@
 (function() {
   "use strict";
 
+  // Keep in sync with defaultApiVersion in inspector.js (checked by
+  // test/unit/api-version.test.js). A content script cannot import modules.
+  const API_VERSION = "67.0";
+
+  // Messages to the panel iframe go only to the extension's own origin.
+  const PANEL_ORIGIN = new URL(chrome.runtime.getURL(""), location.href).origin;
+
   let sfHost = null;
   let sidebarOpen = false;
   let sidebarContainer = null;
@@ -260,24 +267,16 @@
         border: none;
         display: block;
       `;
-      iframe.src = chrome.runtime.getURL(`object-creator.html?host=${sfHost}` +
+      iframe.src = chrome.runtime.getURL(`object-creator.html?host=${encodeURIComponent(sfHost)}` +
         (hostBoot != null ? `&hostBoot=${hostBoot}` : ""));
 
       sidebarContainer.appendChild(header);
       sidebarContainer.appendChild(iframe);
       document.body.appendChild(sidebarContainer);
 
-      // Store session for the iframe to pick up
-      const storeKey = sfHost + "_sidebar_session";
-      sessionStorage.setItem(storeKey, JSON.stringify(session));
-
-      iframe.addEventListener("load", () => {
-        iframe.contentWindow.postMessage({
-          type: "sfoc-session-data",
-          session: session,
-          sfHost: sfHost
-        }, "*");
-      });
+      // The panel looks the session up itself through the extension's
+      // background worker; it is never written to this page's storage or
+      // posted across frames.
 
       requestAnimationFrame(() => {
         sidebarContainer.style.transform = "translateX(0)";
@@ -297,7 +296,7 @@
     // Ask iframe to save state before we destroy it
     const iframe = document.getElementById("sf-object-creator-iframe");
     if (iframe?.contentWindow) {
-      iframe.contentWindow.postMessage({type: "sfoc-save-state"}, "*");
+      iframe.contentWindow.postMessage({type: "sfoc-save-state"}, PANEL_ORIGIN);
     }
     sidebarContainer.style.transform = "translateX(100%)";
     setTimeout(() => {
@@ -383,7 +382,7 @@
         try { return await res.json(); } catch (e) { return null; }
       });
     const ui = getJson(base + "/services/oauth2/userinfo").catch(() => null);
-    const orgQ = getJson(base + "/services/data/v67.0/query?q=" +
+    const orgQ = getJson(base + `/services/data/v${API_VERSION}/query?q=` +
       encodeURIComponent("SELECT Id,Name,IsSandbox,InstanceName FROM Organization")).catch(() => null);
     return Promise.all([ui, orgQ]).then(([u, o]) => {
       const org = (o && o.records && o.records[0]) || {};
@@ -756,15 +755,15 @@
         return;
       }
       const token = session.key;
-      const recordUrl = `${location.origin}/services/data/v67.0/ui-api/records/${rec.id}?layoutTypes=Full`;
+      const recordUrl = `${location.origin}/services/data/v${API_VERSION}/ui-api/records/${rec.id}?layoutTypes=Full`;
       let rawRecord = null;
       const describeMap = (obj) => sfFetchJson(
-        `${location.origin}/services/data/v67.0/sobjects/${obj}/describe`, token
+        `${location.origin}/services/data/v${API_VERSION}/sobjects/${obj}/describe`, token
       ).then((r) => labelMapFromDescribe(r.data));
       // Layout endpoint uses the same UI API auth path as the record call (REST
       // describe 401s on some orgs), so it is the primary fallback.
       const layoutMap = (obj, recordTypeId) => {
-        const url = `${location.origin}/services/data/v67.0/ui-api/layout/${obj}?layoutType=Full&mode=View` +
+        const url = `${location.origin}/services/data/v${API_VERSION}/ui-api/layout/${obj}?layoutType=Full&mode=View` +
           (recordTypeId ? `&recordTypeId=${encodeURIComponent(recordTypeId)}` : "");
         return sfFetchJson(url, token).then((r) => labelMapFromSections(r.data));
       };
@@ -826,15 +825,15 @@
   window.addEventListener("message", (event) => {
     if (!event.data || !event.data.type) return;
     const ifr = document.getElementById("sf-object-creator-iframe");
-    const fromPanel = ifr && event.source === ifr.contentWindow;
-    const fromSelf = event.source === window;
-    if (!fromPanel && !fromSelf) return;
+    // Only the panel iframe (extension origin) may drive the sidebar.
+    const fromPanel = ifr && event.source === ifr.contentWindow && event.origin === PANEL_ORIGIN;
+    if (!fromPanel) return;
     if (event.data.type === "sfoc-show-api-names") {
       toggleApiNames();
     } else if (event.data.type === "sfoc-query-api-names") {
-      try { event.source.postMessage({type: "sfoc-api-names-state", on: apiNamesActive}, "*"); } catch (e) { /* ignore */ }
+      try { event.source.postMessage({type: "sfoc-api-names-state", on: apiNamesActive}, PANEL_ORIGIN); } catch (e) { /* ignore */ }
     } else if (event.data.type === "sfoc-query-open-record") {
-      try { event.source.postMessage({type: "sfoc-open-record", rec: getRecordInfo()}, "*"); } catch (e) { /* ignore */ }
+      try { event.source.postMessage({type: "sfoc-open-record", rec: getRecordInfo()}, PANEL_ORIGIN); } catch (e) { /* ignore */ }
     } else if (event.data.type === "sfoc-user-card") {
       userInfoCache = mergeUserInfo(userInfoCache, event.data.info || null);
       if (userChipEl && userChipLabelEl) {

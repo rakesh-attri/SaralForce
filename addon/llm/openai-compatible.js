@@ -149,6 +149,26 @@ export class OpenAICompatibleProvider {
     return content;
   }
 
+  async listModels(apiKey, baseUrl) {
+    const modelsUrl = this._endpoint(baseUrl).replace(/\/chat\/completions$/, "/models");
+    const res = await this._bgPost({
+      message: "llmFetch",
+      url: modelsUrl,
+      method: "GET",
+      headers: {"Authorization": `Bearer ${apiKey}`}
+    });
+    if (!res || res.error || !res.ok) {
+      throw new Error(`Could not list models from ${modelsUrl}: ${res?.error || "HTTP " + (res?.status ?? "?")}`);
+    }
+    let data;
+    try {
+      data = JSON.parse(res.text || "{}");
+    } catch (e) {
+      throw new Error("Invalid JSON from " + modelsUrl);
+    }
+    return (data.data || data.models || []).map(m => (typeof m === "string" ? m : m && m.id)).filter(Boolean).sort();
+  }
+
   async _handleStream(response, onChunk) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

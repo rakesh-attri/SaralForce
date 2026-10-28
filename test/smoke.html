@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Salesforce</title>
+  <base href="/">
+  <link rel="stylesheet" href="styles/slds/slds.css">
+  <link rel="stylesheet" href="object-creator.css">
+  <style>
+    /* Harness-only overrides: object-creator.css pins body/app-container to
+       100vh, which would push the fake record card out of view. Let the page
+       flow: app on top, record card below it (both in this document AND in
+       the panel iframe, which is served this same page as object-creator.html). */
+    body { height: auto !important; overflow: auto !important; background: #f3f2f2; }
+    .app-container { height: auto !important; }
+
+    #fake-record {
+      max-width: 760px;
+      margin: 26px auto 60px;
+      padding: 26px 30px;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    }
+    #fake-record .fr-title {
+      font-size: 21px;
+      font-weight: 700;
+      color: #181818;
+      margin-bottom: 16px;
+    }
+    #fake-record .fr-field { margin-bottom: 10px; }
+    #fake-record .lbl {
+      display: block;
+      font-size: 14px;
+      color: #181818;
+    }
+    #fake-record .val {
+      display: block;
+      font-size: 14px;
+      color: #3e3e3c;
+      margin-top: 1px;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Fake Salesforce record page. Labels must match the fake UI API layout
+       fixture in serve-addon.js exactly (that is what the API Names chips
+       map to); values must never equal a label. -->
+  <div id="fake-record">
+    <div class="fr-title">Acme Services Order</div>
+    <div class="fr-field"><span class="lbl">Order Name</span><span class="val">Acme Services Order</span></div>
+    <div class="fr-field"><span class="lbl">Order Number</span><span class="val">00000001</span></div>
+    <div class="fr-field"><span class="lbl">Account Name</span><span class="val">Acme Corporation</span></div>
+    <div class="fr-field"><span class="lbl">Status</span><span class="val">Activated</span></div>
+    <div class="fr-field"><span class="lbl">Order Start Date</span><span class="val">1/1/2026</span></div>
+    <div class="fr-field"><span class="lbl">Order Amount</span><span class="val">$12,500.00</span></div>
+    <div class="fr-field"><span class="lbl">Order Owner</span><span class="val">Rakesh Sharma</span></div>
+    <div class="fr-field"><span class="lbl">Contract Number</span><span class="val">CON-000042</span></div>
+    <div class="fr-field"><span class="lbl">Bill To Contact</span><span class="val">Jane Doe</span></div>
+  </div>
+
+  <!-- chrome.* shim for page scripts (button.js, object-creator.js, llm).
+       Same-origin iframe shares window.chrome only per-document, so this runs
+       in BOTH the top page and the panel iframe. chrome.runtime.lastError must
+       stay falsy; sendMessage handles every message the page code sends. -->
+  <script>
+    window.chrome = window.chrome || {};
+    chrome.runtime = {
+      lastError: null,
+      sendMessage: function (msg, cb) {
+        var respond = function (v) { if (typeof cb === "function") cb(v); };
+        try {
+          if (!msg || typeof msg !== "object") { respond(null); return; }
+          switch (msg.message) {
+            case "getSfHost":
+              try { respond(new URL(msg.url || window.location.href).hostname); }
+              catch (e) { respond(null); }
+              break;
+            case "getSession":
+              respond({key: "FAKE_SESSION", hostname: "127.0.0.1"});
+              break;
+            case "openOptions":
+              respond({ok: true});
+              break;
+            case "openInspectorTab":
+              (function () {
+                var u = "/object-creator.html?host=" + encodeURIComponent((msg && msg.host) || "127.0.0.1");
+                u += "&view=inspector&fromTab=1";
+                if (msg && msg.rec && (msg.rec.obj || msg.rec.id)) {
+                  if (/^[A-Za-z0-9_]+$/.test(msg.rec.obj || "")) {
+                    u += "&openRecObj=" + encodeURIComponent(msg.rec.obj);
+                  }
+                  if (/^[a-zA-Z0-9]{15,18}$/.test(msg.rec.id || "")) {
+                    u += "&openRecId=" + encodeURIComponent(msg.rec.id);
+                  }
+                }
+                window.__inspectorUrl = u;
+                try { window.open(u, "_blank"); } catch (e) { /* popup blockers */ }
+                respond({ok: true, url: u});
+              })();
+              break;
+            case "tokenUpdated":
+              respond(undefined);
+              break;
+            case "llmFetch":
+              fetch(msg.url, {
+                method: msg.method || "GET",
+                headers: msg.headers || undefined,
+                body: msg.body
+              }).then(function (r) {
+                return r.text().catch(function () { return ""; }).then(function (t) {
+                  respond({ok: r.ok, status: r.status, text: t});
+                });
+              }).catch(function (e) {
+                respond({ok: false, status: 0, text: String((e && e.message) || e),
+                  error: String((e && e.message) || e)});
+              });
+              break;
+            default:
+              respond(null);
+          }
+        } catch (e) { respond(null); }
+      },
+      getURL: function (p) { return "/" + String(p || "").replace(/^\/+/, ""); },
+      onMessage: {addListener: function () {}}
+    };
+    chrome.i18n = {
+      getMessage: function (k) {
+        return k === "@@extension_id" ? "fakeextensionid0000" : "";
+      }
+    };
+    // Minimal chrome.tabs shim: records activations/removals for assertions
+    // and emulates closed-tab lookup failures via lastError.
+    chrome.tabs = {
+      _closed: {},
+      get: function (id, cb) {
+        var self = this;
+        setTimeout(function () {
+          if (self._closed[id]) {
+            chrome.runtime.lastError = {message: "No tab with id: " + id};
+          } else {
+            chrome.runtime.lastError = null;
+          }
+          if (typeof cb === "function") cb({id: id});
+        }, 0);
+      },
+      update: function (id, props, cb) {
+        window.__tabActivated = id;
+        chrome.runtime.lastError = null;
+        if (typeof cb === "function") cb({id: id});
+      },
+      remove: function (id, cb) {
+        window.__tabClosed = id;
+        chrome.runtime.lastError = null;
+        if (typeof cb === "function") cb();
+      },
+      getCurrent: function (cb) {
+        if (typeof cb === "function") cb({id: 9999});
+      },
+      create: function (props, cb) {
+        var w = null;
+        try { w = window.open(props.url, "_blank"); } catch (e) { /* popup blockers */ }
+        if (typeof cb === "function") cb({id: 8888});
+        return w;
+      }
+    };
+  </script>
+
+  <!-- sfConn.rest() builds https://<instanceHostname>/... URLs; rewrite them
+       (and any fetch to the same host) to the plain-http fake server. Installed
+       before every other script so no request escapes unpatched. -->
+  <script>
+    (function () {
+      var FIX_RE = /^https:\/\/127\.0\.0\.1(:8321)?\//;
+      var fix = function (u) {
+        return typeof u === "string" && FIX_RE.test(u)
+          ? u.replace(FIX_RE, "http://127.0.0.1:8321/") : u;
+      };
+      var origOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (m) {
+        var args = Array.prototype.slice.call(arguments);
+        args[1] = fix(args[1]);
+        return origOpen.apply(this, args);
+      };
+      var origFetch = window.fetch;
+      window.fetch = function (input, init) {
+        if (typeof input === "string") {
+          input = fix(input);
+        } else if (input instanceof Request && fix(input.url) !== input.url) {
+          try { input = new Request(fix(input.url), input); } catch (e) { /* keep */ }
+        }
+        return origFetch.call(this, input, init);
+      };
+    })();
+  </script>
+
+  <script src="react.js"></script>
+  <script src="react-dom.js"></script>
+  <script type="module" src="object-creator.js"></script>
+  <script src="button.js"></script>
+</body>
+</html>

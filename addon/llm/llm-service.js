@@ -25,14 +25,16 @@ export const LLM_PROVIDERS = {
   claude: {
     name: "Anthropic Claude",
     models: [
+      "claude-sonnet-5-5",
+      "claude-opus-5-5",
+      "claude-haiku-5-5",
       "claude-fable-5-1",
-      "claude-opus-5",
       "claude-sonnet-5",
-      "claude-haiku-4-5-20251001",
+      "claude-opus-5",
       "claude-opus-4-8",
-      "claude-sonnet-4-20250514"
+      "claude-haiku-4-5"
     ],
-    defaultModel: "claude-sonnet-5",
+    defaultModel: "claude-sonnet-5-5",
     requiresApiKey: true,
     apiKeyPlaceholder: "sk-ant-..."
   },
@@ -67,6 +69,7 @@ export const LLM_PROVIDERS = {
     defaultModel: "openai/gpt-4o-mini",
     requiresApiKey: true,
     requiresBaseUrl: true,
+    defaultBaseUrl: "https://openrouter.ai/api/v1",
     apiKeyPlaceholder: "sk-or-v1-...",
     baseUrlPlaceholder: "https://openrouter.ai/api/v1"
   }
@@ -88,17 +91,41 @@ const FIXED_PROVIDER_ORIGINS = {
   gemini: "https://generativelanguage.googleapis.com/*"
 };
 
+export function effectiveBaseUrl(providerId, baseUrl) {
+  const raw = String(baseUrl || "").trim();
+  if (raw) return raw;
+  const def = LLM_PROVIDERS[providerId];
+  return (def && def.defaultBaseUrl) || "";
+}
+
+function isLoopbackHost(hostname) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+}
+
+// Error text for an unusable base URL, or null when it is fine. API keys
+// must never travel over plain http except to a local proxy.
+export function validateBaseUrl(providerId, baseUrl) {
+  const def = LLM_PROVIDERS[providerId];
+  if (!def || !def.requiresBaseUrl) return null;
+  const raw = effectiveBaseUrl(providerId, baseUrl);
+  if (!raw) return "Base URL is required for this provider.";
+  let u;
+  try { u = new URL(raw); } catch (e) { return "Base URL is not a valid URL."; }
+  if (u.protocol === "https:") return null;
+  if (u.protocol === "http:" && isLoopbackHost(u.hostname)) return null;
+  return "Base URL must start with https:// (plain http is only allowed for localhost).";
+}
+
 // Match pattern for the origin a provider will call, or null when no
 // permission is needed (loopback / unparseable / not configured).
 export function providerPermissionOrigin(providerId, baseUrl) {
   const fixed = FIXED_PROVIDER_ORIGINS[providerId];
   if (fixed) return fixed;
-  let raw = String(baseUrl || "").trim();
-  if (!raw && providerId === "openrouter") raw = "https://openrouter.ai/api/v1";
+  const raw = effectiveBaseUrl(providerId, baseUrl);
   if (!raw) return null;
   let u;
   try { u = new URL(raw); } catch (e) { return null; }
-  if (u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "[::1]" || u.hostname === "::1") return null;
+  if (isLoopbackHost(u.hostname)) return null;
   if (u.protocol !== "https:") return null;
   return u.origin + "/*";
 }
@@ -120,15 +147,30 @@ export function checkProviderNetworkAccess(providerId, baseUrl) {
 
 // Without the grant a cross-origin AI call fails as an opaque "Failed to
 // fetch" (CORS). Check the permission first and explain the fix.
+async function ensureProviderAccess(providerId, baseUrl) {
+  const urlError = validateBaseUrl(providerId, baseUrl);
+  if (urlError) throw new Error(urlError + " Fix it in SaralForce Settings.");
+  const allowed = await checkProviderNetworkAccess(providerId, baseUrl);
+  if (!allowed) {
+    throw new Error("SaralForce needs network access to this AI provider. Open Settings and click Save Settings to grant access, then try again.");
+  }
+}
+
 function wrapProviderAccess(providerId, impl) {
   const origSend = impl.sendMessage.bind(impl);
   impl.sendMessage = async (messages, apiKey, model, onChunk, baseUrl) => {
-    const allowed = await checkProviderNetworkAccess(providerId, baseUrl);
-    if (!allowed) {
-      throw new Error("SaralForce needs network access to this AI provider. Open Settings and click Save Settings to grant access, then try again.");
-    }
-    return origSend(messages, apiKey, model, onChunk, baseUrl);
+    const url = effectiveBaseUrl(providerId, baseUrl);
+    await ensureProviderAccess(providerId, url);
+    return origSend(messages, apiKey, model, onChunk, url);
   };
+  if (impl.listModels) {
+    const origList = impl.listModels.bind(impl);
+    impl.listModels = async (apiKey, baseUrl) => {
+      const url = effectiveBaseUrl(providerId, baseUrl);
+      await ensureProviderAccess(providerId, url);
+      return origList(apiKey, url);
+    };
+  }
   return impl;
 }
 
@@ -172,8 +214,35 @@ export function hasValidConfig() {
   const providerDef = LLM_PROVIDERS[config.provider];
   if (!providerDef) return false;
   if (providerDef.requiresApiKey && !config.apiKey) return false;
-  if (providerDef.requiresBaseUrl && !config.baseUrl) return false;
+  if (validateBaseUrl(config.provider, config.baseUrl)) return false;
   return true;
+}
+
+// Model IDs last fetched from the provider's models endpoint, per provider.
+const MODEL_CACHE_KEY = "llmModelCache";
+
+export function getCachedModels(providerId) {
+  try {
+    const cache = JSON.parse(localStorage.getItem(MODEL_CACHE_KEY) || "{}");
+    return Array.isArray(cache[providerId]) ? cache[providerId] : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+export function setCachedModels(providerId, models) {
+  try {
+    const cache = JSON.parse(localStorage.getItem(MODEL_CACHE_KEY) || "{}");
+    cache[providerId] = models;
+    localStorage.setItem(MODEL_CACHE_KEY, JSON.stringify(cache));
+  } catch (e) { /* storage full or unavailable: the curated list still works */ }
+}
+
+// Models to offer for a provider: fetched ones first, then the curated list.
+export function getModelOptions(providerId) {
+  const def = LLM_PROVIDERS[providerId];
+  const curated = def ? def.models : [];
+  return Array.from(new Set([...getCachedModels(providerId), ...curated]));
 }
 
 // Editor success celebration: "plane" (default), "confetti", "thor" or

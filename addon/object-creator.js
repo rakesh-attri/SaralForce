@@ -1,8 +1,14 @@
-import {sfConn, apiVersion, XML, startSalesforceLogin} from "./inspector.js";
+import {sfConn, apiVersion, startSalesforceLogin, getMyDomain} from "./inspector.js";
 import {hasValidConfig, getSavedConfig, getLLMProvider, getProviderConfig} from "./llm/llm-service.js";
 import {SYSTEM_PROMPT, REFINEMENT_PROMPT, USER_MESSAGE_TEMPLATE, ENHANCE_SYSTEM_PROMPT} from "./prompts/system-prompt.js";
 import {createSpinForMethod, UserInfoModel, Constants, safeCopyText} from "./utils.js";
 import {InspectorPanel, ffApplyRestore, ffTakeSnapshot, ffSetAppTabPrefill} from "./inspector-tools.js";
+import {getParentOrigin, isTrustedFrameOrigin, setTrustedParentOrigin, postToParent, isFromTrustedParent, queryHostRecord} from "./core/messaging.js";
+import {
+  FIELD_TYPES, SHARING_MODELS, normalizeFieldType, supportsRequired, escapeSoqlString,
+  suggestApiName, nextRetryName, resolveNameField, normalizeProposal, validateProposal,
+  parseJSONFromText, isNonTransientDeployError
+} from "./core/object-builder-rules.js";
 
 let h = React.createElement;
 
@@ -26,25 +32,6 @@ function isSfId(value) {
   const v = String(value || "").trim();
   return /^[a-zA-Z0-9]{15}$/.test(v) || /^[a-zA-Z0-9]{18}$/.test(v);
 }
-
-const FIELD_TYPES = [
-  {value: "Text", label: "Text"},
-  {value: "TextArea", label: "Text Area"},
-  {value: "LongTextArea", label: "Text Area (Long)"},
-  {value: "Number", label: "Number"},
-  {value: "Currency", label: "Currency"},
-  {value: "Percent", label: "Percent"},
-  {value: "Date", label: "Date"},
-  {value: "DateTime", label: "Date / Time"},
-  {value: "Checkbox", label: "Checkbox"},
-  {value: "Picklist", label: "Picklist"},
-  {value: "MultiselectPicklist", label: "Picklist (Multi-Select)"},
-  {value: "Email", label: "Email"},
-  {value: "Phone", label: "Phone"},
-  {value: "Url", label: "URL"},
-  {value: "Lookup", label: "Lookup"},
-  {value: "MasterDetail", label: "Master-Detail"}
-];
 
 const RELATIONSHIP_OBJECTS = [
   "Account", "Contact", "Opportunity", "Case", "Lead", "Campaign",
@@ -93,7 +80,7 @@ function pickTabMotif(objectName) {
 }
 
 function isDuplicateError(err) {
-  const msg = (err?.message || "") + " " + (err?.detail ? JSON.stringify(err.detail) : "");
+  const msg = (err?.message || "") + " " + (err?.statusCode || "") + " " + (err?.detail ? JSON.stringify(err.detail) : "");
   return /DUPLICATE_DEVELOPER_NAME|DUPLICATE_VALUE|already exists|duplicate value|DUPLICATE_CUSTOM_FIELD/i.test(msg);
 }
 
@@ -320,73 +307,12 @@ function domToMetXml(el) {
   return `<met:${tag}${attrs}>${escXml(text)}</met:${tag}>`;
 }
 
-function parseJSONFromText(text) {
-  let cleaned = text.trim();
-  cleaned = cleaned.replace(/```json\s*/gi, "").replace(/```\s*/gi, "");
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      return JSON.parse(jsonMatch[0]);
-    } catch (e) {
-      return null;
-    }
-  }
-  return null;
-}
-
-function validateProposal(proposal) {
-  const errors = [];
-  if (!proposal.object) {
-    errors.push("Missing 'object' definition");
-  } else {
-    if (!proposal.object.label) errors.push("Object missing 'label'");
-    if (!proposal.object.name) errors.push("Object missing 'name'");
-    if (!proposal.object.name?.endsWith("__c")) errors.push("Object API name must end with __c");
-  }
-  if (proposal.recordTypes !== undefined) {
-    if (!Array.isArray(proposal.recordTypes)) {
-      errors.push("'recordTypes' must be an array");
-    } else {
-      proposal.recordTypes.forEach((rt, i) => {
-        if (!rt.label) errors.push(`Record type ${i + 1} missing 'label'`);
-        if (!rt.name) errors.push(`Record type ${i + 1} missing 'name'`);
-        else if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(rt.name)) {
-          errors.push(`Record type ${i + 1} name must be a DeveloperName (letters, numbers, underscores, no __c): ${rt.name}`);
-        } else if (rt.name.endsWith("__c")) {
-          errors.push(`Record type ${i + 1} name must NOT end with __c (${rt.name})`);
-        }
-        if (!rt.description) errors.push(`Record type ${i + 1} missing 'description'`);
-      });
-    }
-  }
-  if (!proposal.fields || !Array.isArray(proposal.fields) || proposal.fields.length === 0) {
-    errors.push("Missing or empty 'fields' array");
-  } else {
-    proposal.fields.forEach((f, i) => {
-      if (!f.label) errors.push(`Field ${i + 1} missing 'label'`);
-      if (!f.name) errors.push(`Field ${i + 1} missing 'name'`);
-      if (!f.name?.endsWith("__c")) errors.push(`Field ${i + 1} API name must end with __c (${f.name})`);
-      if (f.name?.endsWith("__r")) errors.push(`Field ${i + 1} API name must not end with __r — use __c for the field (${f.name})`);
-      if (!f.type) errors.push(`Field ${i + 1} missing 'type'`);
-      if ((f.type === "Picklist" || f.type === "MultiselectPicklist")) {
-        const vals = Array.isArray(f.values) ? f.values.filter(v => String(v == null ? "" : v).trim()) : [];
-        if (vals.length < 1) {
-          errors.push(`Field ${i + 1} (${f.name}) ${f.type} requires a non-empty 'values' array`);
-        }
-        if (f.defaultValue != null && String(f.defaultValue).trim() &&
-            !vals.some(v => String(v).trim().toLowerCase() === String(f.defaultValue).trim().toLowerCase())) {
-          errors.push(`Field ${i + 1} (${f.name}) defaultValue "${f.defaultValue}" is not in values`);
-        }
-      }
-      if ((f.type === "Lookup" || f.type === "MasterDetail") && !f.relatedTo) {
-        errors.push(`Field ${i + 1} (${f.name}) ${f.type} requires 'relatedTo'`);
-      }
-    });
-  }
-  return errors;
-}
+// parseJSONFromText / validateProposal live in core/object-builder-rules.js.
 
 const CHAT_HISTORY_KEY = "sfoc_chat_history";
+
+const INTERRUPTED_DEPLOY_MSG = "The previous deployment was interrupted before it finished. " +
+  "Use Resume deploy to finish the remaining steps.";
 
 function loadChatHistory(sfHost) {
   try {
@@ -421,6 +347,8 @@ function persistState(sfHost, state) {
       deploymentStep: state.deploymentStep,
       deploymentProgress: state.deploymentProgress,
       deploymentResults: state.deploymentResults,
+      deployError: state.deployError,
+      deployedObjectName: state.deployedObjectName,
       selectedFields: state.selectedFields,
       visibilityMode: state.visibilityMode,
       selectedProfiles: state.selectedProfiles,
@@ -467,34 +395,6 @@ function saveInspectorState(sfHost, state) {
   }
 }
 
-// Ask the host page (content script) which record/list is open: it replies
-// {obj, id} (id null on list pages). Resolves null when standalone — e.g.
-// the inspector tab itself has no content-script parent — or on timeout.
-function queryHostRecord() {
-  return new Promise((resolve) => {
-    let done = false;
-    const onMsg = (e) => {
-      if (e.data && e.data.type === "sfoc-open-record") {
-        done = true;
-        window.removeEventListener("message", onMsg);
-        resolve(e.data.rec || null);
-      }
-    };
-    window.addEventListener("message", onMsg);
-    try {
-      window.parent.postMessage({type: "sfoc-query-open-record"}, "*");
-    } catch (err) {
-      window.removeEventListener("message", onMsg);
-      resolve(null);
-    }
-    setTimeout(() => {
-      if (!done) {
-        window.removeEventListener("message", onMsg);
-        resolve(null);
-      }
-    }, 1500);
-  });
-}
 
 class App extends React.Component {
   constructor(props) {
@@ -524,10 +424,14 @@ class App extends React.Component {
       isEnhancing: false,
       enhancedPreview: null,
       lastFailedPrompt: null,
-      deploymentStatus: saved?.deploymentStatus === "deploying" ? "complete" : (saved?.deploymentStatus || null),
-      deploymentStep: saved?.deploymentStatus === "deploying" ? "Deployment complete!" : (saved?.deploymentStep || null),
+      // A saved mid-deploy flag means the run was interrupted (the frame
+      // was torn down), not that it finished.
+      deploymentStatus: saved?.deploymentStatus === "deploying" ? "failed" : (saved?.deploymentStatus || null),
+      deploymentStep: saved?.deploymentStatus === "deploying" ? "Deployment interrupted" : (saved?.deploymentStep || null),
       deploymentProgress: saved?.deploymentProgress || 0,
       deploymentResults: saved?.deploymentResults || [],
+      deployError: saved?.deploymentStatus === "deploying" ? INTERRUPTED_DEPLOY_MSG : (saved?.deployError || null),
+      deployedObjectName: saved?.deployedObjectName || null,
       error: null,
       userInput: "",
       chatHistory: loadChatHistory(props.sfHost),
@@ -583,7 +487,7 @@ class App extends React.Component {
   }
 
   closePanel() {
-    try { window.parent.postMessage({type: "sfoc-close-sidebar"}, "*"); } catch (e) { /* not embedded */ }
+    postToParent({type: "sfoc-close-sidebar"});
     try {
       if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
         chrome.runtime.sendMessage({message: "closeSidebar"});
@@ -592,7 +496,7 @@ class App extends React.Component {
   }
 
   toggleApiNames() {
-    try { window.parent.postMessage({type: "sfoc-show-api-names"}, "*"); } catch (e) { /* not embedded */ }
+    postToParent({type: "sfoc-show-api-names"});
     this.setState(prev => ({apiNamesOn: !prev.apiNamesOn}));
   }
 
@@ -624,7 +528,11 @@ class App extends React.Component {
   renderAssistantJson(msg) {
     let proposal = msg && msg.proposal;
     if (!proposal && msg && msg.text) {
-      try { proposal = parseJSONFromText(msg.text); } catch (e) { proposal = null; }
+      // Only a reply that parses AND validates counts as a proposal card;
+      // anything else is shown as plain text.
+      const parsed = parseJSONFromText(msg.text);
+      const normalized = parsed ? normalizeProposal(parsed) : null;
+      proposal = normalized && validateProposal(normalized).length === 0 ? normalized : null;
     }
     const obj = proposal && proposal.object;
     if (!obj || typeof obj !== "object") return null;
@@ -669,7 +577,7 @@ class App extends React.Component {
 
   componentDidMount() {
     this.applyColorTheme(this.state.colorTheme || "dark");
-    try { window.parent.postMessage({type: "sfoc-query-api-names"}, "*"); } catch (e) { /* not embedded */ }
+    postToParent({type: "sfoc-query-api-names"});
     const isWelcome = (m) => m && m.role === "system" &&
       /configure your LLM provider/i.test(m.text || "");
     if (this.state.messages.filter(isWelcome).length > 1) {
@@ -747,7 +655,7 @@ class App extends React.Component {
         sandbox: org.IsSandbox === true,
         instanceUrl: "https://" + (sfConn.instanceHostname || "")
       };
-      try { window.parent.postMessage({type: "sfoc-user-card", info}, "*"); } catch (e) { /* not embedded */ }
+      postToParent({type: "sfoc-user-card", info});
     } catch (e) {
       this._userCardSent = false;
     }
@@ -777,7 +685,7 @@ class App extends React.Component {
 
   _autoSaveChat() {
     const {messages, currentProposal, deploymentResults, deploymentStatus, activeChatId, selectedFields,
-      visibilityMode, selectedProfiles, selectedApp, builderMode} = this.state;
+      visibilityMode, selectedProfiles, selectedApp, builderMode, deployError, deployedObjectName} = this.state;
     if (messages.length <= 1) return;
     const chatHistory = [...this.state.chatHistory];
     const chatEntry = {
@@ -787,6 +695,8 @@ class App extends React.Component {
       currentProposal,
       deploymentResults,
       deploymentStatus,
+      deployError,
+      deployedObjectName,
       selectedFields,
       visibilityMode,
       selectedProfiles,
@@ -813,6 +723,8 @@ class App extends React.Component {
       deploymentStep: null,
       deploymentProgress: 0,
       deploymentResults: [],
+      deployError: null,
+      deployedObjectName: null,
       selectedFields: null,
       error: null,
       activeChatId: null,
@@ -841,7 +753,7 @@ class App extends React.Component {
   }
 
   showUserCard() {
-    try { window.parent.postMessage({type: "sfoc-show-user-card"}, "*"); } catch (e) { /* not embedded */ }
+    postToParent({type: "sfoc-show-user-card"});
   }
 
   openInspector() {
@@ -934,7 +846,7 @@ class App extends React.Component {
     const chat = this.state.chatHistory.find(c => c.id === chatId);
     if (!chat) return;
     // Never restore a mid-deploy flag — the previous run is gone.
-    const st = chat.deploymentStatus === "deploying" ? "complete" : (chat.deploymentStatus || null);
+    const st = chat.deploymentStatus === "deploying" ? "failed" : (chat.deploymentStatus || null);
     this.setState({
       messages: chat.messages || [],
       currentProposal: chat.currentProposal || null,
@@ -942,6 +854,8 @@ class App extends React.Component {
       deploymentStep: st === "complete" ? (chat.deploymentStep || "Deployment complete!") : (chat.deploymentStep || null),
       deploymentProgress: chat.deploymentProgress || 0,
       deploymentResults: chat.deploymentResults || [],
+      deployError: chat.deploymentStatus === "deploying" ? INTERRUPTED_DEPLOY_MSG : (chat.deployError || null),
+      deployedObjectName: chat.deployedObjectName || null,
       selectedFields: chat.selectedFields || (chat.currentProposal?.fields || []).map(f => f.name),
       visibilityMode: chat.visibilityMode || "all",
       selectedProfiles: chat.selectedProfiles || [],
@@ -1024,7 +938,8 @@ class App extends React.Component {
 
       this.setState({streamingText: ""});
 
-      const proposal = parseJSONFromText(response);
+      const parsed = parseJSONFromText(response);
+      const proposal = parsed ? normalizeProposal(parsed) : null;
       if (proposal) {
         const validationErrors = validateProposal(proposal);
         if (validationErrors.length > 0) {
@@ -1048,6 +963,10 @@ class App extends React.Component {
         }
       } else {
         this.addAssistantMessage(response, null);
+        this.setState({
+          error: "The AI reply did not contain a valid object proposal (no parseable JSON). Click Retry to ask again.",
+          lastFailedPrompt: userInput
+        });
       }
     } catch (error) {
       this.setState({
@@ -1124,9 +1043,14 @@ class App extends React.Component {
     return apiMessages.slice(-10);
   }
 
-  async deployObject() {
-    const {currentProposal, selectedFields} = this.state;
-    if (!currentProposal) return;
+  // opts.resume: the object was created by an earlier attempt in this
+  // session (state.deployedObjectName) — skip object creation and deploy
+  // only the selected fields the org does not have yet.
+  async deployObject(opts = {}) {
+    const {selectedFields, deployedObjectName} = this.state;
+    if (!this.state.currentProposal) return;
+    const currentProposal = normalizeProposal(this.state.currentProposal);
+    if (currentProposal !== this.state.currentProposal) this.setState({currentProposal});
 
     const fieldsToDeploy = selectedFields
       ? currentProposal.fields.filter(f => selectedFields.includes(f.name))
@@ -1137,90 +1061,141 @@ class App extends React.Component {
       return;
     }
 
+    // Names below go into SOQL and Metadata fullNames — refuse to deploy a
+    // plan that does not validate rather than escaping our way around it.
+    const planErrors = validateProposal(currentProposal);
+    if (planErrors.length > 0) {
+      this.setState({
+        deploymentStatus: "failed",
+        deploymentStep: "Deployment failed",
+        deploymentResults: [],
+        deployError: "Fix the plan before deploying: " + planErrors.slice(0, 4).join("; "),
+        error: null
+      });
+      return;
+    }
+
+    const objectName = currentProposal.object.name;
+    const resume = !!opts.resume && deployedObjectName === objectName;
+
     this._deployAborted = false;
     this._abortController = new AbortController();
     this._profileMetadataNames = null;
 
     this.setState({
       deploymentStatus: "deploying",
-      deploymentStep: "Creating object...",
+      deploymentStep: resume ? "Resuming deployment..." : "Creating object...",
       deploymentProgress: 0,
       deploymentResults: [],
+      deployError: null,
       error: null
     });
 
-    const recordTypesToDeployCount = 0; // record types are a separate, later step
     const totalSteps = fieldsToDeploy.length + 6;
     let completedSteps = 0;
 
     try {
-      console.log("[SaralForce] Starting deployment. Object:", currentProposal.object.name, "Fields:", fieldsToDeploy.length);
+      console.log("[SaralForce] Starting deployment. Object:", objectName, "Fields:", fieldsToDeploy.length, resume ? "(resume)" : "");
       const createdFields = [];
+      // Selected fields the org already has (resume only): no create call,
+      // but they still get FLS + layout in case the earlier run stopped first.
+      const existingFieldNames = new Set();
 
-      this.setState({deploymentStep: `Creating object "${currentProposal.object.label}"...`});
-      console.log("[SaralForce] Step 1: Creating object...");
-      // Fail fast if the object already exists (EntityDefinition query).
-      try {
-        const baseName = currentProposal.object.name.replace(/__c$/, "");
-        const dupCheck = await sfConn.rest(
-          `/services/data/v${apiVersion}/query/?q=` +
-          encodeURIComponent(`SELECT DeveloperName FROM EntityDefinition WHERE DeveloperName = '${baseName}' LIMIT 1`));
-        if (dupCheck.records && dupCheck.records.length > 0) {
-          throw new Error(
-            `Object ${currentProposal.object.name} already exists. ` +
-            `Suggested rename: ${baseName}_2__c. ` +
-            `Click "Retry with new name" below or describe a different name in chat.`);
+      if (resume) {
+        this.setState({deploymentStep: "Checking which fields already exist..."});
+        try {
+          const existRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+            encodeURIComponent(`SELECT QualifiedApiName FROM FieldDefinition WHERE EntityDefinition.QualifiedApiName = '${escapeSoqlString(objectName)}'`));
+          for (const r of existRes.records || []) {
+            if (r.QualifiedApiName) existingFieldNames.add(r.QualifiedApiName.toLowerCase());
+          }
+        } catch (existErr) {
+          // Not fatal: creating a field that exists is treated as success below.
+          console.warn("[SaralForce] Resume field check failed:", existErr.message);
         }
-      } catch (preErr) {
-        if (/already exists|Suggested rename/i.test(preErr.message)) throw preErr;
-        console.warn("[SaralForce] Duplicate pre-check skipped:", preErr.message);
-      }
-      let objectResult;
-      try {
-        objectResult = await this.metaSoapRequest("create", this.buildObjectXml(currentProposal.object));
-      } catch (objErr) {
-        if (isDuplicateError(objErr)) {
-          const baseName = currentProposal.object.name.replace(/__c$/, "");
-          throw new Error(
-            `${objErr.message}. Object already exists — suggested rename: ${baseName}_2__c. ` +
-            `Click "Retry with new name" below or describe a different name in chat.`);
+        completedSteps += 2;
+        this.setState(prev => ({
+          deploymentResults: [...prev.deploymentResults, {
+            type: "object",
+            name: objectName,
+            label: `${currentProposal.object.label} (already created — resumed)`,
+            status: "success"
+          }],
+          deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
+        }));
+      } else {
+        this.setState({deploymentStep: `Creating object "${currentProposal.object.label}"...`});
+        console.log("[SaralForce] Step 1: Creating object...");
+        const suggested = nextRetryName(objectName, currentProposal.object.label).name;
+        const existsHint = deployedObjectName === objectName
+          ? "It was created by an earlier attempt in this session — click \"Resume deploy\" to add the remaining fields."
+          : `Suggested rename: ${suggested}. Click "Retry with new name" or edit the API name in Plan mode.`;
+        // Fail fast if the object already exists (EntityDefinition query).
+        try {
+          const dupCheck = await sfConn.rest(
+            `/services/data/v${apiVersion}/query/?q=` +
+            encodeURIComponent(`SELECT DeveloperName FROM EntityDefinition WHERE QualifiedApiName = '${escapeSoqlString(objectName)}' LIMIT 1`));
+          if (dupCheck.records && dupCheck.records.length > 0) {
+            throw Object.assign(new Error(`Object ${objectName} already exists in this org. ${existsHint}`), {objectExists: true});
+          }
+        } catch (preErr) {
+          if (preErr.objectExists) throw preErr;
+          console.warn("[SaralForce] Duplicate pre-check skipped:", preErr.message);
         }
-        throw objErr;
+        let objectResult;
+        try {
+          objectResult = await this.metadataCreate(this.buildObjectXml(currentProposal.object));
+        } catch (objErr) {
+          if (isDuplicateError(objErr)) {
+            throw Object.assign(new Error(`${objErr.message}. Object ${objectName} already exists. ${existsHint}`), {objectExists: true});
+          }
+          throw objErr;
+        }
+        console.log("[SaralForce] Object create response:", objectResult);
+        completedSteps++;
+
+        this.setState(prev => ({
+          deployedObjectName: objectName,
+          deploymentResults: [...prev.deploymentResults, {
+            type: "object",
+            name: objectName,
+            label: currentProposal.object.label,
+            status: "success",
+            id: objectResult.id
+          }],
+          deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
+        }));
+
+        if (this._deployAborted) throw new Error("Deployment cancelled");
+
+        this.setState({deploymentStep: "Waiting for metadata propagation (8s)..."});
+        console.log("[SaralForce] Step 2: Waiting 8s for metadata propagation...");
+        await this.delay(8000);
+        completedSteps++;
+        this.setState(prev => ({deploymentProgress: Math.round((completedSteps / totalSteps) * 100)}));
       }
-      console.log("[SaralForce] Object create response:", objectResult);
-      completedSteps++;
-
-      if (objectResult.id && (objectResult.done === "false" || objectResult.state === "InProgress")) {
-        console.log("[SaralForce] Object creation is async, polling status with id:", objectResult.id);
-        this.setState({deploymentStep: `Creating object "${currentProposal.object.label}" (async)...`});
-        await this.pollDeployStatus(objectResult.id);
-        console.log("[SaralForce] Object creation confirmed complete");
-      }
-
-      this.setState(prev => ({
-        deploymentResults: [...prev.deploymentResults, {
-          type: "object",
-          name: currentProposal.object.name,
-          label: currentProposal.object.label,
-          status: "success",
-          id: objectResult.id
-        }],
-        deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
-      }));
-
-      if (this._deployAborted) throw new Error("Deployment cancelled");
-
-      this.setState({deploymentStep: "Waiting for metadata propagation (8s)..."});
-      console.log("[SaralForce] Step 2: Waiting 8s for metadata propagation...");
-      await this.delay(8000);
-      completedSteps++;
-      this.setState(prev => ({deploymentProgress: Math.round((completedSteps / totalSteps) * 100)}));
 
       for (let i = 0; i < fieldsToDeploy.length; i++) {
         if (this._deployAborted) throw new Error("Deployment cancelled");
 
         const field = fieldsToDeploy[i];
         const fieldNum = i + 1;
+
+        if (existingFieldNames.has(String(field.name).toLowerCase())) {
+          createdFields.push(field);
+          completedSteps++;
+          this.setState(prev => ({
+            deploymentResults: [...prev.deploymentResults, {
+              type: "field",
+              name: field.name,
+              label: `${field.label} (already present)`,
+              status: "success"
+            }],
+            deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
+          }));
+          continue;
+        }
+
         this.setState({deploymentStep: `Creating field ${fieldNum}/${fieldsToDeploy.length}: "${field.label}"...`});
         console.log(`[SaralForce] Step 3.${fieldNum}: Creating field "${field.label}" (${field.type})...`);
 
@@ -1230,26 +1205,29 @@ class App extends React.Component {
         for (let attempt = 0; attempt < 5; attempt++) {
           if (this._deployAborted) throw new Error("Deployment cancelled");
           try {
-            const fieldXml = this.buildFieldXml(currentProposal.object.name, field);
-            console.log(`[SaralForce]   Field SOAP XML (attempt ${attempt + 1}):`, fieldXml.substring(0, 200) + "...");
-            const fieldResult = await this.metaSoapRequest("create", fieldXml);
-            if (fieldResult.id && (fieldResult.done === "false" || fieldResult.state === "InProgress")) {
-              console.log(`[SaralForce]   Field "${field.label}" async, polling...`, fieldResult.id);
-              await this.pollDeployStatus(fieldResult.id);
+            let fieldXml;
+            try {
+              fieldXml = this.buildFieldXml(objectName, field);
+            } catch (buildErr) {
+              buildErr.nonTransient = true;
+              throw buildErr;
             }
+            console.log(`[SaralForce]   Field SOAP XML (attempt ${attempt + 1}):`, fieldXml.substring(0, 200) + "...");
+            await this.metadataCreate(fieldXml);
             fieldCreated = true;
             console.log(`[SaralForce]   Field "${field.label}" created successfully`);
             break;
           } catch (fieldErr) {
             lastError = fieldErr;
             console.error(`[SaralForce]   Field "${field.label}" attempt ${attempt + 1} failed:`, fieldErr.message);
+            if (this._deployAborted) throw new Error("Deployment cancelled");
             // Soft-deleted relationship keeps the name — retry with a unique suffix.
             if (isRelationshipCollisionError(fieldErr) && relCollisionRetries < 3) {
               relCollisionRetries++;
               const coll = relationshipCollisionName(fieldErr);
               const base = coll && coll.name
                 ? coll.name
-                : safeRelationshipName(field, currentProposal.object.name);
+                : safeRelationshipName(field, objectName);
               const next = `${base.replace(/_+\d+$/, "")}_${1 + relCollisionRetries}`;
               console.warn(`[SaralForce]   Relationship collision on ${coll?.parent || "?"} — retrying as "${next}"`);
               field.relationshipName = next;
@@ -1258,11 +1236,13 @@ class App extends React.Component {
               continue;
             }
             // Field already present from a prior run — treat as success.
-            if (isDuplicateError(fieldErr) && /field|CustomField/i.test(fieldErr.message || "")) {
+            if (isDuplicateError(fieldErr) && /field|CustomField/i.test(`${fieldErr.message || ""} ${fieldErr.statusCode || ""}`)) {
               console.warn(`[SaralForce]   Field "${field.label}" already exists — treating as success`);
               fieldCreated = true;
               break;
             }
+            // Validation/build errors fail identically on every attempt.
+            if (isNonTransientDeployError(fieldErr)) break;
             if (attempt < 4) {
               const waitTime = 2000 * (attempt + 1);
               console.log(`[SaralForce]   Retrying in ${waitTime}ms...`);
@@ -1330,7 +1310,7 @@ class App extends React.Component {
           let layoutFieldNames = createdFieldNames;
           try {
             const existRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-              encodeURIComponent(`SELECT QualifiedApiName FROM FieldDefinition WHERE EntityDefinition.DeveloperName = '${currentProposal.object.name.replace(/__c$/, "")}'`));
+              encodeURIComponent(`SELECT QualifiedApiName FROM FieldDefinition WHERE EntityDefinition.QualifiedApiName = '${escapeSoqlString(objectName)}'`));
             const exist = new Set((existRes.records || []).map(r => r.QualifiedApiName).filter(Boolean));
             if (exist.size) {
               layoutFieldNames = createdFieldNames.filter(n => exist.has(n));
@@ -1368,7 +1348,18 @@ class App extends React.Component {
 
       this.setState({deploymentStep: "Creating tab..."});
       console.log("[SaralForce] Step 5: Creating tab...");
-      const tabResult = await this.createTab(currentProposal.object.name, currentProposal.object.label);
+      // On resume the tab may already exist from the earlier attempt; a
+      // second create would fail with a duplicate error.
+      let tabResult = null;
+      if (resume) {
+        try {
+          const tabNames = await this.listMetadataFullNames("CustomTab");
+          if (tabNames.includes(objectName)) tabResult = {ok: true, method: "existing"};
+        } catch (e) {
+          console.warn("[SaralForce] Resume tab check failed:", e.message);
+        }
+      }
+      if (!tabResult) tabResult = await this.createTab(currentProposal.object.name, currentProposal.object.label);
       completedSteps++;
       this.setState(prev => ({
         deploymentResults: [...prev.deploymentResults, {
@@ -1465,9 +1456,9 @@ class App extends React.Component {
       } else {
         console.error("[SaralForce] Deployment failed:", err);
         this.setState({
-          deploymentStatus: "complete",
+          deploymentStatus: "failed",
           deploymentStep: "Deployment failed",
-          error: `Deployment failed: ${err.message}`
+          deployError: err.message || String(err)
         });
       }
     }
@@ -1609,9 +1600,12 @@ class App extends React.Component {
 
       if (success === "false" && errorsEl) {
         const msgEl = errorsEl.querySelector("message");
+        const codeEl = errorsEl.querySelector("statusCode");
         const errMsg = msgEl ? msgEl.textContent : "Metadata API returned error";
         this.noteSoapDebug(action, metadataXml, responseText);
-        throw new Error(errMsg);
+        const err = new Error(errMsg);
+        if (codeEl) err.statusCode = codeEl.textContent;
+        throw err;
       }
 
       return {id, done, state, success, message, statusCode};
@@ -1747,6 +1741,28 @@ class App extends React.Component {
     return result;
   }
 
+  // Create one metadata component. Primary path is the synchronous
+  // createMetadata() call (SaveResult) — the async CRUD create()/checkStatus()
+  // pair is documented as available only in API 30.0 and earlier, and this
+  // app talks to /services/Soap/m/<apiVersion> (67.0 by default). The legacy
+  // create() + checkStatus() polling is kept only as a fallback for an org
+  // or endpoint that rejects createMetadata as an unknown operation.
+  async metadataCreate(metadataXml) {
+    try {
+      return await this.metaSoapRequest("createMetadata", metadataXml);
+    } catch (err) {
+      if (!/No operation available|INVALID_OPERATION|Unknown operation|not a valid operation/i.test(err.message || "")) {
+        throw err;
+      }
+      console.warn("[SaralForce] createMetadata unavailable, falling back to create():", err.message);
+      const res = await this.metaSoapRequest("create", metadataXml);
+      if (res && res.id && (res.done === "false" || res.state === "InProgress")) {
+        await this.pollDeployStatus(res.id);
+      }
+      return res;
+    }
+  }
+
   async pollDeployStatus(deployId, maxAttempts = 30) {
     for (let i = 0; i < maxAttempts; i++) {
       if (this._deployAborted) throw new Error("Deployment cancelled");
@@ -1778,13 +1794,12 @@ class App extends React.Component {
   }
 
   buildObjectXml(objectDef) {
-    const nameFieldType = objectDef.nameFieldType || "Text";
-    const nameFieldLabel = objectDef.nameFieldLabel || objectDef.label + " Name";
-    const displayFormat = objectDef.displayFormat || "{0}";
-
-    const nameFieldXml = nameFieldType === "AutoNumber"
-      ? `<met:nameField><met:label>${escXml(nameFieldLabel)}</met:label><met:type>AutoNumber</met:type><met:displayFormat>${escXml(displayFormat)}</met:displayFormat></met:nameField>`
-      : `<met:nameField><met:label>${escXml(nameFieldLabel)}</met:label><met:type>Text</met:type></met:nameField>`;
+    // Prompt/plan contract is object.nameField.{label,type,format}; the flat
+    // nameFieldType/nameFieldLabel/displayFormat keys are a legacy fallback.
+    const nameField = resolveNameField(objectDef);
+    const nameFieldXml = nameField.type === "AutoNumber"
+      ? `<met:nameField><met:displayFormat>${escXml(nameField.displayFormat)}</met:displayFormat><met:label>${escXml(nameField.label)}</met:label><met:type>AutoNumber</met:type></met:nameField>`
+      : `<met:nameField><met:label>${escXml(nameField.label)}</met:label><met:type>Text</met:type></met:nameField>`;
 
     const parts = [
       `<met:metadata xsi:type="met:CustomObject">`,
@@ -1806,21 +1821,25 @@ class App extends React.Component {
 
   buildFieldXml(objectName, fieldDef) {
     const fullName = `${objectName}.${fieldDef.name}`;
+    const type = normalizeFieldType(fieldDef.type);
+    if (!type) throw new Error(`Unsupported field type: ${fieldDef.type}`);
     const parts = [
       `<met:metadata xsi:type="met:CustomField">`,
       `  <met:fullName>${escXml(fullName)}</met:fullName>`,
       `  <met:label>${escXml(fieldDef.label)}</met:label>`,
-      `  <met:type>${fieldDef.type}</met:type>`,
+      `  <met:type>${type}</met:type>`,
     ];
 
     if (fieldDef.description) {
       parts.push(`  <met:description>${escXml(fieldDef.description)}</met:description>`);
     }
 
-    switch (fieldDef.type) {
+    const required = !!fieldDef.required && fieldDef.required !== "false" && supportsRequired(type);
+    if (required) parts.push(`  <met:required>true</met:required>`);
+
+    switch (type) {
       case "Text":
         parts.push(`  <met:length>${fieldDef.length || 255}</met:length>`);
-        if (fieldDef.required) parts.push(`  <met:required>true</met:required>`);
         if (fieldDef.unique) parts.push(`  <met:unique>true</met:unique>`);
         if (fieldDef.externalId) parts.push(`  <met:externalId>true</met:externalId>`);
         break;
@@ -1835,7 +1854,7 @@ class App extends React.Component {
       case "Percent":
         parts.push(`  <met:precision>${parseInt(fieldDef.precision) || 18}</met:precision>`);
         parts.push(`  <met:scale>${parseInt(fieldDef.scale) || 0}</met:scale>`);
-        if (fieldDef.type === "Number") {
+        if (type === "Number") {
           if (fieldDef.unique) parts.push(`  <met:unique>true</met:unique>`);
           if (fieldDef.externalId) parts.push(`  <met:externalId>true</met:externalId>`);
         }
@@ -1887,7 +1906,7 @@ class App extends React.Component {
         }
         parts.push(`    </met:valueSetDefinition>`);
         parts.push(`  </met:valueSet>`);
-        if (fieldDef.type === "MultiselectPicklist") {
+        if (type === "MultiselectPicklist") {
           parts.push(`  <met:visibleLines>${parseInt(fieldDef.visibleLines) || 4}</met:visibleLines>`);
         }
         break;
@@ -1898,6 +1917,11 @@ class App extends React.Component {
         parts.push(`  <met:relationshipLabel>${escXml(fieldDef.label)}</met:relationshipLabel>`);
         parts.push(`  <met:relationshipName>${escXml(relName)}</met:relationshipName>`);
         parts.push(`  <met:referenceTo>${escXml(fieldDef.relatedTo)}</met:referenceTo>`);
+        // A required lookup cannot keep the default SetNull delete
+        // constraint, so pair it with Restrict.
+        if (type === "Lookup" && required) {
+          parts.push(`  <met:deleteConstraint>Restrict</met:deleteConstraint>`);
+        }
         break;
       }
       default:
@@ -1935,7 +1959,7 @@ class App extends React.Component {
   buildRecordTypeXml(objectName, rt) {
     // Standalone RecordType create: fullName is ObjectApi.DeveloperName
     // (DeveloperName has NO __c suffix). Omit businessProcess — custom
-    // objects have none. Deployed via the proven async create() op.
+    // objects have none. Deployed via metadataCreate (createMetadata).
     const parts = [
       `<met:metadata xsi:type="met:RecordType">`,
       `  <met:fullName>${escXml(objectName)}.${escXml(rt.name)}</met:fullName>`,
@@ -2030,7 +2054,7 @@ class App extends React.Component {
     try {
       const baseName = objectName.replace(/__c$/, "");
       const q = encodeURIComponent(
-        `SELECT Id, FullName FROM Layout WHERE EntityDefinition.DeveloperName = '${baseName}' LIMIT 5`);
+        `SELECT Id, FullName FROM Layout WHERE EntityDefinition.DeveloperName = '${escapeSoqlString(baseName)}' LIMIT 5`);
       let fullName = null;
       try {
         const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=${q}`);
@@ -2238,10 +2262,7 @@ class App extends React.Component {
       const xml = `<met:metadata xsi:type="met:Layout">` +
         `<met:fullName>${escXml(newName)}</met:fullName>` +
         `${domToMetXml(section)}</met:metadata>`;
-      const res = await this.metaSoapRequest("create", xml);
-      if (res.id && (res.done === "false" || res.state === "InProgress")) {
-        await this.pollDeployStatus(res.id);
-      }
+      await this.metadataCreate(xml);
       console.log("[SaralForce] Fallback layout created:", newName);
       return {ok: true, method: "create-fallback", added: toAdd.length, layoutName: newName};
     } catch (e) {
@@ -2515,19 +2536,28 @@ class App extends React.Component {
   retryWithNewName() {
     const {currentProposal} = this.state;
     if (!currentProposal) return;
-    const base = currentProposal.object.name.replace(/__c$/, "").replace(/_2$/, "");
-    const nextName = `${base}_2__c`;
-    const nextLabel = `${currentProposal.object.label} 2`;
+    const next = nextRetryName(currentProposal.object.name, currentProposal.object.label);
     this.setState(prev => ({
       currentProposal: {
         ...prev.currentProposal,
-        object: {...prev.currentProposal.object, name: nextName, label: nextLabel}
+        object: {
+          ...prev.currentProposal.object,
+          name: next.name,
+          label: next.label,
+          pluralLabel: prev.currentProposal.object.pluralLabel
+            ? nextRetryName(prev.currentProposal.object.name, prev.currentProposal.object.pluralLabel).label
+            : prev.currentProposal.object.pluralLabel
+        }
       },
       deploymentStatus: null,
       deploymentStep: null,
       deploymentResults: [],
+      deployError: null,
       error: null
-    }), () => this.deployObject());
+    }), () => {
+      this._autoSaveChat();
+      this.deployObject();
+    });
   }
 
   getSetupLink() {
@@ -2582,11 +2612,7 @@ class App extends React.Component {
     };
     try {
       console.log("[SaralForce] Creating tab via Metadata API...", tabDetail);
-      const res = await this.metaSoapRequest("create", this.buildTabXml(objectName, objectLabel));
-      if (res && res.id && (res.done === "false" || res.state === "InProgress")) {
-        console.log("[SaralForce] Tab creation async, polling...", res.id);
-        await this.pollDeployStatus(res.id);
-      }
+      await this.metadataCreate(this.buildTabXml(objectName, objectLabel));
       console.log("[SaralForce] Tab created via Metadata API for:", objectName);
       if (!(await verifyTab())) {
         return {ok: false, error: `Tab creation reported success but "${objectName}" not found in CustomTab metadata after re-reads — wait a minute and retry, or check Setup → Tabs.`};
@@ -2662,8 +2688,10 @@ class App extends React.Component {
     if (!currentProposal || this.state.builderMode !== "plan") return;
     const draft = JSON.parse(JSON.stringify(currentProposal));
     mutator(draft);
-    this.setState({currentProposal: draft, error: null}, () => {
-      if (after) after(draft);
+    // Keep the sharing model consistent with Master-Detail fields.
+    const normalized = normalizeProposal(draft);
+    this.setState({currentProposal: normalized, error: null}, () => {
+      if (after) after(normalized);
       this._autoSaveChat();
     });
   }
@@ -2710,16 +2738,8 @@ class App extends React.Component {
   }
 
   suggestApiName(label) {
-    const base = String(label || "")
-      .replace(/[^A-Za-z0-9 ]/g, "")
-      .trim()
-      .split(/\s+/)
-      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-      .join("_")
-      .replace(/_+/g, "_")
-      .replace(/^_+|_+$/g, "");
-    const clean = base || "Custom_Field";
-    return (/^[A-Za-z]/.test(clean) ? clean : "Custom_" + clean) + "__c";
+    const taken = (this.state.currentProposal?.fields || []).map(f => f.name);
+    return suggestApiName(label, taken);
   }
 
   addPlanField() {
@@ -3546,12 +3566,21 @@ class App extends React.Component {
     }
   }
 
+  // Record types only need the object itself: allow them once a deploy run
+  // finished and its object step succeeded (field/layout errors don't block).
+  objectDeploySucceeded() {
+    const {deploymentStatus, deploymentResults, currentProposal} = this.state;
+    return deploymentStatus === "complete" && !!currentProposal &&
+      (deploymentResults || []).some(r => r.type === "object" && r.status === "success" &&
+        r.name === currentProposal.object.name);
+  }
+
   // Post-deploy: create record types (and RT visibility) when the proposal has them.
   async createRecordTypes() {
-    const {currentProposal, deploymentStatus} = this.state;
+    const {currentProposal} = this.state;
     if (!currentProposal || !(currentProposal.recordTypes || []).length) return;
-    if (deploymentStatus !== "complete") {
-      this.setState({error: "Deploy the object first, then create record types."});
+    if (!this.objectDeploySucceeded()) {
+      this.setState({error: "Deploy the object successfully first, then create record types."});
       return;
     }
     const rts = currentProposal.recordTypes;
@@ -3568,10 +3597,7 @@ class App extends React.Component {
       const rt = rts[i];
       this.setState({deploymentStep: `Creating record type ${i + 1}/${rts.length}: "${rt.label}"...`});
       try {
-        const rtResult = await this.metaSoapRequest("create", this.buildRecordTypeXml(currentProposal.object.name, rt));
-        if (rtResult.id && (rtResult.done === "false" || rtResult.state === "InProgress")) {
-          await this.pollDeployStatus(rtResult.id);
-        }
+        const rtResult = await this.metadataCreate(this.buildRecordTypeXml(currentProposal.object.name, rt));
         okCount++;
         this.setState(prev => ({
           deploymentResults: [...prev.deploymentResults, {
@@ -3621,6 +3647,11 @@ class App extends React.Component {
 
     const setupLink = this.getSetupLink();
     const hasConfig = hasValidConfig();
+    // The object exists from an earlier attempt in this session, so a plain
+    // deploy would stop at the duplicate check — offer Resume instead.
+    const canResume = !!(currentProposal && this.state.deployedObjectName &&
+      this.state.deployedObjectName === currentProposal.object.name);
+    const deployError = this.state.deployError;
     const uiMode = this.state.uiMode || "inspector";
     // Chat and preview are mutually exclusive: the chat panel renders only
     // before the first proposal; Plan/Build pages are preview-only.
@@ -3882,14 +3913,17 @@ class App extends React.Component {
             h("div", {className: "preview-actions"},
               deploymentStatus !== "deploying" && (this.state.builderMode || "plan") === "build" && (() => {
                 const errs = this.planEditErrors();
+                const deployCount = (selectedFields || currentProposal.fields.map(f => f.name)).length;
                 return h("button", {
                   className: "btn btn-primary btn-sm",
-                  onClick: () => this.deployObject(),
+                  onClick: () => this.deployObject({resume: canResume}),
                   disabled: !currentProposal.fields?.length || errs.length > 0,
                   title: errs.length > 0
                     ? "Fix plan issues first: " + errs.slice(0, 2).join("; ")
-                    : `Deploy ${currentProposal.object.label} to Salesforce`
-                }, deploymentStatus === "complete" ? "Redeploy" : `Deploy (${(selectedFields || currentProposal.fields.map(f => f.name)).length} fields)`);
+                    : canResume
+                      ? `${currentProposal.object.name} was created by an earlier attempt — deploy only the missing fields and steps`
+                      : `Deploy ${currentProposal.object.label} to Salesforce`
+                }, canResume ? `Resume deploy (${deployCount} fields)` : `Deploy (${deployCount} fields)`);
               })(),
               deploymentStatus !== "deploying" && (this.state.builderMode || "plan") === "build" &&
                 this.planEditErrors().length > 0 && h("span", {className: "plan-error-hint"},
@@ -3920,6 +3954,19 @@ class App extends React.Component {
                 errs.length > 4 && h("div", null, `…+${errs.length - 4} more`))
             );
           })(),
+
+          // The chat panel (and its error banner) is hidden once a proposal
+          // exists, so errors must also surface here.
+          error && h("div", {className: "error-banner"},
+            h("span", null, error),
+            lastFailedPrompt && h("button", {
+              className: "btn btn-primary btn-sm",
+              style: {marginLeft: "8px"},
+              disabled: isGenerating,
+              onClick: () => this.retrySend()
+            }, isGenerating ? "..." : "↻ Retry"),
+            h("button", {className: "error-close", onClick: () => this.setState({error: null})}, "\u00d7")
+          ),
 
           h("div", {className: "preview-content"},
             (this.state.builderMode || "plan") === "plan"
@@ -3953,10 +4000,17 @@ class App extends React.Component {
                       h("span", null, "Sharing Model"),
                       h("select", {
                         value: currentProposal.object.sharingModel || "ReadWrite",
+                        title: (currentProposal.fields || []).some(f => normalizeFieldType(f.type) === "MasterDetail")
+                          ? "Objects with a Master-Detail field are always ControlledByParent"
+                          : undefined,
                         onChange: e => this.updatePlanObject({sharingModel: e.target.value})
                       },
-                        ["ReadWrite", "Read", "Private", "ReadWriteTransfer", "FullAccess"].map(s =>
-                          h("option", {key: s, value: s}, s))
+                        // Keep an invalid AI-supplied value visible so the
+                        // validation error above makes sense.
+                        (SHARING_MODELS.includes(currentProposal.object.sharingModel || "ReadWrite")
+                          ? SHARING_MODELS
+                          : [...SHARING_MODELS, currentProposal.object.sharingModel]).map(s =>
+                          h("option", {key: s, value: s}, SHARING_MODELS.includes(s) ? s : `${s} (invalid)`))
                       )
                     ),
                     h("label", {className: "insp-field"},
@@ -3978,6 +4032,17 @@ class App extends React.Component {
                       },
                         ["Text", "AutoNumber"].map(t => h("option", {key: t, value: t}, t))
                       )
+                    ),
+                    resolveNameField(currentProposal.object).type === "AutoNumber" && h("label", {className: "insp-field"},
+                      h("span", null, "Display Format"),
+                      h("input", {
+                        value: currentProposal.object.nameField?.format || "",
+                        placeholder: "e.g. INV-{0000}",
+                        spellCheck: false,
+                        onChange: e => this.updatePlanObject({
+                          nameField: {...currentProposal.object.nameField, format: e.target.value}
+                        })
+                      })
                     )
                   )
                 )
@@ -3988,7 +4053,10 @@ class App extends React.Component {
                   ),
                   currentProposal.object.description && h("p", {className: "object-description"}, currentProposal.object.description),
                   h("div", {className: "object-meta"},
-                    h("span", {className: "meta-item"}, `Name Field: ${currentProposal.object.nameField?.label || "Name"} (${currentProposal.object.nameField?.type || "Text"})`),
+                    h("span", {className: "meta-item"}, (() => {
+                      const nf = resolveNameField(currentProposal.object);
+                      return `Name Field: ${nf.label} (${nf.type}${nf.displayFormat ? ", " + nf.displayFormat : ""})`;
+                    })()),
                     currentProposal.object.sharingModel && h("span", {className: "meta-item"}, `Sharing: ${currentProposal.object.sharingModel}`)
                   )
                 ),
@@ -4174,7 +4242,9 @@ class App extends React.Component {
                 }, "+ Add field")
               ),
               h("div", {className: "fields-footer"},
-                `${selectedFields?.length || currentProposal.fields.length} of ${currentProposal.fields.length} fields selected`
+                `${selectedFields
+                  ? currentProposal.fields.filter(f => selectedFields.includes(f.name)).length
+                  : currentProposal.fields.length} of ${currentProposal.fields.length} fields selected`
               )
             ),
 
@@ -4184,9 +4254,9 @@ class App extends React.Component {
                 h("div", {className: "field-select-actions"},
                   h("button", {
                     className: "btn btn-secondary btn-sm",
-                    disabled: deploymentStatus !== "complete" || recordTypesDone,
-                    title: deploymentStatus !== "complete"
-                      ? "Deploy the object first, then create record types"
+                    disabled: !this.objectDeploySucceeded() || recordTypesDone,
+                    title: !this.objectDeploySucceeded()
+                      ? "Deploy the object successfully first, then create record types"
                       : undefined,
                     onClick: () => this.createRecordTypes()
                   }, recordTypesDone ? "Created ✓" : "Create after deploy")
@@ -4240,7 +4310,31 @@ class App extends React.Component {
               ),
 
               deploymentStatus === "complete" && deploymentResults.some(r => r.status === "error") && h("div", {className: "deploy-partial-banner"},
-                "\u26a0 Deployment completed with errors"
+                "\u26a0 Deployment completed with errors",
+                canResume && " — fix the plan if needed, then use Resume deploy to retry the failed steps."
+              ),
+
+              deploymentStatus === "failed" && h("div", {className: "error-banner", role: "alert"},
+                h("span", null, "\u2717 Deployment failed: " + (deployError || "Unknown error")),
+                canResume && h("button", {
+                  className: "btn btn-primary btn-sm",
+                  style: {marginLeft: "8px"},
+                  onClick: () => this.deployObject({resume: true})
+                }, "Resume deploy"),
+                !canResume && /already exists/i.test(deployError || "") && h("button", {
+                  className: "btn btn-primary btn-sm",
+                  style: {marginLeft: "8px"},
+                  onClick: () => this.retryWithNewName()
+                }, `Retry with new name (${nextRetryName(currentProposal.object.name, currentProposal.object.label).name})`),
+                h("button", {
+                  className: "deploy-copy-error",
+                  onClick: async (e) => {
+                    const btn = e.currentTarget;
+                    const ok = await safeCopyText(deployError || "");
+                    btn.textContent = ok ? "Copied!" : "Failed";
+                    setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+                  }
+                }, "Copy")
               ),
 
               deploymentResults.map((result, i) =>
@@ -4342,49 +4436,73 @@ if (!sfHost) {
 if (!sfHost) {
   document.getElementById("root").innerHTML = "<p style='padding:20px;color:red;'>Error: No Salesforce host specified. Please open this page from the extension popup.</p>";
 } else {
+  let appStarted = false;
   function initApp() {
-    // Listen for save-state request from sidebar content script before close
+    if (appStarted) return;
+    appStarted = true;
+    // Requests from the sidebar content script (verified parent page only).
     window.addEventListener("message", (e) => {
-      if (e.data?.type === "sfoc-save-state") {
+      if (!isFromTrustedParent(e)) return;
+      if (e.data.type === "sfoc-save-state") {
         if (window.__sfocApp) {
           window.__sfocApp._saveState();
           saveInspectorState(sfHost, window.__sfocApp.state);
         }
       }
-      if (e.data?.type === "sfoc-api-names-state" && window.__sfocApp) {
+      if (e.data.type === "sfoc-api-names-state" && window.__sfocApp) {
         window.__sfocApp.setState({apiNamesOn: !!e.data.on});
       }
     });
 
-    const root = ReactDOM.render(
+    ReactDOM.render(
       h(App, {sfHost}),
       document.getElementById("root"),
       function() { window.__sfocApp = this; }
     );
   }
 
-  // Check if session was passed via postMessage from sidebar content script
-  const pendingSession = sessionStorage.getItem(sfHost + "_sidebar_session");
-  if (pendingSession) {
-    try {
-      const session = JSON.parse(pendingSession);
-      sfConn.sessionId = session.key;
-      sfConn.instanceHostname = session.hostname || sfHost;
-      sessionStorage.removeItem(sfHost + "_sidebar_session");
-      initApp();
-    } catch (e) {
-      sfConn.getSession(sfHost).then(initApp);
-    }
-  } else {
-    window.addEventListener("message", function sessionHandler(e) {
-      if (e.data && e.data.type === "sfoc-session-data" && e.data.session) {
-        window.removeEventListener("message", sessionHandler);
-        sfConn.sessionId = e.data.session.key;
-        sfConn.instanceHostname = e.data.session.hostname || e.data.sfHost || sfHost;
-        initApp();
+  function showFatal(message) {
+    const p = document.createElement("p");
+    p.style.cssText = "padding:20px;color:#c23934;font-family:sans-serif;";
+    p.textContent = message;
+    const root = document.getElementById("root");
+    root.textContent = "";
+    root.appendChild(p);
+  }
+
+  // When framed, the parent must be a Salesforce page of the same org as
+  // ?host= (the background resolves the page's session domain the same way
+  // the content script did). Any other framing page is refused, so a site
+  // cannot embed an authenticated panel for someone else's org.
+  async function verifyParent() {
+    const parentOrigin = getParentOrigin();
+    if (window.parent === window) return true;
+    if (!parentOrigin || !isTrustedFrameOrigin(parentOrigin)) return false;
+    const parentHost = await new Promise(resolve => {
+      try {
+        chrome.runtime.sendMessage({message: "getSfHost", url: parentOrigin + "/"}, res => {
+          void chrome.runtime.lastError;
+          resolve(res || null);
+        });
+      } catch (e) {
+        resolve(null);
       }
     });
-    // Fallback: try normal session flow (standalone tab)
-    sfConn.getSession(sfHost).then(initApp);
+    if (!parentHost || getMyDomain(parentHost) !== getMyDomain(sfHost)) return false;
+    setTrustedParentOrigin(parentOrigin);
+    return true;
   }
+
+  verifyParent().then(ok => {
+    if (!ok) {
+      showFatal("SaralForce can only be opened from a page of the Salesforce org it works with.");
+      return;
+    }
+    // The session always comes from the extension's own cookie lookup (or
+    // the OAuth token), never from the host page.
+    sfConn.getSession(sfHost).then(initApp, err => {
+      console.error("[SaralForce] Session lookup failed:", err);
+      initApp();
+    });
+  });
 }

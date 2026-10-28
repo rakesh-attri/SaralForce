@@ -4,11 +4,50 @@
 let sfHost;
 let inspectorTabId = null;
 
+const SESSION_COOKIE_DOMAINS = ["salesforce.com", "cloudforce.com", "salesforce.mil", "cloudforce.mil", "sfcrmproducts.cn", "force.com"];
+
+function isExtensionPage(sender) {
+  return !!sender && sender.id === chrome.runtime.id &&
+    typeof sender.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
+}
+
+// Maps a Salesforce page URL to the API host of the same org's session: the
+// first domain (in SESSION_COOKIE_DOMAINS order) holding a sid cookie for the
+// page's org id. Falls back to the page's own host. Always answers once.
+// Callback wrappers: promise-returning chrome.cookies needs a newer Chrome
+// than minimum_chrome_version.
+function getCookie(details) {
+  return new Promise(resolve => chrome.cookies.get(details, cookie => resolve(cookie || null)));
+}
+
+function getAllCookies(details) {
+  return new Promise(resolve => chrome.cookies.getAll(details, cookies => resolve(cookies || [])));
+}
+
+async function resolveSfHost(url, storeId) {
+  const currentDomain = new URL(url).hostname;
+  const cookie = await getCookie({url, name: "sid", storeId});
+  if (!cookie || currentDomain.endsWith(".mcas.ms")) return currentDomain;
+  const [orgId] = cookie.value.split("!");
+  for (const domain of SESSION_COOKIE_DOMAINS) {
+    const cookies = await getAllCookies({name: "sid", domain, secure: true, storeId});
+    const sessionCookie = cookies.find(c => c.value.startsWith(orgId + "!") && c.domain != "help.salesforce.com");
+    if (sessionCookie) return sessionCookie.domain;
+  }
+  return currentDomain;
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Cross-origin LLM call proxied through the service worker so it always
   // runs with host_permissions (options page / content script fetch can
   // throw a bare "Failed to fetch" when CORS or permissions aren't ready).
   if (request.message === "llmFetch") {
+    // Only extension pages (panel, options) call AI providers; content
+    // scripts running on Salesforce pages never need this proxy.
+    if (!isExtensionPage(sender)) {
+      sendResponse({ok: false, status: 0, error: "llmFetch is only available to extension pages"});
+      return false;
+    }
     fetch(request.url, {
       method: request.method || "POST",
       headers: request.headers || {},
@@ -22,24 +61,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.message == "getSfHost") {
-    const currentDomain = new URL(request.url).hostname;
-    chrome.cookies.get({url: request.url, name: "sid", storeId: sender.tab.cookieStoreId}, cookie => {
-      if (!cookie || currentDomain.endsWith(".mcas.ms")) {
-        sendResponse(currentDomain);
-        return;
-      }
-      const [orgId] = cookie.value.split("!");
-      const orderedDomains = ["salesforce.com", "cloudforce.com", "salesforce.mil", "cloudforce.mil", "sfcrmproducts.cn", "force.com"];
-
-      orderedDomains.forEach(domain => {
-        chrome.cookies.getAll({name: "sid", domain: domain, secure: true, storeId: sender.tab.cookieStoreId}, cookies => {
-          let sessionCookie = cookies.find(c => c.value.startsWith(orgId + "!") && c.domain != "help.salesforce.com");
-          if (sessionCookie) {
-            sendResponse(sessionCookie.domain);
-          }
-        });
-      });
-    });
+    resolveSfHost(request.url, sender.tab && sender.tab.cookieStoreId).then(sendResponse, () => sendResponse(null));
     return true;
   }
   if (request.message == "getSession") {

@@ -20,6 +20,7 @@ RULES:
 2. Use meaningful, descriptive API names (PascalCase for names, no spaces).
 3. All custom field API names MUST end with "__c".
 4. Custom object API names MUST end with "__c".
+   API names (object and field) must start with a letter, use only ASCII letters, numbers and single underscores, must not end with "_" before "__c", and must be at most 40 characters before "__c". Every field name must be unique within the object.
 5. Choose appropriate field types based on the data described:
    - Text: short strings, names, codes, references (max 255 chars)
    - TextArea: longer descriptions, comments
@@ -35,15 +36,19 @@ RULES:
    - Email: email addresses
    - Phone: phone numbers
    - Url: web links
+   - Lookup: optional relationship to another object (needs "relatedTo")
+   - MasterDetail: required parent relationship (needs "relatedTo")
+   Use these exact type values (e.g. "MasterDetail", not "Master-Detail"; "DateTime", not "Date/Time"). No other types are supported.
 6. For Picklist fields, provide 2-8 logical values based on the context.
 7. Include a Description for every object and field.
 8. Add a Master-Detail or Lookup field when the user mentions relationships to standard objects (Account, Contact, Opportunity, etc.) or when it logically makes sense.
 9. Standard fields like CreatedDate, LastModifiedDate, CreatedById, Owner are automatic - never include them.
 10. If the user's request is ambiguous, make reasonable assumptions based on common business use cases.
-11. For the object's nameField, use AutoNumber with a meaningful prefix when the object represents transactions or sequential records, otherwise use Text.
+11. For the object's nameField, use AutoNumber with a meaningful prefix when the object represents transactions or sequential records, otherwise use Text. An AutoNumber nameField MUST include "format" with a number placeholder in braces, e.g. "PT-{00000}".
+12. "sharingModel" must be one of "Private", "Read", "ReadWrite" or "ControlledByParent". Use "ControlledByParent" if and only if the object has a MasterDetail field.
 
 RELATIONSHIP FIELD TYPES:
-- Master-Detail: Use when the child record cannot exist without the parent, or when you need roll-up summaries. The "relatedTo" value should be the standard object name (e.g., "Account", "Contact").
+- MasterDetail: Use when the child record cannot exist without the parent, or when you need roll-up summaries. The "relatedTo" value should be the standard object name (e.g., "Account", "Contact").
 - Lookup: Use when the relationship is optional or the child can exist independently.
 
 OUTPUT FORMAT (return ONLY the JSON, no markdown, no explanation):
@@ -58,7 +63,7 @@ OUTPUT FORMAT (return ONLY the JSON, no markdown, no explanation):
       "type": "AutoNumber" or "Text",
       "format": "PREFIX-{00000}" (only for AutoNumber, e.g. "PT-{00000}")
     },
-    "sharingModel": "ReadWrite"
+    "sharingModel": "ReadWrite" (or "Private", "Read", "ControlledByParent")
   },
   "fields": [
     {
@@ -99,8 +104,9 @@ FIELD TYPE-SPECIFIC PROPERTIES (include these in the field object):
 - Email: (no extra props needed)
 - Phone: (no extra props needed)
 - Url: (no extra props needed)
-- Master-Detail: "relatedTo" (e.g. "Account"), "required" (always true)
-- Lookup: "relatedTo" (e.g. "Contact"), "required" (false)
+- MasterDetail: "relatedTo" (e.g. "Account"); always required implicitly, so omit "required"
+- Lookup: "relatedTo" (e.g. "Contact"), "required" (usually false)
+- "required": true is honored for Text, TextArea, Number, Currency, Percent, Date, DateTime, Picklist, Email, Phone, Url and Lookup; it is ignored for Checkbox, LongTextArea, MultiselectPicklist and MasterDetail.
 
 IMPORTANT: If the user asks for modifications to a previous proposal, update the JSON accordingly. Always maintain the complete JSON structure in your response.`;
 
@@ -111,7 +117,8 @@ The user has an existing object proposal and wants to make changes. Analyze thei
 Keep all existing fields unless the user explicitly asks to remove or modify them. Add new fields or update existing ones based on the user's request.
 Keep existing recordTypes unless the user asks to change them; add recordTypes only when the user asks for record categories.
 
-Always return the COMPLETE updated JSON (object + all fields + recordTypes if any), not just the changes.`;
+Always return the COMPLETE updated JSON (object + all fields + recordTypes if any), not just the changes.
+Use only these field type values: Text, TextArea, LongTextArea, Number, Currency, Percent, Date, DateTime, Checkbox, Picklist, MultiselectPicklist, Email, Phone, Url, Lookup, MasterDetail. Keep object.nameField as {"label", "type", "format"} and use "ControlledByParent" sharing only when there is a MasterDetail field.`;
 
 export const USER_MESSAGE_TEMPLATE = (userDescription, existingProposal = null) => {  if (existingProposal) {
     return `Here is the current object proposal:

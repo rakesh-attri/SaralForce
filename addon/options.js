@@ -1,4 +1,4 @@
-import {LLM_PROVIDERS, getProviderConfig, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant, getLLMProvider, providerPermissionOrigin, checkProviderNetworkAccess} from "./llm/llm-service.js";
+import {LLM_PROVIDERS, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant, getLLMProvider, providerPermissionOrigin, checkProviderNetworkAccess, validateBaseUrl, getModelOptions, setCachedModels} from "./llm/llm-service.js";
 
 let h = React.createElement;
 
@@ -23,12 +23,14 @@ const MODEL_DESCRIPTIONS = {
   "gpt-4o": "Previous gen multimodal - Text, image, audio",
   "gpt-4o-mini": "Previous gen efficient - Budget-friendly",
   // Claude
-  "claude-fable-5-1": "Mythos-class - Demanding reasoning, long-horizon agents",
-  "claude-opus-5": "Opus tier - Complex agentic coding, enterprise",
-  "claude-sonnet-5": "Best speed+intelligence balance - Everyday coding",
-  "claude-haiku-4-5-20251001": "Fastest - Near-frontier intelligence, low cost",
-  "claude-opus-4-8": "Previous Opus gen - Still capable, fast mode support",
-  "claude-sonnet-4-20250514": "Previous Sonnet gen - Solid general purpose",
+  "claude-sonnet-5-5": "Recommended - Speed and intelligence for everyday work",
+  "claude-opus-5-5": "Most capable Opus - Complex reasoning and coding",
+  "claude-haiku-5-5": "Fastest and lowest cost",
+  "claude-fable-5-1": "Most capable tier - Demanding, long-horizon work",
+  "claude-sonnet-5": "Previous Sonnet",
+  "claude-opus-5": "Previous Opus",
+  "claude-opus-4-8": "Older Opus",
+  "claude-haiku-4-5": "Older Haiku",
   // Gemini
   "gemini-4-argon": "Flagship reasoning - 1M context, deep multi-step work",
   "gemini-3.8-flash": "Workhorse Flash - Long-horizon coding and agents",
@@ -58,7 +60,11 @@ class OptionsApp extends React.Component {
       appVersion: "",
       permMissing: false,
       permDenied: false,
-      permHost: ""
+      permHost: "",
+      saveError: "",
+      modelOptions: getModelOptions(saved.provider || "openai"),
+      modelsStatus: null,
+      modelsMessage: ""
     };
   }
 
@@ -109,18 +115,17 @@ class OptionsApp extends React.Component {
   onProviderChange(e) {
     const provider = e.target.value;
     const providerDef = LLM_PROVIDERS[provider];
-    // Preserve typed key/URL — wiping them silently is why saved details
-    // "disappear". Only refresh the model default when it is still empty
-    // or still the previous provider's default.
-    const prevDef = LLM_PROVIDERS[this.state.provider];
-    this.setState(prev => ({
+    // Keep the typed key/URL, but always switch to the new provider's default
+    // model: a model id from another provider would only fail.
+    this.setState({
       provider,
-      model: (!prev.model || (prevDef && prev.model === prevDef.defaultModel))
-        ? providerDef.defaultModel
-        : prev.model,
+      model: providerDef.defaultModel,
+      modelOptions: getModelOptions(provider),
+      modelsStatus: null,
+      saveError: "",
       saved: false,
       testStatus: null
-    }), () => this.refreshPermStatus());
+    }, () => this.refreshPermStatus());
   }
 
   onApiKeyChange(e) {
@@ -132,7 +137,7 @@ class OptionsApp extends React.Component {
   }
 
   onBaseUrlChange(e) {
-    this.setState({baseUrl: e.target.value, saved: false, testStatus: null},
+    this.setState({baseUrl: e.target.value, saved: false, saveError: "", testStatus: null},
       () => this.refreshPermStatus());
   }
 
@@ -153,6 +158,12 @@ class OptionsApp extends React.Component {
 
   saveConfig() {
     const {provider, apiKey, model, baseUrl} = this.state;
+    const urlError = validateBaseUrl(provider, baseUrl);
+    if (urlError) {
+      this.setState({saveError: urlError, saved: false});
+      return;
+    }
+    this.setState({saveError: ""});
     const origin = providerPermissionOrigin(provider, baseUrl);
     // chrome.permissions.request must be kicked off synchronously inside
     // the Save click (user gesture). It is a silent no-op when the origin
@@ -199,11 +210,9 @@ class OptionsApp extends React.Component {
         {role: "user", content: "Test"}
       ];
 
-      let result;
-      if (provider === "openai_compatible" || provider === "openrouter") {
-        result = await providerImpl.sendMessage(testMessages, apiKey, model, null, baseUrl);
-      } else {
-        result = await providerImpl.sendMessage(testMessages, apiKey, model);
+      const result = await providerImpl.sendMessage(testMessages, apiKey, model, null, baseUrl);
+      if (!String(result || "").trim()) {
+        throw new Error("The provider answered with an empty reply. Check the model name.");
       }
 
       this.setState({testStatus: "success", testMessage: "Connection successful!"});
@@ -216,8 +225,30 @@ class OptionsApp extends React.Component {
     }
   }
 
+  async refreshModels() {
+    const {provider, apiKey, baseUrl} = this.state;
+    if (!apiKey) {
+      this.setState({modelsStatus: "error", modelsMessage: "Enter your API key first."});
+      return;
+    }
+    this.setState({modelsStatus: "loading", modelsMessage: "Loading models..."});
+    try {
+      const providerImpl = getLLMProvider(provider);
+      const models = await providerImpl.listModels(apiKey, baseUrl);
+      if (!models.length) throw new Error("The provider returned no models.");
+      setCachedModels(provider, models);
+      this.setState({
+        modelOptions: getModelOptions(provider),
+        modelsStatus: "success",
+        modelsMessage: `${models.length} models available.`
+      });
+    } catch (error) {
+      this.setState({modelsStatus: "error", modelsMessage: error && error.message ? error.message : String(error)});
+    }
+  }
+
   render() {
-    const {provider, apiKey, model, baseUrl, celebrate, showApiKey, saved, testStatus, testMessage} = this.state;
+    const {provider, apiKey, model, baseUrl, celebrate, showApiKey, saved, testStatus, testMessage, modelOptions, modelsStatus, modelsMessage} = this.state;
     const providerDef = this.getProviderDef();
 
     return h("div", {className: "options-container"},
@@ -258,7 +289,9 @@ class OptionsApp extends React.Component {
             h("button", {
               className: "toggle-btn",
               onClick: () => this.toggleShowApiKey(),
-              type: "button"
+              type: "button",
+              "aria-pressed": showApiKey,
+              "aria-label": showApiKey ? "Hide API key" : "Show API key"
             }, showApiKey ? "Hide" : "Show")
           )
         ),
@@ -278,29 +311,39 @@ class OptionsApp extends React.Component {
 
         h("div", {className: "form-group"},
           h("label", {htmlFor: "model"}, "Model"),
-          providerDef.models.length > 0
-            ? h("select", {
-                id: "model",
-                className: "form-control",
-                value: model,
-                onChange: (e) => this.onModelChange(e)
-              },
-                providerDef.models.map(m =>
-                  h("option", {key: m, value: m}, MODEL_DESCRIPTIONS[m] ? `${m} - ${MODEL_DESCRIPTIONS[m]}` : m)
-                )
-              )
-            : h("input", {
-                id: "model",
-                type: "text",
-                className: "form-control",
-                value: model,
-                onChange: (e) => this.onModelChange(e),
-                placeholder: "e.g., gpt-4o, claude-sonnet-5, gemini-4-argon"
-              }),
+          h("div", {className: "input-with-toggle"},
+            h("input", {
+              id: "model",
+              type: "text",
+              className: "form-control",
+              list: "model-options",
+              autoComplete: "off",
+              spellCheck: false,
+              value: model,
+              onChange: (e) => this.onModelChange(e),
+              placeholder: providerDef.defaultModel || "Model ID"
+            }),
+            h("button", {
+              className: "toggle-btn",
+              type: "button",
+              onClick: () => this.refreshModels(),
+              disabled: modelsStatus === "loading",
+              title: "Load the models your API key can use"
+            }, modelsStatus === "loading" ? "Loading..." : "Refresh list")
+          ),
+          h("datalist", {id: "model-options"},
+            modelOptions.map(m =>
+              h("option", {key: m, value: m}, MODEL_DESCRIPTIONS[m] || "")
+            )
+          ),
+          modelsStatus && modelsStatus !== "loading" && h("p", {
+            className: `help-text ${modelsStatus === "error" ? "help-error" : ""}`,
+            role: modelsStatus === "error" ? "alert" : "status"
+          }, modelsMessage),
           h("p", {className: "help-text"},
             provider === "openrouter"
-              ? "Use an OpenRouter model ID (vendor/model), e.g. openai/gpt-4o-mini, anthropic/claude-sonnet-5, google/gemini-3.5-flash, meta-llama/llama-3.3-70b-instruct"
-              : "Recommended: GPT-5.6 Terra, Claude Sonnet 5, or Gemini 3.8 Flash")
+              ? "Use an OpenRouter model ID (vendor/model), e.g. openai/gpt-4o-mini or anthropic/claude-sonnet-5-5. Pick from the list or type any model ID."
+              : "Pick a suggested model or type any model ID. Refresh list loads the models your API key can use.")
         ),
 
         h("div", {className: "button-group"},
@@ -315,8 +358,11 @@ class OptionsApp extends React.Component {
           }, testStatus === "testing" ? "Testing..." : "Test Connection")
         ),
 
+        this.state.saveError && h("div", {className: "test-result test-error", role: "alert"}, this.state.saveError),
+
         testStatus && h("div", {
-          className: `test-result test-${testStatus}`
+          className: `test-result test-${testStatus}`,
+          role: testStatus === "error" ? "alert" : "status"
         }, testMessage),
 
         this.state.permDenied && h("div", {className: "test-result test-error"},
@@ -364,7 +410,7 @@ class OptionsApp extends React.Component {
         h("h2", null, "About"),
         h("p", null, "SaralForce is an AI Object Builder & Org Toolkit for Salesforce. Describe the data you want to capture in plain language and it drafts a complete custom object with fields — refine it in chat, improve prompts with one click, then deploy straight to your org."),
         h("p", null, "The built-in Inspector adds a SOQL runner with AI error fixes, Apex execution, record browser, CSV export and import, user management, debug-log viewer with AI analysis, org info, and app-tab assignment. Works with OpenAI, Anthropic Claude, Google Gemini, OpenRouter, or any OpenAI-compatible endpoint using your own API key."),
-        h("p", null, "Your API key is stored locally in your browser and never shared. Org data stays between your browser and Salesforce — only the text you type reaches your chosen AI provider."),
+        h("p", null, "Your API key is stored locally in your browser and is sent only to the AI provider you choose. Org data stays between your browser and Salesforce — only the text you type (plus the minimal schema context a task needs) reaches your chosen AI provider."),
         h("p", {style: {fontSize: "12px", color: "#706e6b"}},
           "Developed by Er.Bhajan Mandali © · Independent project, not affiliated with Salesforce. ",
           h("svg", {className: "ff-flag", width: 16, height: 11, viewBox: "0 0 18 12", "aria-label": "India"},

@@ -260,6 +260,30 @@ debug-log analysis.
 
 ## What's New
 
+### v1.7.0
+- **Security hardening** — the Salesforce session is no longer written into the Salesforce
+  page's storage or posted across frames; the panel looks it up itself and only runs when
+  framed by a page of the same org. Panel and page messages are origin-checked, and only
+  the panel page is web-accessible
+- **AI Object Builder deploys you can trust** — failed deploys are reported as failures
+  (never "Deployment Successful"), with Resume deploy after a partial failure and a working
+  Retry with new name; AutoNumber name fields deploy; Required applies to all supported
+  field types; unknown field types, bad API names and invalid sharing models are caught
+  before deploying; sturdier parsing of AI replies; object creation uses `createMetadata`
+- **AI providers fixed for current models** — Claude, OpenAI and Gemini requests no longer
+  send sampling settings that newer models reject, leave room for model reasoning, and read
+  the answer correctly; Claude streaming works; Gemini keys moved out of the URL
+- **Model picker** — type any model ID or pick from suggestions, and load the models your
+  key can use with **Refresh list**; switching provider resets the model; OpenRouter works
+  without a base URL; plain-http AI endpoints are refused (except localhost)
+- **Inspector fixes** — Bulk exports with several result chunks no longer repeat header
+  rows; import result counts handle multi-line fields; Reset Password, Freeze, job aborts
+  and log/trace-flag deletes ask for confirmation; large SOQL results stay responsive and
+  say honestly when they are truncated; default LIMIT is placed correctly before OFFSET /
+  FOR VIEW; LIKE searches escape `%` and `_`; long polls stop when you leave a tab
+- **Developer tooling** — ESLint, unit tests (`npm test`), `npm run package` for store zips,
+  and GitHub Actions CI
+
 ### v1.6.0
 - **New SaralForce brand mark** — the orange cloud `</>` logo replaces the old blue one
   everywhere: toolbar icons (16 / 32 / 48 / 128), the panel header logo, the floating
