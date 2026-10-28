@@ -30,7 +30,7 @@ async function capture(name) {
     for (const theme of THEMES) {
       const context = await browser.newContext({viewport: {width: 1280, height: 860}, reducedMotion: "reduce"});
       await context.addInitScript((t) => {
-        localStorage.setItem("sfoc_theme", t);
+        globalThis.localStorage.setItem("sfoc_theme", t);
       }, theme);
       const page = await context.newPage();
       await page.clock.install({time: FROZEN_TIME});
@@ -39,7 +39,7 @@ async function capture(name) {
       for (const tab of TABS) {
         await page.click(`#insp-tab-${tab}`);
         await page.waitForTimeout(700);
-        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.evaluate(() => globalThis.scrollTo(0, 0));
         await page.screenshot({path: path.join(outDir, `${theme}-${tab}.png`), animations: "disabled", caret: "hide"});
       }
       // The Object Builder (chat view) is the panel's other mode.
@@ -47,7 +47,7 @@ async function capture(name) {
       if (await builderBtn.count()) {
         await builderBtn.first().click();
         await page.waitForTimeout(700);
-        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.evaluate(() => globalThis.scrollTo(0, 0));
         await page.screenshot({path: path.join(outDir, `${theme}-builder.png`), animations: "disabled", caret: "hide"});
       }
       await context.close();
