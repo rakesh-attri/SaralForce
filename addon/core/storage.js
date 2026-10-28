@@ -86,10 +86,6 @@ export function initSettings() {
   return initPromise;
 }
 
-export function settingsReady() {
-  return ready;
-}
-
 export function getSetting(key, fallback) {
   if (cache.has(key)) return cache.get(key);
   // Before init finishes (or if a page forgot to await it) fall back to a
@@ -113,16 +109,6 @@ export function setSetting(key, value) {
     try {
       ls.setItem(key, typeof value === "string" ? value : JSON.stringify(value));
     } catch (e) { /* quota: the in-memory value still applies this session */ }
-  }
-}
-
-export function removeSetting(key) {
-  cache.delete(key);
-  const area = storageArea();
-  if (area) area.remove(key);
-  else {
-    const ls = legacyStore();
-    if (ls) ls.removeItem(key);
   }
 }
 

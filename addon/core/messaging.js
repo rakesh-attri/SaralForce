@@ -56,10 +56,6 @@ export function setTrustedParentOrigin(origin) {
   trustedParentOrigin = origin && isTrustedFrameOrigin(origin) ? origin : null;
 }
 
-export function getTrustedParentOrigin() {
-  return trustedParentOrigin;
-}
-
 // Origin of the page framing this document, or null when not embedded.
 export function getParentOrigin(win = window) {
   if (win.parent === win) return null;

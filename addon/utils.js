@@ -17,22 +17,6 @@ export class Constants {
   static GLOBAL_LINKS_KEY = "globalLinks";
 }
 
-export function getLinkTarget(e = {}) {
-  if (localStorage.getItem("openLinksInNewTab") == "true" || (e.ctrlKey || e.metaKey)) {
-    return "_blank";
-  } else {
-    return "_top";
-  }
-}
-
-export function isSettingEnabled(settingName, defaultValue = false){
-  const value = localStorage.getItem(settingName);
-  if (value === null) {
-    return defaultValue;
-  }
-  return value === "true";
-}
-
 export function getBrowserType() {
   return navigator.userAgent?.includes("Chrome") ? "chrome" : "moz";
 }
@@ -92,25 +76,6 @@ export async function safeCopyText(text) {
     return !!ok;
   } catch (e) {
     return false;
-  }
-}
-
-export function copyToClipboard(value) {
-  let temp = document.createElement("input");
-  temp.value = "temp";
-  temp.addEventListener("copy", e => {
-    e.clipboardData.setData("text/plain", value);
-    e.preventDefault();
-  });
-  document.body.appendChild(temp);
-  try {
-    temp.select();
-    let success = document.execCommand("copy");
-    if (!success) {
-      alert("Copy failed");
-    }
-  } finally {
-    document.body.removeChild(temp);
   }
 }
 

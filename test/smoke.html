@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>Salesforce</title>
   <base href="/">
+  <script src="theme-init.js"></script>
   <link rel="stylesheet" href="styles/slds/slds.css">
   <link rel="stylesheet" href="object-creator.css">
   <style>
@@ -174,10 +175,11 @@
        before every other script so no request escapes unpatched. -->
   <script>
     (function () {
-      var FIX_RE = /^https:\/\/127\.0\.0\.1(:8321)?\//;
+      // Rewrite to whichever local origin served this page (npm run dev).
+      var FIX_RE = /^https:\/\/127\.0\.0\.1(:\d+)?\//;
       var fix = function (u) {
         return typeof u === "string" && FIX_RE.test(u)
-          ? u.replace(FIX_RE, "http://127.0.0.1:8321/") : u;
+          ? u.replace(FIX_RE, location.origin + "/") : u;
       };
       var origOpen = XMLHttpRequest.prototype.open;
       XMLHttpRequest.prototype.open = function (m) {
