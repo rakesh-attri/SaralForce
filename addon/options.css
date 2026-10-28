@@ -144,6 +144,10 @@ textarea {
   margin: 4px 0 0 0;
 }
 
+.help-text.help-error {
+  color: #c23934;
+}
+
 .button-group {
   display: flex;
   gap: 8px;

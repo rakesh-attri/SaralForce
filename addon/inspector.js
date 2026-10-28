@@ -1,7 +1,7 @@
 // Session/authentication layer derived in part from Salesforce-Inspector-reloaded
 // (https://github.com/tprouvot/Salesforce-Inspector-reloaded)
 // MIT License, Copyright (c) 2023 Thomas Prouvot. See LICENSE.
-import {getRedirectUri, getClientId, getPKCEParameters, isSettingEnabled, Constants} from "./utils.js";
+import {getRedirectUri, getClientId, getPKCEParameters, Constants} from "./utils.js";
 
 export let defaultApiVersion = "67.0";
 export let apiVersion = localStorage.getItem("apiVersion") == null ? defaultApiVersion : localStorage.getItem("apiVersion");
@@ -9,7 +9,11 @@ export let apiVersion = localStorage.getItem("apiVersion") == null ? defaultApiV
 export let sessionError;
 
 function getCallOptionsClientId() {
-  return "ForceForge";
+  return "SaralForce";
+}
+
+function firstErrorMessage(response) {
+  return Array.isArray(response) && response.length > 0 && response[0] ? response[0].message : null;
 }
 
 export let sfConn = {
@@ -65,6 +69,8 @@ export let sfConn = {
         localStorage.setItem(sfHost + "_isSandbox", res.records[0].IsSandbox);
         localStorage.setItem(sfHost + "_orgInstance", res.records[0].InstanceName);
         localStorage.setItem(sfHost + "_trialExpirationDate", res.records[0].TrialExpirationDate);
+      }).catch(err => {
+        console.warn("[SaralForce] Could not read Organization info:", err && err.message);
       });
     }
     return this.sessionId;
@@ -162,7 +168,7 @@ export let sfConn = {
       err.message = "Network error, offline or timeout";
       throw err;
     } else if (xhr.status == 401) {
-      let error = xhr.response.length > 0 ? xhr.response[0].message : "New access token needed";
+      let error = firstErrorMessage(xhr.response) || "New access token needed";
       if (!suppressSessionError && localStorage.getItem(this.instanceHostname + Constants.ACCESS_TOKEN)){
         sessionError = {text: "Access Token Expired", title: "Generate New Token", type: "warning", icon: "warning"};
       }
@@ -171,7 +177,7 @@ export let sfConn = {
       err.message = error;
       throw err;
     } else if (xhr.status == 403) {
-      let error = xhr.response.length > 0 ? xhr.response[0].message : "Error";
+      let error = firstErrorMessage(xhr.response) || "Error";
       if (!suppressSessionError) {
         sessionError = {text: error, type: "error", icon: "error"};
       }
@@ -362,7 +368,7 @@ export class XML {
   }
 }
 
-function getMyDomain(host) {
+export function getMyDomain(host) {
   if (host) {
     const myDomain = host
       .replace(/\.lightning\.force\./, ".my.salesforce.")

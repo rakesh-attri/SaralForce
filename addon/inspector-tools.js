@@ -1,6 +1,10 @@
 import {sfConn, apiVersion} from "./inspector.js";
 import {getSavedConfig, getLLMProvider, getProviderConfig, hasValidConfig, getCelebrateVariant} from "./llm/llm-service.js";
 import {safeCopyText} from "./utils.js";
+import {queryHostRecord} from "./core/messaging.js";
+import {applyDefaultLimit, escapeSoqlString, escapeSoqlLike} from "./core/soql.js";
+import {normalizeLocator, mergeCsvChunks, countCsvRecords} from "./core/bulk.js";
+import {confirmDialog} from "./ui/confirm.js";
 import {
   isDateOnlyString, looksLikeSfDateTime, parseSfInstant, formatSfDateTime, formatSfDate,
   formatSfInstantForInput, parseSfWallInputToIso, ensureSfTimeZone, getEffectiveTimeZone
@@ -77,13 +81,6 @@ function parseCsv(text) {
   return {headers, records};
 }
 
-function soqlNeedsLimit(q) {
-  if (/\blimit\s+\d+/i.test(q)) return false;
-  const src = String(q || "").replace(/'[^']*'/g, " ");
-  if (!/\b(COUNT|COUNT_DISTINCT|SUM|AVG|MIN|MAX)\s*\(/i.test(src)) return true;
-  return /\bGROUP\s+BY\b/i.test(src);
-}
-
 async function runSoql(query, limit, opts) {
   const {tooling = false, allRows = false} = opts || {};
   let q = String(query || "").trim();
@@ -92,18 +89,18 @@ async function runSoql(query, limit, opts) {
   // Soft-cap rows unless the user already limited. Aggregate queries
   // (COUNT/SUM/AVG/MIN/MAX) without GROUP BY must never carry LIMIT -
   // Salesforce rejects them (MALFORMED_QUERY).
-  if (limit && soqlNeedsLimit(q)) {
-    q = `${q} LIMIT ${parseInt(limit, 10) || 2000}`;
-  }
+  if (limit) q = applyDefaultLimit(q, parseInt(limit, 10) || 2000);
   const base = tooling ? "tooling/query/" : allRows ? "queryAll/" : "query/";
   const url = `/services/data/v${apiVersion}/${base}?q=` + encodeURIComponent(q);
   let loc = url;
   let all = [];
   let pages = 0;
+  let serverTotal = null;
   const maxPages = 20;
   while (loc && pages < maxPages) {
     const res = await sfConn.rest(loc, {useCache: false});
     if (Array.isArray(res.records)) all = all.concat(res.records);
+    if (serverTotal == null && typeof res.totalSize === "number") serverTotal = res.totalSize;
     pages++;
     if (res.done === false && res.nextRecordsUrl) {
       loc = res.nextRecordsUrl;
@@ -112,7 +109,30 @@ async function runSoql(query, limit, opts) {
     }
     if (all.length > 20000) break;
   }
-  return {records: all, totalSize: all.length, query: q};
+  // `loc` still set => we stopped at the page/row cap with more on the server.
+  // totalSize is the server's count (COUNT() queries return no records).
+  return {
+    records: all,
+    totalSize: serverTotal == null ? all.length : serverTotal,
+    fetched: all.length,
+    truncated: !!loc,
+    query: q
+  };
+}
+
+const SOQL_TABLE_MAX_ROWS = 300;
+
+// row object -> position in result.rows, built once per result so row
+// selection stays O(1) per row instead of indexOf over every row.
+const _soqlRowIndexCache = new WeakMap();
+function soqlRowIndexMap(rows) {
+  let m = _soqlRowIndexCache.get(rows);
+  if (!m) {
+    m = new Map();
+    rows.forEach((r, i) => m.set(r, i));
+    _soqlRowIndexCache.set(rows, m);
+  }
+  return m;
 }
 
 function flattenRecord(rec) {
@@ -292,7 +312,8 @@ function ffXmlEscape(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ""); // XML-illegal control chars
+    // eslint-disable-next-line no-control-regex -- intentionally strips XML-illegal control chars
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
 }
 
 function toXlsxBlob(sheetName, columns, rows) {
@@ -457,8 +478,47 @@ async function ffBulkJobCancel(jobId, kind) {
   });
 }
 
+// Client-side polling stopped (tab unmounted). The server job is untouched.
+const FF_STOPPED_MSG = "Stopped waiting (view closed)";
+function ffStoppedError() {
+  const e = new Error(FF_STOPPED_MSG);
+  e.ffStopped = true;
+  return e;
+}
+function ffIsStopped(e) {
+  return !!(e && e.ffStopped);
+}
+// setTimeout that rejects with ffStoppedError() as soon as `signal` aborts.
+function ffSleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) { reject(ffStoppedError()); return; }
+    const t = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(t);
+      reject(ffStoppedError());
+    }
+    if (signal) signal.addEventListener("abort", onAbort, {once: true});
+  });
+}
+// AbortController aborted when the calling component unmounts; long loops
+// pass ref.current.signal so they stop instead of setting state on a dead tab.
+function useUnmountSignal() {
+  const ref = React.useRef(null);
+  if (!ref.current) ref.current = new AbortController();
+  React.useEffect(() => {
+    if (ref.current.signal.aborted) ref.current = new AbortController();
+    const ac = ref.current;
+    return () => ac.abort();
+  }, []);
+  return ref;
+}
+
 // Poll a Bulk job until a terminal state. onTick receives each intermediate
-// job record so the UI can render live progress.
+// job record so the UI can render live progress. opts.signal stops the
+// client-side polling only; it never aborts the Salesforce job.
 async function ffBulkPoll(getStatus, jobId, opts) {
   const o = opts || {};
   const terminal = o.terminal || ["JobComplete", "Failed", "Aborted"];
@@ -467,13 +527,15 @@ async function ffBulkPoll(getStatus, jobId, opts) {
   const start = Date.now();
   let job = await getStatus(jobId);
   while (terminal.indexOf(job.state) === -1) {
+    if (o.signal && o.signal.aborted) throw ffStoppedError();
     if (Date.now() - start > timeoutMs) {
       throw new Error("Timed out waiting for Bulk job " + jobId + " (last state: " + job.state + ")");
     }
     if (o.onTick) o.onTick(job);
-    await new Promise(r => setTimeout(r, intervalMs));
+    await ffSleep(intervalMs, o.signal);
     job = await getStatus(jobId);
   }
+  if (o.signal && o.signal.aborted) throw ffStoppedError();
   if (o.onTick) o.onTick(job);
   return job;
 }
@@ -1063,7 +1125,7 @@ export function ffApplyRestore(snapshot) {
   ffRestored = snapshot && typeof snapshot === "object" ? snapshot : null;
 }
 
-function ffUseSession(scope, key, initial) {
+function useFfSession(scope, key, initial) {
   const [val, setVal] = React.useState(() => {
     // Live values from this document session win over the reopen snapshot
     // (tabs unmount when switching Builder ⇄ Inspector mid-session).
@@ -1123,9 +1185,6 @@ export function ffTakeSnapshot() {
   }
 }
 
-function ffSoqlEscape(s) {
-  return String(s || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-}
 
 let _ffObjectsCache = null;
 async function ffGetObjects(force) {
@@ -1399,12 +1458,12 @@ function soqlHighlight(src) {
 // ─── SOQL tab ───────────────────────────────────────────────
 function SoqlTab() {
   useSfTimeZoneTick();
-  const [query, setQuery] = ffUseSession("soql", "query", "SELECT Id, Name FROM Account LIMIT 50");
+  const [query, setQuery] = useFfSession("soql", "query", "SELECT Id, Name FROM Account LIMIT 50");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [result, setResult] = ffUseSession("soql", "result", null);
-  const [limit, setLimit] = ffUseSession("soql", "limit", 500);
-  const [soqlDetail, setSoqlDetail] = ffUseSession("soql", "detail", null);
+  const [result, setResult] = useFfSession("soql", "result", null);
+  const [limit, setLimit] = useFfSession("soql", "limit", 500);
+  const [soqlDetail, setSoqlDetail] = useFfSession("soql", "detail", null);
   const [soqlDetailLoading, setSoqlDetailLoading] = React.useState(false);
   const [detailHint, setDetailHint] = React.useState(null);
   const [useLlm, setUseLlm] = React.useState(() => ffLoadJson("ff_soql_use_llm", false));
@@ -1928,7 +1987,11 @@ function SoqlTab() {
     if (sortDir === 1) { setSortDir(-1); return; }
     setSortCol(null); setSortDir(1);
   };
-  const resultRowIndex = (row) => result ? result.rows.indexOf(row) : -1;
+  const rowIndexMap = result ? soqlRowIndexMap(result.rows) : null;
+  const resultRowIndex = (row) => {
+    const i = rowIndexMap ? rowIndexMap.get(row) : undefined;
+    return i === undefined ? -1 : i;
+  };
   // Describe-driven datetime formatting: same record must match Salesforce UI.
   const soqlFieldTypes = {};
   if (fromFields) {
@@ -2290,6 +2353,8 @@ function SoqlTab() {
           h("div", {className: "insp-meta"},
             rf
               ? `showing ${visibleRows.length} of ${result.rows.length} row(s)`
+              : result.rows.length && result.totalSize !== result.rows.length
+              ? `${result.rows.length} of ${result.totalSize} row(s) fetched`
               : `${result.totalSize} row(s)`
           ),
           h("button", {
@@ -2317,12 +2382,22 @@ function SoqlTab() {
         ),
         result.columns && result.columns.some(c => String(c).toLowerCase() === "id") &&
           h("div", {className: "soql-id-hint"}, "Click on ID to Show All Data"),
+        (displayRows.length > SOQL_TABLE_MAX_ROWS || result.truncated) &&
+          h("div", {className: "insp-meta soql-truncation-note", role: "status"},
+            (displayRows.length > SOQL_TABLE_MAX_ROWS
+              ? `Showing first ${SOQL_TABLE_MAX_ROWS} of ${displayRows.length} ${rf ? "matching" : "fetched"} rows. `
+              : "") +
+            (result.truncated
+              ? `Fetched ${result.rows.length} of ${result.totalSize} total rows (fetch cap reached). `
+              : "") +
+            "Download CSV for all fetched rows" +
+            (result.truncated ? "; add a LIMIT/WHERE or use Data Export (Bulk API) for the full set." : ".")),
         result && (rf && !visibleRows.length
           ? h("div", {className: "insp-empty"}, "No matching rows.")
           : h(ResultTable, {
               columns: result.columns,
               rows: displayRows,
-              maxRows: 300,
+              maxRows: SOQL_TABLE_MAX_ROWS,
               onRowClick: openSoqlDetail,
               rowHint: "Click to show all data",
               wrapClass: "soql-results-table",
@@ -2372,34 +2447,35 @@ const FF_EXPORT_FORMATS = ["CSV", "Excel (.xlsx)", "JSON"];
 
 function ExportTab() {
   useSfTimeZoneTick();
+  const unmountRef = useUnmountSignal();
   // ── Setup state (left panel) ────────────────────────────────
-  const [objectApi, setObjectApi] = ffUseSession("export", "objectApi", "");
-  const [fields, setFields] = ffUseSession("export", "fields", "Id, Name");
-  const [where, setWhere] = ffUseSession("export", "where", "");
-  const [limit, setLimit] = ffUseSession("export", "limit", 10000);
-  const [apiMode, setApiMode] = ffUseSession("export", "apiMode", "data"); // data | bulk
-  const [expMode, setExpMode] = ffUseSession("export", "expMode", "soql"); // soql | object
-  const [format, setFormat] = ffUseSession("export", "format", "CSV");
-  const [includeDeleted, setIncludeDeleted] = ffUseSession("export", "includeDeleted", false);
-  const [includeFormula, setIncludeFormula] = ffUseSession("export", "includeFormula", false);
-  const [includeHeaders, setIncludeHeaders] = ffUseSession("export", "includeHeaders", true);
+  const [objectApi, setObjectApi] = useFfSession("export", "objectApi", "");
+  const [fields, setFields] = useFfSession("export", "fields", "Id, Name");
+  const [where, setWhere] = useFfSession("export", "where", "");
+  const [limit, setLimit] = useFfSession("export", "limit", 10000);
+  const [apiMode, setApiMode] = useFfSession("export", "apiMode", "data"); // data | bulk
+  const [expMode, setExpMode] = useFfSession("export", "expMode", "soql"); // soql | object
+  const [format, setFormat] = useFfSession("export", "format", "CSV");
+  const [includeDeleted, setIncludeDeleted] = useFfSession("export", "includeDeleted", false);
+  const [includeFormula, setIncludeFormula] = useFfSession("export", "includeFormula", false);
+  const [includeHeaders, setIncludeHeaders] = useFfSession("export", "includeHeaders", true);
 
   // ── Advanced CSV / export options (right panel) ─────────────
-  const [csvDelimiter, setCsvDelimiter] = ffUseSession("export", "csvDelimiter", ",");
-  const [csvQuoting, setCsvQuoting] = ffUseSession("export", "csvQuoting", "minimal");
-  const [csvEncoding, setCsvEncoding] = ffUseSession("export", "csvEncoding", "utf8"); // utf8 | utf8bom
-  const [csvDateFormat, setCsvDateFormat] = ffUseSession("export", "csvDateFormat", "iso");
-  const [csvNullValue, setCsvNullValue] = ffUseSession("export", "csvNullValue", "");
-  const [csvLineEnding, setCsvLineEnding] = ffUseSession("export", "csvLineEnding", "\r\n");
+  const [csvDelimiter, setCsvDelimiter] = useFfSession("export", "csvDelimiter", ",");
+  const [csvQuoting, setCsvQuoting] = useFfSession("export", "csvQuoting", "minimal");
+  const [csvEncoding, setCsvEncoding] = useFfSession("export", "csvEncoding", "utf8"); // utf8 | utf8bom
+  const [csvDateFormat, setCsvDateFormat] = useFfSession("export", "csvDateFormat", "iso");
+  const [csvNullValue, setCsvNullValue] = useFfSession("export", "csvNullValue", "");
+  const [csvLineEnding, setCsvLineEnding] = useFfSession("export", "csvLineEnding", "\r\n");
 
   // ── Query editor state (center) ─────────────────────────────
-  const [query, setQuery] = ffUseSession("export", "query",
+  const [query, setQuery] = useFfSession("export", "query",
     "SELECT Id, Name FROM Account LIMIT 10000");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [note, setNote] = React.useState(null);
-  const [meta, setMeta] = ffUseSession("export", "meta", null);
-  const [preview, setPreview] = ffUseSession("export", "preview", null);
+  const [meta, setMeta] = useFfSession("export", "meta", null);
+  const [preview, setPreview] = useFfSession("export", "preview", null);
   const [sortCol, setSortCol] = React.useState(null);
   const [sortDir, setSortDir] = React.useState(1);
   const [page, setPage] = React.useState(1);
@@ -2414,7 +2490,7 @@ function ExportTab() {
   const [examplesOpen, setExamplesOpen] = React.useState(false);
 
   // ── Bulk 2.0 query job (right panel) ────────────────────────
-  const [bulkJob, setBulkJob] = ffUseSession("export", "bulkJob", null);
+  const [bulkJob, setBulkJob] = useFfSession("export", "bulkJob", null);
   const [bulkBusy, setBulkBusy] = React.useState(false);
   const [bulkError, setBulkError] = React.useState(null);
 
@@ -2519,9 +2595,7 @@ function ExportTab() {
     if (!q) throw new Error("Enter a SOQL query");
     if (!/^select\b/i.test(q)) throw new Error("Only SELECT queries are supported");
     if (expMode === "object" && !objectApi.trim()) throw new Error("Enter an object API name");
-    if (soqlNeedsLimit(q) && apiMode === "data") {
-      return q + ` LIMIT ${parseInt(limit, 10) || 10000}`;
-    }
+    if (apiMode === "data") return applyDefaultLimit(q, parseInt(limit, 10) || 10000);
     return q;
   };
 
@@ -2539,7 +2613,7 @@ function ExportTab() {
     }
     let q = `SELECT ${sel} FROM ${obj}`;
     if (where.trim()) q += ` WHERE ${where.trim()}`;
-    if (soqlNeedsLimit(q)) q += ` LIMIT ${parseInt(limit, 10) || 10000}`;
+    q = applyDefaultLimit(q, parseInt(limit, 10) || 10000);
     setQuery(q);
     setPreview(null);
     setError(null);
@@ -2631,10 +2705,8 @@ function ExportTab() {
       return;
     }
     const obj = objectApi.trim();
-    setQuery(`SELECT ${names.join(", ")} FROM ${obj}` +
-      (where.trim() ? ` WHERE ${where.trim()}` : "") +
-      (soqlNeedsLimit(`SELECT ${names.join(", ")} FROM ${obj}`)
-        ? ` LIMIT ${parseInt(limit, 10) || 10000}` : ""));
+    setQuery(applyDefaultLimit(`SELECT ${names.join(", ")} FROM ${obj}` +
+      (where.trim() ? ` WHERE ${where.trim()}` : ""), parseInt(limit, 10) || 10000));
     setNote(null);
   };
 
@@ -2716,12 +2788,15 @@ function ExportTab() {
 
   // Bulk 2.0 query: create → poll → retrieve result CSV chunks.
   const runBulkQuery = async (q) => {
+    const signal = unmountRef.current.signal;
     setBulkError(null);
     const job = await ffBulkQueryCreate(q, {allRows: includeDeleted});
+    if (signal.aborted) throw ffStoppedError();
     setBulkJob({id: job.id, state: job.state, object: objectApi.trim() || null,
       operation: job.operation || "query", createdDate: job.createdDate || new Date().toISOString(),
       api: "Bulk 2.0", query: q});
     const done = await ffBulkPoll(ffBulkQueryStatus, job.id, {
+      signal,
       terminal: ["UploadResults", "JobComplete", "Failed", "Aborted"],
       onTick: j => setBulkJob(prev => prev ? {...prev, state: j.state,
         numberRecordsProcessed: j.numberRecordsProcessed,
@@ -2733,15 +2808,18 @@ function ExportTab() {
     // they already asked to abandon.
     if (done.state === "Aborted") throw new Error("Bulk query job was cancelled");
     // Retrieve all result chunks (Sforce-Locator pagination).
-    let csv = "";
+    // Every chunk repeats the header row, so merge instead of concatenating.
+    const chunks = [];
     let locator = null;
     let guard = 0;
     do {
+      if (signal.aborted) throw ffStoppedError();
       const chunk = await ffBulkQueryResults(job.id, locator);
-      csv += chunk.csv;
-      locator = chunk.locator;
+      chunks.push(chunk.csv);
+      locator = normalizeLocator(chunk.locator);
       guard++;
     } while (locator && guard < 500);
+    const csv = mergeCsvChunks(chunks);
     setBulkJob(prev => prev ? {...prev, state: done.state,
       numberRecordsProcessed: done.numberRecordsProcessed} : prev);
     const parsed = parseCsvEx(csv, {delimiter: ","});
@@ -2780,10 +2858,11 @@ function ExportTab() {
         next: r.next, fetched: r.rows.length});
       pushHistory(q);
     } catch (e) {
+      if (ffIsStopped(e)) return;
       setError(e.message);
       if (apiMode === "bulk") setBulkError(e.message);
     } finally {
-      setLoading(false);
+      if (!unmountRef.current.signal.aborted) setLoading(false);
     }
   };
 
@@ -2809,6 +2888,14 @@ function ExportTab() {
 
   const cancelBulkJob = async () => {
     if (!bulkJob || !bulkJob.id) return;
+    const ok = await confirmDialog({
+      title: "Cancel Bulk query job?",
+      message: `Job ${bulkJob.id} will be aborted in Salesforce and its results discarded.`,
+      confirmLabel: "Cancel Job",
+      cancelLabel: "Keep Running",
+      danger: true
+    });
+    if (!ok) return;
     setBulkBusy(true);
     setBulkError(null);
     try {
@@ -3392,34 +3479,35 @@ const FF_IMPORT_OPS = [
 
 function ImportTab() {
   useSfTimeZoneTick();
+  const unmountRef = useUnmountSignal();
   // ── Setup (left) ────────────────────────────────────────────
-  const [objectApi, setObjectApi] = ffUseSession("import", "objectApi", "");
-  const [operation, setOperation] = ffUseSession("import", "operation", "insert");
-  const [apiMode, setApiMode] = ffUseSession("import", "apiMode", "data"); // data | bulk
-  const [externalId, setExternalId] = ffUseSession("import", "externalId", "");
-  const [batchSize, setBatchSize] = ffUseSession("import", "batchSize", 200);
-  const [csvDelimiter, setCsvDelimiter] = ffUseSession("import", "csvDelimiter", ",");
-  const [csvLineEnding, setCsvLineEnding] = ffUseSession("import", "csvLineEnding", "\r\n");
-  const [useFirstRowHeaders, setUseFirstRowHeaders] = ffUseSession("import", "useFirstRowHeaders", true);
-  const [ignoreBlanks, setIgnoreBlanks] = ffUseSession("import", "ignoreBlanks", true);
-  const [autoTrim, setAutoTrim] = ffUseSession("import", "autoTrim", true);
-  const [allowPartial, setAllowPartial] = ffUseSession("import", "allowPartial", true);
+  const [objectApi, setObjectApi] = useFfSession("import", "objectApi", "");
+  const [operation, setOperation] = useFfSession("import", "operation", "insert");
+  const [apiMode, setApiMode] = useFfSession("import", "apiMode", "data"); // data | bulk
+  const [externalId, setExternalId] = useFfSession("import", "externalId", "");
+  const [batchSize, setBatchSize] = useFfSession("import", "batchSize", 200);
+  const [csvDelimiter, setCsvDelimiter] = useFfSession("import", "csvDelimiter", ",");
+  const [csvLineEnding, setCsvLineEnding] = useFfSession("import", "csvLineEnding", "\r\n");
+  const [useFirstRowHeaders, setUseFirstRowHeaders] = useFfSession("import", "useFirstRowHeaders", true);
+  const [ignoreBlanks, setIgnoreBlanks] = useFfSession("import", "ignoreBlanks", true);
+  const [autoTrim, setAutoTrim] = useFfSession("import", "autoTrim", true);
+  const [allowPartial, setAllowPartial] = useFfSession("import", "allowPartial", true);
 
   // ── Data (center) ───────────────────────────────────────────
-  const [csvText, setCsvText] = ffUseSession("import", "csvText", "");
-  const [fileName, setFileName] = ffUseSession("import", "fileName", "");
-  const [fileSize, setFileSize] = ffUseSession("import", "fileSize", 0);
-  const [headers, setHeaders] = ffUseSession("import", "headers", []);
-  const [records, setRecords] = ffUseSession("import", "records", []);
-  const [dupHeaders, setDupHeaders] = ffUseSession("import", "dupHeaders", []);
-  const [parseError, setParseError] = ffUseSession("import", "parseError", null);
-  const [fieldMap, setFieldMap] = ffUseSession("import", "fieldMap", {});
+  const [csvText, setCsvText] = useFfSession("import", "csvText", "");
+  const [fileName, setFileName] = useFfSession("import", "fileName", "");
+  const [fileSize, setFileSize] = useFfSession("import", "fileSize", 0);
+  const [headers, setHeaders] = useFfSession("import", "headers", []);
+  const [records, setRecords] = useFfSession("import", "records", []);
+  const [dupHeaders, setDupHeaders] = useFfSession("import", "dupHeaders", []);
+  const [parseError, setParseError] = useFfSession("import", "parseError", null);
+  const [fieldMap, setFieldMap] = useFfSession("import", "fieldMap", {});
   const [pasteText, setPasteText] = React.useState("");
   const [dragOver, setDragOver] = React.useState(false);
 
   // ── Describe / validation / preview ─────────────────────────
-  const [meta, setMeta] = ffUseSession("import", "meta", null);
-  const [validation, setValidation] = ffUseSession("import", "validation", null);
+  const [meta, setMeta] = useFfSession("import", "meta", null);
+  const [validation, setValidation] = useFfSession("import", "validation", null);
   const [mapTemplateLabel, setMapTemplateLabel] = React.useState("");
   const [mapTemplates, setMapTemplates] = React.useState(() => ffLoadJson("ff_import_templates", []));
   const [loading, setLoading] = React.useState(false);
@@ -3431,8 +3519,8 @@ function ImportTab() {
   const [dupCheckKey, setDupCheckKey] = React.useState("");
 
   // ── Execution (right) ───────────────────────────────────────
-  const [result, setResult] = ffUseSession("import", "result", null);
-  const [runJob, setRunJob] = ffUseSession("import", "runJob", null);
+  const [result, setResult] = useFfSession("import", "result", null);
+  const [runJob, setRunJob] = useFfSession("import", "runJob", null);
   const [bulkBusy, setBulkBusy] = React.useState(false);
   const [bulkError, setBulkError] = React.useState(null);
   const [confirming, setConfirming] = React.useState(false);
@@ -3836,6 +3924,7 @@ function ImportTab() {
       await ffBulkIngestUpload(job.id, csv);
       await ffBulkIngestClose(job.id);
       const done = await ffBulkPoll(ffBulkIngestStatus, job.id, {
+        signal: unmountRef.current.signal,
         onTick: j => setRunJob(prev => prev ? {...prev, state: j.state,
           numberRecordsProcessed: j.numberRecordsProcessed,
           numberRecordsFailed: j.numberRecordsFailed} : prev)
@@ -3856,18 +3945,23 @@ function ImportTab() {
       try { unprocessedText = await ffBulkIngestResults(job.id, "unprocessedRecords"); }
       catch (e) { /* none */ }
       setResultFiles({success: successText, failed: failedText, unprocessed: unprocessedText});
-      const successRows = successText ? Math.max(0, successText.trim().split("\n").length - 1) : 0;
-      const failedRows = failedText ? Math.max(0, failedText.trim().split("\n").length - 1) : 0;
+      // Quote-aware: field values may contain line breaks.
+      const successRows = countCsvRecords(successText);
+      const failedRows = countCsvRecords(failedText);
       pushHistory({jobId: job.id, ok: successRows, failed: failedRows,
         total: done.numberRecordsProcessed || rows.length});
       return {ok: successRows, failed: failedRows,
         total: rows.length, jobId: job.id, bulk: true,
-        failureSample: failedRows ? failedText.split("\n").slice(1, 4).filter(Boolean) : []};
+        failureSample: failedRows
+          ? parseCsvEx(failedText).records.slice(0, 3)
+            .map(r => Object.values(r).join(", ").replace(/\s+/g, " "))
+          : []};
     } catch (e) {
+      if (ffIsStopped(e)) return null;
       setBulkError(e.message);
       return null;
     } finally {
-      setBulkBusy(false);
+      if (!unmountRef.current.signal.aborted) setBulkBusy(false);
     }
   };
 
@@ -3894,6 +3988,15 @@ function ImportTab() {
 
   const cancelJob = async () => {
     if (!runJob || !runJob.id) return;
+    const ok = await confirmDialog({
+      title: "Abort Bulk job?",
+      message: `Job ${runJob.id} will be aborted in Salesforce. Records already processed ` +
+        "stay changed; unprocessed records are skipped.",
+      confirmLabel: "Abort Job",
+      cancelLabel: "Keep Running",
+      danger: true
+    });
+    if (!ok) return;
     setBulkBusy(true);
     setBulkError(null);
     try {
@@ -4541,7 +4644,7 @@ function OrgTab() {
   useSfTimeZoneTick();
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [info, setInfo] = ffUseSession("org", "info", null);
+  const [info, setInfo] = useFfSession("org", "info", null);
 
   const load = async () => {
     setLoading(true);
@@ -5258,8 +5361,8 @@ function orgAuditSnapshot(info, facts) {
 // Card in the Org Info grid: Run audit → facts → AI report (persisted per session).
 function AuditCard({info}) {
   const [running, setRunning] = React.useState(false);
-  const [report, setReport] = ffUseSession("org", "auditReport", null);
-  const [snapshot, setSnapshot] = ffUseSession("org", "auditSnapshot", null);
+  const [report, setReport] = useFfSession("org", "auditReport", null);
+  const [snapshot, setSnapshot] = useFfSession("org", "auditSnapshot", null);
   const [auditErr, setAuditErr] = React.useState(null);
   const [copied, setCopied] = React.useState(false);
 
@@ -5748,7 +5851,7 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
 //     Quick Overview + Quick Actions, empty panel. Show All Data opens the
 //     full-field modal (VIEW M) for THAT record.
 //   VIEW O — object / list page: object header, Quick overview, empty
-//     panel. Show All Data stays disabled.
+//     panel. Show All Data is record-only, so it is not offered here.
 //   VIEW M — the shared RecordDetailPanel modal (see Shared section).
 //   No context — the "No object selected" empty state with guidance and
 //     a manual object-name loader.
@@ -5757,13 +5860,13 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
 // field list, no rows table and no row-click detail.
 function RecordsTab() {
   useSfTimeZoneTick();
-  const [objInput, setObjInput] = ffUseSession("records", "objInput", "");
+  const [objInput, setObjInput] = useFfSession("records", "objInput", "");
   const [error, setError] = React.useState(null);
-  const [detail, setDetail] = ffUseSession("records", "detail", null);
+  const [detail, setDetail] = useFfSession("records", "detail", null);
   const [detailLoading, setDetailLoading] = React.useState(false);
-  const [objMeta, setObjMeta] = ffUseSession("records", "objMeta", null);
-  const [recordCount, setRecordCount] = ffUseSession("records", "recordCount", null);
-  const [lastRefresh, setLastRefresh] = ffUseSession("records", "lastRefresh", null);
+  const [objMeta, setObjMeta] = useFfSession("records", "objMeta", null);
+  const [recordCount, setRecordCount] = useFfSession("records", "recordCount", null);
+  const [lastRefresh, setLastRefresh] = useFfSession("records", "lastRefresh", null);
   const [descFields, setDescFields] = React.useState([]);
   const [pageRec, setPageRec] = React.useState(null);
   const [recDetail, setRecDetail] = React.useState(null);
@@ -5817,29 +5920,7 @@ function RecordsTab() {
 
   // Ask the host page which record/list is open (button.js replies
   // {obj, id}; id is null on list pages). Times out off-record.
-  const queryPageRec = () => new Promise((resolve) => {
-    let done = false;
-    const onMsg = (e) => {
-      if (e.data && e.data.type === "sfoc-open-record") {
-        done = true;
-        window.removeEventListener("message", onMsg);
-        resolve(e.data.rec || null);
-      }
-    };
-    window.addEventListener("message", onMsg);
-    try {
-      window.parent.postMessage({type: "sfoc-query-open-record"}, "*");
-    } catch (err) {
-      window.removeEventListener("message", onMsg);
-      resolve(null);
-    }
-    setTimeout(() => {
-      if (!done) {
-        window.removeEventListener("message", onMsg);
-        resolve(null);
-      }
-    }, 1500);
-  });
+  const queryPageRec = () => queryHostRecord();
 
   const loadRecordContext = async (rec) => {
     const d = await describe(rec.obj);
@@ -6181,7 +6262,7 @@ function RecordsTab() {
         h("div", {className: "rec-empty-ico", "aria-hidden": "true"}, bldgSvg(64)),
         h("div", {className: "rec-empty-t"}, `Ready to explore your ${sumLabel} records`),
         h("div", {className: "rec-empty-s"},
-          `Click on "Show All Data" to load all ${sumLabel} records, or use the quick actions above to refresh data or export records.`)
+          `Click "Show All Data" to see every field of this ${sumLabel} record, or use the quick actions above to refresh details or export the record.`)
       )
     )),
     (showObject && h("div", {className: "rec-sum-card"},
@@ -6198,16 +6279,7 @@ function RecordsTab() {
               metaItem(miniSvg(P_DOC), `${fmtCount(sumTotal)} Records`), metaSep(),
               h("span", {className: "rec-meta-item"}, miniSvg(P_REFRESH),
                 h("span", null, "Last refreshed: "),
-                h("span", {className: "rec-fresh"}, ffFmtRelative(sumUpdated)))))),
-        h("div", {className: "rec-sum-action"},
-          h("button", {
-            className: "rec-obj-showall",
-            disabled: true,
-            title: "Open a record page to view its data",
-            onClick: () => {}
-          }, gridSvg(), h("span", null, "Show All Data"),
-            h("span", {className: "rec-obj-chev", "aria-hidden": "true"}, "›")),
-          h("div", {className: "rec-sum-sub"}, "Load all records for the current object."))),
+                h("span", {className: "rec-fresh"}, ffFmtRelative(sumUpdated))))))),
       h("h3", {className: "rec-quick-h"}, "Quick overview"),
       h("div", {className: "rec-stats"},
         statCard("records", "Total Records", fmtCount(sumTotal)),
@@ -6219,7 +6291,8 @@ function RecordsTab() {
         h("div", {className: "rec-empty-ico", "aria-hidden": "true"}, dbSvg(64)),
         h("div", {className: "rec-empty-t"}, "Ready to explore your records"),
         h("div", {className: "rec-empty-s"},
-          "Choose Show All Data to load records, or select fields to customize the table.")
+          "Open any record of this object to see all of its field values with Show All Data, " +
+          "or use Refresh above to update these details.")
       )
     )),
     (!isRecord && !showObject && (ctxLoading
@@ -6585,7 +6658,7 @@ async function appTabsTabExists(tabApiName) {
   try {
     const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
       encodeURIComponent(
-        `SELECT DeveloperName FROM CustomTab WHERE DeveloperName = '${String(tabApiName).trim().replace(/'/g, "\\'")}' LIMIT 1`),
+        `SELECT DeveloperName FROM CustomTab WHERE DeveloperName = '${escapeSoqlString(String(tabApiName).trim())}' LIMIT 1`),
       {useCache: false});
     if (res.records && res.records.length) return true;
   } catch (e) {
@@ -6969,18 +7042,18 @@ function appTabsIsRecent(createdDate) {
 }
 
 function AppTabManager() {
-  const [apps, setApps] = ffUseSession("apptabs", "apps", []);
+  const [apps, setApps] = useFfSession("apptabs", "apps", []);
   const [appsLoading, setAppsLoading] = React.useState(false);
-  const [sel, setSel] = ffUseSession("apptabs", "sel", "");
-  const [customTabs, setCustomTabs] = ffUseSession("apptabs", "customTabs", []);
+  const [sel, setSel] = useFfSession("apptabs", "sel", "");
+  const [customTabs, setCustomTabs] = useFfSession("apptabs", "customTabs", []);
   const [tabsLoading, setTabsLoading] = React.useState(false);
-  const [tabName, setTabName] = ffUseSession("apptabs", "tabName", "");
-  const [currentTabs, setCurrentTabs] = ffUseSession("apptabs", "currentTabs", null);
+  const [tabName, setTabName] = useFfSession("apptabs", "tabName", "");
+  const [currentTabs, setCurrentTabs] = useFfSession("apptabs", "currentTabs", null);
   const [currentLoading, setCurrentLoading] = React.useState(false);
   const [working, setWorking] = React.useState(false);
   const [visWorking, setVisWorking] = React.useState(false);
   const [resolving, setResolving] = React.useState(false);
-  const [appRef, setAppRef] = ffUseSession("apptabs", "appRef", "");
+  const [appRef, setAppRef] = useFfSession("apptabs", "appRef", "");
   const [refMsg, setRefMsg] = React.useState(null);
   const [status, setStatus] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -6993,7 +7066,7 @@ function AppTabManager() {
   const [confirmRm, setConfirmRm] = React.useState(null);
   const [profileVis, setProfileVis] = React.useState(null);      // {tab: vis} | {} | null (loading)
   const [profileVisName, setProfileVisName] = React.useState("");
-  const [visTab, setVisTab] = ffUseSession("apptabs", "visTab", "");
+  const [visTab, setVisTab] = useFfSession("apptabs", "visTab", "");
   const [visValue, setVisValue] = React.useState("DefaultOn");
   const [visProfiles, setVisProfiles] = React.useState([]);
   const [visPsets, setVisPsets] = React.useState([]);
@@ -7966,13 +8039,13 @@ function MultiCheckDropdown({label, items, selected, onChange, emptyText}) {
 
 function UsersTab() {
   useSfTimeZoneTick();
-  const [q, setQ] = ffUseSession("users", "q", "");
-  const [users, setUsers] = ffUseSession("users", "users", []);
-  const [userCols, setUserCols] = ffUseSession("users", "userCols", []);
+  const [q, setQ] = useFfSession("users", "q", "");
+  const [users, setUsers] = useFfSession("users", "users", []);
+  const [userCols, setUserCols] = useFfSession("users", "userCols", []);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const [sel, setSel] = ffUseSession("users", "sel", null);
-  const [detail, setDetail] = ffUseSession("users", "detail", null);
+  const [sel, setSel] = useFfSession("users", "sel", null);
+  const [detail, setDetail] = useFfSession("users", "detail", null);
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [actionMsg, setActionMsg] = React.useState(null);
   const [actionErr, setActionErr] = React.useState(null);
@@ -7988,8 +8061,8 @@ function UsersTab() {
   const [cloneResult, setCloneResult] = React.useState(null);
   const [sites, setSites] = React.useState([]);
   const [expSite, setExpSite] = React.useState("");
-  const [profileFilter, setProfileFilter] = ffUseSession("users", "profileFilter", "");
-  const [roleFilter, setRoleFilter] = ffUseSession("users", "roleFilter", "");
+  const [profileFilter, setProfileFilter] = useFfSession("users", "profileFilter", "");
+  const [roleFilter, setRoleFilter] = useFfSession("users", "roleFilter", "");
   const [allProfiles, setAllProfiles] = React.useState([]);
   const [allRoles, setAllRoles] = React.useState([]);
   const [page, setPage] = React.useState(1);
@@ -8041,7 +8114,7 @@ function UsersTab() {
     setError(null);
     setSel(null);
     setDetail(null);
-    const term = ffSoqlEscape(q.trim());
+    const term = escapeSoqlLike(q.trim());
     if (!term) { setError("Type a name, username, email or alias"); return; }
     setLoading(true);
     try {
@@ -8265,15 +8338,24 @@ function UsersTab() {
   // DELETE /sobjects/User/{id}/password.
   const resetPassword = async () => {
     if (!sel) return;
+    const user = sel;
+    const ok = await confirmDialog({
+      title: "Reset password?",
+      message: `${user.Name || user.Username} (${user.Username}) will be emailed a reset link and ` +
+        "their current password will stop working immediately. This cannot be undone.",
+      confirmLabel: "Reset Password",
+      danger: true
+    });
+    if (!ok) return;
     setActionMsg(null);
     setActionErr(null);
     setResetting(true);
     try {
-      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/${sel.Id}/password`, {
+      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/${user.Id}/password`, {
         method: "DELETE",
         useCache: false
       });
-      setActionMsg(`Password reset sent for ${sel.Username} — their current password is now invalid and they will receive a reset link. This also unlocks a locked-out account.`);
+      setActionMsg(`Password reset sent for ${user.Username} — their current password is now invalid and they will receive a reset link. This also unlocks a locked-out account.`);
     } catch (e) {
       setActionErr(e.message);
     } finally {
@@ -8294,20 +8376,36 @@ function UsersTab() {
       setActionErr("You cannot freeze or unfreeze your own user.");
       return;
     }
-    const next = !ffTruthy(frozenLogin.IsFrozen);
+    const user = sel;
+    const login = frozenLogin;
+    const next = !ffTruthy(login.IsFrozen);
+    const ok = await confirmDialog(next
+      ? {
+        title: "Freeze user?",
+        message: `${user.Name || user.Username} (${user.Username}) will be blocked from logging in ` +
+          "until the account is unfrozen.",
+        confirmLabel: "Freeze User",
+        danger: true
+      }
+      : {
+        title: "Unfreeze user?",
+        message: `${user.Name || user.Username} (${user.Username}) will be able to log in again.`,
+        confirmLabel: "Unfreeze User"
+      });
+    if (!ok) return;
     setActionMsg(null);
     setActionErr(null);
     setFreezing(true);
     try {
-      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/UserLogin/${encodeURIComponent(frozenLogin.Id)}`, {
+      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/UserLogin/${encodeURIComponent(login.Id)}`, {
         method: "PATCH",
         useCache: false,
         body: {IsFrozen: next}
       });
-      setFrozenLogin(prev => (prev ? {...prev, IsFrozen: next} : prev));
+      setFrozenLogin(prev => (prev && prev.Id === login.Id ? {...prev, IsFrozen: next} : prev));
       setActionMsg(next
-        ? `${sel.Username} is now frozen — they cannot log in until unfrozen.`
-        : `${sel.Username} has been unfrozen and can log in again.`);
+        ? `${user.Username} is now frozen — they cannot log in until unfrozen.`
+        : `${user.Username} has been unfrozen and can log in again.`);
     } catch (e) {
       setActionErr(e.message);
     } finally {
@@ -9313,22 +9411,22 @@ function parseApexLog(text) {
 
 function ApexTab() {
   useSfTimeZoneTick();
-  const [code, setCode] = ffUseSession("apex", "code", "System.debug('Hello from SaralForce');");
+  const [code, setCode] = useFfSession("apex", "code", "System.debug('Hello from SaralForce');");
   const [running, setRunning] = React.useState(false);
-  const [exec, setExec] = ffUseSession("apex", "exec", null);
+  const [exec, setExec] = useFfSession("apex", "exec", null);
   const [error, setError] = React.useState(null);
-  const [log, setLog] = ffUseSession("apex", "log", null);
+  const [log, setLog] = useFfSession("apex", "log", null);
   const [logNote, setLogNote] = React.useState(null);
   const [logLoading, setLogLoading] = React.useState(false);
-  const [openLog, setOpenLog] = ffUseSession("apex", "openLog", true);
-  const [debugOnly, setDebugOnly] = ffUseSession("apex", "debugOnly", false);
-  const [eventFilter, setEventFilter] = ffUseSession("apex", "eventFilter", "");
-  const [logFilter, setLogFilter] = ffUseSession("apex", "logFilter", "");
+  const [openLog, setOpenLog] = useFfSession("apex", "openLog", true);
+  const [debugOnly, setDebugOnly] = useFfSession("apex", "debugOnly", false);
+  const [eventFilter, setEventFilter] = useFfSession("apex", "eventFilter", "");
+  const [logFilter, setLogFilter] = useFfSession("apex", "logFilter", "");
   const [history, setHistory] = React.useState(() => ffLoadJson("ff_apex_history", []));
   const [saved, setSaved] = React.useState(() => ffLoadJson("ff_apex_saved", []));
   const [saveLabel, setSaveLabel] = React.useState("");
-  const [logLevel, setLogLevel] = ffUseSession("apex", "logLevel", "Debug");
-  const [timeoutSec, setTimeoutSec] = ffUseSession("apex", "timeoutSec", 120);
+  const [logLevel, setLogLevel] = useFfSession("apex", "logLevel", "Debug");
+  const [timeoutSec, setTimeoutSec] = useFfSession("apex", "timeoutSec", 120);
   const [durationMs, setDurationMs] = React.useState(null);
   const [lastRunAt, setLastRunAt] = React.useState(null);
   const [lastModified, setLastModified] = React.useState(null);
@@ -9346,7 +9444,7 @@ function ApexTab() {
   const gutterRef = React.useRef(null);
   const [celeb, setCeleb] = React.useState(0);
   const [selRange, setSelRange] = React.useState({start: 0, end: 0});
-  const [useAi, setUseAi] = ffUseSession("apex", "useAi", false);
+  const [useAi, setUseAi] = useFfSession("apex", "useAi", false);
   const [aiBusy, setAiBusy] = React.useState(false);
   const [aiCheck, setAiCheck] = React.useState(null);
   const [aiNote, setAiNote] = React.useState(null);
@@ -10021,7 +10119,7 @@ async function logsListDebugLevels() {
 }
 
 async function logsLookupEntities(type, term) {
-  const t = ffSoqlEscape(term.trim());
+  const t = escapeSoqlLike(term.trim());
   if (!t) return [];
   if (type === "User") {
     const res = await runSoql(
@@ -10261,40 +10359,41 @@ function AnalysisReport({text, copied, onCopy}) {
 
 function LogsTab() {
   useSfTimeZoneTick();
-  const [entityType, setEntityType] = ffUseSession("logs", "entityType", "User");
+  const unmountRef = useUnmountSignal();
+  const [entityType, setEntityType] = useFfSession("logs", "entityType", "User");
   const [lookupText, setLookupText] = React.useState("");
   const [lookupRes, setLookupRes] = React.useState([]);
   const [lookupBusy, setLookupBusy] = React.useState(false);
   const [lookupErr, setLookupErr] = React.useState(null);
-  const [entity, setEntity] = ffUseSession("logs", "entity", null);
-  const [start, setStart] = ffUseSession("logs", "start", () => ffDatetimeLocal(new Date(Date.now() - 30 * 60000)));
-  const [end, setEnd] = ffUseSession("logs", "end", () => ffDatetimeLocal(new Date(Date.now() + 60 * 60000)));
+  const [entity, setEntity] = useFfSession("logs", "entity", null);
+  const [start, setStart] = useFfSession("logs", "start", () => ffDatetimeLocal(new Date(Date.now() - 30 * 60000)));
+  const [end, setEnd] = useFfSession("logs", "end", () => ffDatetimeLocal(new Date(Date.now() + 60 * 60000)));
   const [levels, setLevels] = React.useState([]);
-  const [levelId, setLevelId] = ffUseSession("logs", "levelId", "");
+  const [levelId, setLevelId] = useFfSession("logs", "levelId", "");
   const [flags, setFlags] = React.useState([]);
   const [formErr, setFormErr] = React.useState(null);
   const [formMsg, setFormMsg] = React.useState(null);
   const [creating, setCreating] = React.useState(false);
   const [flagBusy, setFlagBusy] = React.useState(null);
 
-  const [logs, setLogs] = ffUseSession("logs", "logs", []);
+  const [logs, setLogs] = useFfSession("logs", "logs", []);
   const [logsErr, setLogsErr] = React.useState(null);
-  const [logsNote, setLogsNote] = ffUseSession("logs", "logsNote", null);
+  const [logsNote, setLogsNote] = useFfSession("logs", "logsNote", null);
   const [logsBusy, setLogsBusy] = React.useState(false);
   const [loadingMore, setLoadingMore] = React.useState(false);
-  const [hasMore, setHasMore] = ffUseSession("logs", "hasMore", false);
-  const [search, setSearch] = ffUseSession("logs", "search", "");
+  const [hasMore, setHasMore] = useFfSession("logs", "hasMore", false);
+  const [search, setSearch] = useFfSession("logs", "search", "");
   const [searchBusy, setSearchBusy] = React.useState(false);
-  const [matched, setMatched] = ffUseSession("logs", "matched", null);
+  const [matched, setMatched] = useFfSession("logs", "matched", null);
   const [bodies, setBodies] = React.useState({});
-  const [openLog, setOpenLog] = ffUseSession("logs", "openLog", null);
-  const [logFilter, setLogFilter] = ffUseSession("logs", "logFilter", "");
-  const [debugOnly, setDebugOnly] = ffUseSession("logs", "debugOnly", false);
-  const [selId, setSelId] = ffUseSession("logs", "selId", null);
-  const [analyses, setAnalyses] = ffUseSession("logs", "analyses", {});
+  const [openLog, setOpenLog] = useFfSession("logs", "openLog", null);
+  const [logFilter, setLogFilter] = useFfSession("logs", "logFilter", "");
+  const [debugOnly, setDebugOnly] = useFfSession("logs", "debugOnly", false);
+  const [selId, setSelId] = useFfSession("logs", "selId", null);
+  const [analyses, setAnalyses] = useFfSession("logs", "analyses", {});
   const [analyzingId, setAnalyzingId] = React.useState(null);
-  const [chats, setChats] = ffUseSession("logs", "chats", {});
-  const [chatInput, setChatInput] = ffUseSession("logs", "chatInput", "");
+  const [chats, setChats] = useFfSession("logs", "chats", {});
+  const [chatInput, setChatInput] = useFfSession("logs", "chatInput", "");
   const [chatBusy, setChatBusy] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const [delBusy, setDelBusy] = React.useState(null);
@@ -10303,7 +10402,7 @@ function LogsTab() {
   const [delAllBusy, setDelAllBusy] = React.useState(false);
   const [delProgress, setDelProgress] = React.useState(null);
   const [delResult, setDelResult] = React.useState(null);
-  const [win, setWin] = ffUseSession("logs", "win", null);
+  const [win, setWin] = useFfSession("logs", "win", null);
   const chatRef = React.useRef(null);
   const aiRef = React.useRef(null);
   const logDataRef = React.useRef(null);
@@ -10446,6 +10545,13 @@ function LogsTab() {
   };
 
   const deleteFlag = async (id) => {
+    const ok = await confirmDialog({
+      title: "Delete trace flag?",
+      message: `Trace flag ${id} will be deleted and debug logging for this entity stops.`,
+      confirmLabel: "Delete",
+      danger: true
+    });
+    if (!ok) return;
     setFlagBusy(id);
     setFormErr(null);
     setFormMsg(null);
@@ -10596,27 +10702,30 @@ function LogsTab() {
   const searchLogs = async () => {
     const term = search.trim();
     if (!term) { setMatched(null); return; }
+    const signal = unmountRef.current.signal;
     setSearchBusy(true);
     setLogsErr(null);
     try {
       const list = logs.slice(0, LOGS_SEARCH_CAP);
       const next = {...bodies};
       for (let i = 0; i < list.length; i += 4) {
+        if (signal.aborted) return;
         const chunk = list.slice(i, i + 4);
         await Promise.all(chunk.map(async lg => {
           if (next[lg.Id] != null) return;
           try { next[lg.Id] = await logsFetchBody(lg.Id); }
           catch (e) { next[lg.Id] = ""; }
         }));
+        if (signal.aborted) return;
         setBodies({...next});
       }
       setBodies(next);
       const low = term.toLowerCase();
       setMatched(list.filter(lg => String(next[lg.Id] || "").toLowerCase().includes(low)).map(lg => lg.Id));
     } catch (err) {
-      setLogsErr(err.message);
+      if (!signal.aborted) setLogsErr(err.message);
     } finally {
-      setSearchBusy(false);
+      if (!signal.aborted) setSearchBusy(false);
     }
   };
 
@@ -10701,6 +10810,13 @@ function LogsTab() {
   };
 
   const deleteLog = async (lg) => {
+    const ok = await confirmDialog({
+      title: "Delete debug log?",
+      message: `Log ${lg.Id} will be permanently deleted from the org.`,
+      confirmLabel: "Delete",
+      danger: true
+    });
+    if (!ok) return;
     setDelBusy(lg.Id);
     setLogsErr(null);
     setDelResult(null);
@@ -11178,6 +11294,11 @@ function CoverageTab() {
   const [suggest, setSuggest] = React.useState([]);
   const [suggestOpen, setSuggestOpen] = React.useState(false);
   const suggestTimer = React.useRef(null);
+  const unmountRef = useUnmountSignal();
+
+  React.useEffect(() => () => {
+    if (suggestTimer.current) clearTimeout(suggestTimer.current);
+  }, []);
 
   React.useEffect(() => {
     if (!suggestOpen) return;
@@ -11196,7 +11317,7 @@ function CoverageTab() {
     suggestTimer.current = setTimeout(async () => {
       try {
         const r = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
-          encodeURIComponent(`SELECT Id, Name FROM ApexClass WHERE Name LIKE '%${t.replace(/'/g, "\\'")}%' ORDER BY Name LIMIT 20`),
+          encodeURIComponent(`SELECT Id, Name FROM ApexClass WHERE Name LIKE '%${escapeSoqlLike(t)}%' ORDER BY Name LIMIT 20`),
           {useCache: false});
         setSuggest(r.records || []);
         setSuggestOpen(true);
@@ -11216,14 +11337,16 @@ function CoverageTab() {
 
   const waitForFresh = async (sinceMs, label) => {
     const t0 = Date.now();
+    const signal = unmountRef.current.signal;
     for (let i = 0; i < 60; i++) {
-      await new Promise(r => setTimeout(r, 3000));
+      await ffSleep(3000, signal);
       setRunMsg(`Running ${label}… ${Math.round((Date.now() - t0) / 1000)}s`);
       try {
         const rows = await loadAggregates();
         const max = rows.reduce((m, r) => Math.max(m, Date.parse(r.LastModifiedDate) || 0), 0);
         if (max > sinceMs) return true;
       } catch (e) { /* keep polling */ }
+      if (signal.aborted) throw ffStoppedError();
     }
     return false;
   };
@@ -11252,9 +11375,11 @@ function CoverageTab() {
         setRunMsg("Still running — hit Refresh in a bit for the new numbers.");
       }
     } catch (e) {
+      // Tab closed mid-wait: the server-side test run keeps going.
+      if (ffIsStopped(e)) return;
       setRunMsg("Run failed: " + (e.message || String(e)));
     } finally {
-      setRunning(false);
+      if (!unmountRef.current.signal.aborted) setRunning(false);
     }
   };
 
@@ -11302,7 +11427,7 @@ function CoverageTab() {
     setRunMsg(`Resolving ${name}…`);
     try {
       const q = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
-        encodeURIComponent(`SELECT Id FROM ApexClass WHERE Name = '${name.replace(/'/g, "\\'")}'`),
+        encodeURIComponent(`SELECT Id FROM ApexClass WHERE Name = '${escapeSoqlString(name)}'`),
         {useCache: false});
       const id = q.records && q.records[0] && q.records[0].Id;
       if (!id) {
@@ -11311,7 +11436,7 @@ function CoverageTab() {
       }
       await runTests({tests: [{classId: id}]}, name, name);
     } finally {
-      setRunning(false);
+      if (!unmountRef.current.signal.aborted) setRunning(false);
     }
   };
 
@@ -11705,7 +11830,7 @@ function CoverageDataPanel({tooling, soql, postFetch, emptyText, placeholder,
 
 export function InspectorPanel() {
   useSfTimeZoneTick();
-  const [tab, setTab] = ffUseSession("inspector", "tab", "records");
+  const [tab, setTab] = useFfSession("inspector", "tab", "records");
   // A prefill handoff from the AI Object Builder jumps straight to the
   // App Tab Manager tab (the manager consumes the payload on mount).
   React.useEffect(() => {
