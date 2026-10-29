@@ -29,7 +29,7 @@ export const BUILDER_TOUR = {
 
 const TAB_TOURS = {
   records: ["Records", "Open any record or list view in Salesforce and it loads here. Use View, Read-only or Edit mode, and export the fields to CSV."],
-  soql: ["SOQL", "Pick an object, add fields from the explorer, then press Ctrl+Enter to run. Turn on Tooling API for setup objects, or Recycle Bin for deleted rows. Click an Id in the results to see the whole record."],
+  soql: ["SOQL", "Type a query and suggestions appear (Tab or Enter accepts), or add fields from the explorer, then press Ctrl+Enter to run. Turn on Tooling API for setup objects, or Recycle Bin for deleted rows. Click an Id in the results to see the whole record."],
   apex: ["Run Apex", "Run anonymous Apex and read the debug log right below. Select a few lines and use Execute Highlighted to run only those. With Use AI on, code is checked for compile errors first."],
   export: ["Export", "Build a query or pick an object, preview the rows, then download CSV, Excel or JSON. Bulk API handles very large exports."],
   import: ["Import", "Drop in a CSV, map columns to fields, and validate before you run. Deletes always ask for confirmation, and result files show every success and failure."],

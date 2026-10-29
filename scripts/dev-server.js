@@ -77,7 +77,7 @@ const describes = {
     field("AnnualRevenue", "currency", "Annual Revenue"), field("Phone", "phone"), field("BillingCity", "string", "Billing City"),
     field("OwnerId", "reference", "Owner ID", {referenceTo: ["User"], relationshipName: "Owner"}), field("CreatedDate", "datetime", "Created Date"),
     field("LastModifiedDate", "datetime", "Last Modified Date"), field("Customer_Tier__c", "picklist", "Customer Tier", {picklistValues: [{value: "Gold", label: "Gold", active: true}]})
-  ]},
+  ], childRelationships: [{relationshipName: "Contacts", childSObject: "Contact", field: "AccountId"}, {relationshipName: "Opportunities", childSObject: "Opportunity", field: "AccountId"}]},
   User: {name: "User", label: "User", labelPlural: "Users", keyPrefix: "005", custom: false, queryable: true, fields: [
     field("Id", "id", "User ID"), field("Name", "string", "Full Name"), field("Username", "string"), field("Email", "email"), field("Alias", "string"),
     field("IsActive", "boolean", "Active"), field("ProfileId", "reference", "Profile ID", {referenceTo: ["Profile"], relationshipName: "Profile"}),
@@ -87,8 +87,12 @@ const describes = {
 const sobjectList = ["Account", "Contact", "Opportunity", "Case", "Lead", "User", "Profile", "Support_Ticket__c", "Invoice__c"]
   .map(name => ({name, label: name.replace(/__c$/, "").replace(/_/g, " "), labelPlural: name.replace(/__c$/, "").replace(/_/g, " ") + "s", custom: name.endsWith("__c"), queryable: true, keyPrefix: describes[name]?.keyPrefix || null, layoutable: true, createable: true}));
 
+// Large table for result paging and "Fetch more" (Salesforce pages by 2000).
+const contacts = Array.from({length: 45000}, (_, i) => ({Id: "003" + String(i).padStart(12, "0") + "AAA", LastName: "Contact " + (i + 1), Email: "c" + (i + 1) + "@demo.test"}));
+const PAGE = 2000;
+
 const tables = {
-  user: users, account: accounts, profile: profiles, userrole: roles, apexclass: apexClasses, apexcodecoverageaggregate: coverage, apexlog: logs,
+  contact: contacts, user: users, account: accounts, profile: profiles, userrole: roles, apexclass: apexClasses, apexcodecoverageaggregate: coverage, apexlog: logs,
   organization: [{Id: ORG_ID, Name: "SaralForce Demo Org", IsSandbox: true, InstanceName: "IND42", OrganizationType: "Developer Edition", TrialExpirationDate: null, LanguageLocaleKey: "en_US", TimeZoneSidKey: "Asia/Kolkata", CreatedDate: iso(400 * 86400e3)}],
   permissionset: [{Id: "0PS000000000001AAA", Name: "Sales_Ops", Label: "Sales Ops", IsOwnedByProfile: false, License: {Name: "Salesforce"}}, {Id: "0PS000000000002AAA", Name: "API_Access", Label: "API Access", IsOwnedByProfile: false}],
   loginhistory: [0, 1, 2].map(i => ({Id: `0Ya00000000000${i}AAA`, UserId: ME, LoginTime: iso((i + 1) * 3600e3), SourceIp: `203.0.113.${10 + i}`, Status: "Success", Application: "Browser", Browser: "Chrome", Platform: "Windows"})),
@@ -104,9 +108,16 @@ function soqlResult(q) {
     return {totalSize: (tables[obj] || []).length, done: true, records: []};
   }
   const limit = /\blimit\s+(\d+)/i.exec(q);
-  let records = (tables[obj] || []).map(r => ({attributes: {type: from ? from[1] : "SObject"}, ...r}));
+  let records = tables[obj] || [];
   if (limit) records = records.slice(0, Number(limit[1]));
-  return {totalSize: records.length, done: true, records};
+  return soqlPage(q, records, 0, from ? from[1] : "SObject");
+}
+
+function soqlPage(q, records, offset, type) {
+  const page = records.slice(offset, offset + PAGE).map(r => ({attributes: {type}, ...r}));
+  const more = offset + PAGE < records.length;
+  return {totalSize: records.length, done: !more, records: page,
+    ...(more ? {nextRecordsUrl: "/services/data/v67.0/query/mock-" + (offset + PAGE) + "?q=" + encodeURIComponent(q)} : {})};
 }
 
 function limitsBody() {
@@ -133,6 +144,15 @@ function api(req, res, url) {
   if (p.startsWith("/services/Soap/")) return soapUserInfo(res);
   if (p === "/services/oauth2/userinfo") {
     return json(res, 200, {user_id: ME, organization_id: ORG_ID, name: "Rakesh Sharma", preferred_username: "rakesh@demo.saralforce", nickname: "rakesh"});
+  }
+  const cursor = /\/query\/mock-(\d+)$/.exec(p);
+  if (cursor) {
+    const q = url.searchParams.get("q") || "";
+    const from = /\bfrom\s+([A-Za-z0-9_]+)/i.exec(q);
+    const limit = /\blimit\s+(\d+)/i.exec(q);
+    let records = tables[from ? from[1].toLowerCase() : ""] || [];
+    if (limit) records = records.slice(0, Number(limit[1]));
+    return json(res, 200, soqlPage(q, records, Number(cursor[1]), from ? from[1] : "SObject"));
   }
   if (/\/(query|queryAll)\/?$/.test(p)) return json(res, 200, soqlResult(url.searchParams.get("q") || ""));
   if (/\/limits\/?$/.test(p)) return json(res, 200, limitsBody());
@@ -168,9 +188,35 @@ function serveFile(res, filePath) {
   });
 }
 
+// Canned OpenAI-compatible endpoint so AI features can be exercised without
+// a real key: set provider "OpenAI Compatible", base URL
+// http://127.0.0.1:<PORT>/mock-llm/v1 and any key.
+let lastLlmRequest = null;
+function mockLlm(req, res) {
+  let raw = "";
+  req.on("data", c => { raw += c; });
+  req.on("end", () => {
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch { /* keep empty */ }
+    lastLlmRequest = body;
+    const system = String(((body.messages || [])[0] || {}).content || "");
+    const content = /request into ONE valid SOQL/.test(system)
+      ? JSON.stringify({query: "SELECT Id, Name, Industry FROM Account WHERE Industry = 'Energy' LIMIT 200", explanation: "Accounts in the Energy industry, up to 200."})
+      : /suggest|fix/i.test(system) && /fixedQuery/.test(system)
+      ? JSON.stringify({explanation: "Mock fix.", fixedQuery: "SELECT Id, Name FROM Account LIMIT 50"})
+      : "Returns the Id and Name of up to 50 Account records. There is no filter, so any 50 accounts may come back.";
+    json(res, 200, {id: "mock", object: "chat.completion", choices: [{index: 0, message: {role: "assistant", content}, finish_reason: "stop"}]});
+  });
+}
+
 http.createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   if (url.pathname.startsWith("/services/")) return api(req, res, url);
+  if (url.pathname === "/mock-llm/last") return json(res, 200, lastLlmRequest);
+  if (url.pathname.startsWith("/mock-llm/")) {
+    if (req.method === "OPTIONS") return api(req, res, url);
+    return mockLlm(req, res);
+  }
   // The harness stands in for both the Salesforce page and the panel page.
   // /lightning/r/<Object>/<Id>/view mimics a record page for record-aware
   // features such as Show API Names.

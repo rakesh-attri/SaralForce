@@ -261,6 +261,16 @@ debug-log analysis.
 ## What's New
 
 ### Unreleased (v2 branch)
+- **SOQL autocomplete** — suggestions appear as you type in the SOQL editor: objects after
+  FROM, fields, relationship paths such as `Owner.Profile.Name` (any depth Salesforce allows),
+  child relationships inside sub-queries, `FIELDS(ALL)` and clause keywords. Arrow keys
+  to move, Enter or Tab to accept, Esc to close
+- **Write SOQL from plain English** — with LLM assistance enabled, describe the records you
+  want and get a query built from your org's real field names and picklist values; review
+  it, then Use or Use & Run. **Explain** describes the query in the editor in plain words
+- **All fetched rows reachable** — SOQL results page 300 rows at a time instead of stopping
+  at 300; when a query has more than 20,000 rows, **Fetch more rows** continues from where
+  it stopped, with honest "x of y" totals
 - **Show API Names button tells the truth** — it switches to Hide API Names only after the
   names actually appear on the page; on non-record pages, failures or after Salesforce
   re-renders the page it stays (or returns to) Show API Names

@@ -2,20 +2,22 @@ import {sfConn, apiVersion} from "../../inspector.js";
 import {getSavedConfig, getProviderConfig, hasValidConfig} from "../../llm/llm-service.js";
 import {safeCopyText} from "../../utils.js";
 import {toCsv, downloadText, flattenRecord} from "../shared/csv.js";
-import {runSoql} from "../shared/query.js";
+import {runSoql, runSoqlMore} from "../shared/query.js";
 import {useSfTimeZoneTick} from "../shared/format.js";
 import {ffIcon, FF_I_DB, FF_I_CLOCK, FF_I_BOOKMARK, FF_I_SLIDERS, FF_I_DOWNLOAD, FF_I_DOC} from "../shared/icons.js";
 import {ResultTable} from "../shared/result-table.js";
-import {suggestSoqlFix} from "../shared/ai.js";
+import {suggestSoqlFix, soqlFromText, explainSoql} from "../shared/ai.js";
 import {ffLoadJson, ffSaveJson, useFfSession} from "../shared/session-state.js";
 import {ffGetObjects, ffApiModeOf, ffDescribeObject, toolingListObjects} from "../shared/describe.js";
 import {Celebrate} from "../shared/celebrate.js";
 import {soqlHighlight} from "../shared/highlight.js";
+import {useSoqlAutocomplete} from "../shared/soql-autocomplete.js";
 import {buildDetailRows, fetchFullRecord, RecordDetailPanel} from "./records.js";
 
 const h = React.createElement;
 
-const SOQL_TABLE_MAX_ROWS = 300;
+// Rows per results page; every fetched row stays reachable through the pager.
+const SOQL_PAGE_SIZE = 300;
 
 // row object -> position in result.rows, built once per result so row
 // selection stays O(1) per row instead of indexOf over every row.
@@ -59,6 +61,10 @@ function SoqlTab() {
   const [fixing, setFixing] = React.useState(false);
   const [suggestion, setSuggestion] = React.useState(null);
   const [fixError, setFixError] = React.useState(null);
+  // Plain English → SOQL and Explain (only shown with LLM assistance on).
+  const [aiAsk, setAiAsk] = useFfSession("soql", "aiAsk", "");
+  const [aiBusy, setAiBusy] = React.useState(null);
+  const [aiNote, setAiNote] = React.useState(null);
   const [objects, setObjects] = React.useState([]);
   const [objFilter, setObjFilter] = React.useState("");
   const [fromFields, setFromFields] = React.useState(null);
@@ -70,10 +76,19 @@ function SoqlTab() {
   const [sortCol, setSortCol] = React.useState(null);
   const [sortDir, setSortDir] = React.useState(1);
   const [selected, setSelected] = React.useState(() => new Set());
+  const [page, setPage] = React.useState(0);
+  const [fetchingMore, setFetchingMore] = React.useState(false);
+  // A new filter or sort order starts from the first page.
+  React.useEffect(() => { setPage(0); }, [resultFilter, sortCol, sortDir]);
   const taRef = React.useRef(null);
   const hlRef = React.useRef(null);
   const gutterRef = React.useRef(null);
   const [celeb, setCeleb] = React.useState(0);
+  const objectsRef = React.useRef(objects);
+  objectsRef.current = objects;
+  const acDescribe = React.useCallback(name => ffDescribeObject(name, {tooling: useTooling}), [useTooling]);
+  const acObjects = React.useCallback(async () => objectsRef.current, []);
+  const ac = useSoqlAutocomplete({taRef, setQuery, describe: acDescribe, listObjects: acObjects});
 
   const lineCount = Math.max(1, String(query || "").split("\n").length);
   const onTermScroll = e => {
@@ -167,6 +182,7 @@ function SoqlTab() {
       flat.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
       setResult({...r, rows: flat, columns: [...colSet]});
       setResultFilter("");
+      setPage(0);
       setCeleb(c => c + 1);
       scrollAfterCelebration();
       setSortCol(null);
@@ -188,6 +204,28 @@ function SoqlTab() {
       if (useLlm) askLlmForFix(q, e.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Continue a capped result from the server cursor; the page stays put.
+  const fetchMore = async () => {
+    if (!result || !result.nextUrl || fetchingMore) return;
+    setFetchingMore(true);
+    setError(null);
+    try {
+      const more = await runSoqlMore(result.nextUrl);
+      const flat = more.records.map(flattenRecord);
+      setResult(prev => {
+        const colSet = new Set(prev.columns);
+        flat.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
+        return {...prev, rows: prev.rows.concat(flat), columns: [...colSet],
+          fetched: prev.rows.length + flat.length, truncated: more.truncated, nextUrl: more.nextUrl};
+      });
+    } catch (e) {
+      setError(`Could not fetch more rows: ${e.message}` +
+        (/INVALID_QUERY_LOCATOR/i.test(e.message) ? " The server cursor expired; run the query again." : ""));
+    } finally {
+      setFetchingMore(false);
     }
   };
 
@@ -250,6 +288,27 @@ function SoqlTab() {
       setFixError(e.message === "NO_LLM_CONFIG" ? "NO_LLM_CONFIG" : e.message);
     } finally {
       setFixing(false);
+    }
+  };
+
+  const askAiFor = async (kind) => {
+    if (!hasValidConfig()) {
+      setAiNote({error: "NO_LLM_CONFIG"});
+      return;
+    }
+    setAiBusy(kind);
+    setAiNote(null);
+    try {
+      if (kind === "generate") {
+        const r = await soqlFromText(aiAsk, {currentObject: fromObj || null});
+        setAiNote({title: "✨ Generated query", text: r.explanation, query: r.query});
+      } else {
+        setAiNote({title: "✨ What this query does", text: await explainSoql(query)});
+      }
+    } catch (e) {
+      setAiNote({error: e.message === "NO_LLM_CONFIG" ? "NO_LLM_CONFIG" : e.message});
+    } finally {
+      setAiBusy(null);
     }
   };
 
@@ -543,6 +602,9 @@ function SoqlTab() {
     if (typeof av === "number" && typeof bv === "number") return (av - bv) * sortDir;
     return String(av).localeCompare(String(bv)) * sortDir;
   }) : visibleRows;
+  const pageCount = Math.max(1, Math.ceil(displayRows.length / SOQL_PAGE_SIZE));
+  const curPage = Math.min(page, pageCount - 1);
+  const pageRows = displayRows.slice(curPage * SOQL_PAGE_SIZE, (curPage + 1) * SOQL_PAGE_SIZE);
   const toggleSort = (col) => {
     if (sortCol !== col) { setSortCol(col); setSortDir(1); return; }
     if (sortDir === 1) { setSortDir(-1); return; }
@@ -751,6 +813,50 @@ function SoqlTab() {
               onClick: clearQuery
             }, "Clear")
           ),
+          useLlm && h("div", {className: "soql-save-row soql-ai-row"},
+            h("input", {
+              className: "soql-save-input",
+              value: aiAsk,
+              placeholder: "Describe the records you want, e.g. accounts in Energy created this year",
+              "aria-label": "Describe the query in plain English",
+              onChange: e => setAiAsk(e.target.value),
+              onKeyDown: e => { if (e.key === "Enter" && aiAsk.trim() && !aiBusy) askAiFor("generate"); }
+            }),
+            h("button", {
+              className: "btn btn-primary btn-sm",
+              disabled: !aiAsk.trim() || !!aiBusy,
+              onClick: () => askAiFor("generate")
+            }, aiBusy === "generate" ? "Writing…" : "✨ Write SOQL"),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: !query.trim() || !!aiBusy,
+              title: "Explain the query in the editor in plain words",
+              onClick: () => askAiFor("explain")
+            }, aiBusy === "explain" ? "Explaining…" : "Explain")
+          ),
+          aiNote && aiNote.error === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},
+            "AI needs a provider + API key. ",
+            h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")),
+          aiNote && aiNote.error && aiNote.error !== "NO_LLM_CONFIG" &&
+            h("div", {className: "insp-error"}, "AI request failed: " + aiNote.error),
+          aiNote && !aiNote.error && h("div", {className: "insp-fix"},
+            h("div", {className: "insp-fix-title"}, aiNote.title),
+            aiNote.text && h("div", {className: "insp-fix-why"}, aiNote.text),
+            aiNote.query && h("div", {className: "insp-fix-query"}, aiNote.query),
+            h("div", {className: "insp-toolbar", style: {marginBottom: "0", marginTop: "8px"}},
+              aiNote.query && h("button", {
+                className: "btn btn-primary btn-sm",
+                disabled: loading,
+                onClick: () => { setQuery(aiNote.query); setAiNote(null); run(aiNote.query); }
+              }, "Use & Run"),
+              aiNote.query && h("button", {
+                className: "btn btn-secondary btn-sm",
+                onClick: () => { setQuery(aiNote.query); setAiNote(null); }
+              }, "Use query"),
+              h("button", {
+                className: "btn btn-secondary btn-sm",
+                onClick: () => setAiNote(null)
+              }, "Dismiss"))),
         h("div", {className: "soql-editor-box"},
           h("div", {className: "soql-term"},
             h("div", {className: "soql-gutter", ref: gutterRef, "aria-hidden": "true"},
@@ -765,9 +871,17 @@ function SoqlTab() {
                 value: query,
                 spellCheck: false,
                 wrap: "off",
-                onChange: e => setQuery(e.target.value),
-                onScroll: onTermScroll,
+                onChange: e => {
+                  setQuery(e.target.value);
+                  ac.refresh(e.target.value, e.target.selectionStart);
+                },
+                onScroll: e => { onTermScroll(e); ac.close(); },
+                onBlur: ac.close,
+                onClick: ac.close,
+                "aria-autocomplete": "list",
+                "aria-expanded": ac.open,
                 onKeyDown: e => {
+                  if (ac.onKeyDown(e)) return;
                   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
                   if ((e.ctrlKey || e.metaKey) && e.key === "/") {
                     e.preventDefault();
@@ -781,6 +895,7 @@ function SoqlTab() {
                 placeholder: "SELECT Id, Name FROM Account LIMIT 50"
               })),
             h(Celebrate, {seq: celeb, onDone: () => setCeleb(0)})),
+          ac.popup,
           h("div", {className: "soql-hint-row"},
             h("span", null,
               h("kbd", null, "Ctrl"), " / ", h("kbd", null, "⌘"),
@@ -913,10 +1028,10 @@ function SoqlTab() {
             h("span", {className: "insp-card-title"}, "Results")),
           h("div", {className: "insp-meta"},
             rf
-              ? `showing ${visibleRows.length} of ${result.rows.length} row(s)`
+              ? `showing ${visibleRows.length.toLocaleString()} of ${result.rows.length.toLocaleString()} row(s)`
               : result.rows.length && result.totalSize !== result.rows.length
-              ? `${result.rows.length} of ${result.totalSize} row(s) fetched`
-              : `${result.totalSize} row(s)`
+              ? `${result.rows.length.toLocaleString()} of ${result.totalSize.toLocaleString()} row(s) fetched`
+              : `${result.totalSize.toLocaleString()} row(s)`
           ),
           h("button", {
             className: "btn btn-secondary btn-sm",
@@ -943,22 +1058,22 @@ function SoqlTab() {
         ),
         result.columns && result.columns.some(c => String(c).toLowerCase() === "id") &&
           h("div", {className: "soql-id-hint"}, "Click on ID to Show All Data"),
-        (displayRows.length > SOQL_TABLE_MAX_ROWS || result.truncated) &&
+        result.truncated &&
           h("div", {className: "insp-meta soql-truncation-note", role: "status"},
-            (displayRows.length > SOQL_TABLE_MAX_ROWS
-              ? `Showing first ${SOQL_TABLE_MAX_ROWS} of ${displayRows.length} ${rf ? "matching" : "fetched"} rows. `
-              : "") +
-            (result.truncated
-              ? `Fetched ${result.rows.length} of ${result.totalSize} total rows (fetch cap reached). `
-              : "") +
-            "Download CSV for all fetched rows" +
-            (result.truncated ? "; add a LIMIT/WHERE or use Data Export (Bulk API) for the full set." : ".")),
+            `Fetched ${result.rows.length.toLocaleString()} of ${result.totalSize.toLocaleString()} total rows. `,
+            result.nextUrl && h("button", {
+              className: "field-action-btn",
+              disabled: fetchingMore,
+              onClick: fetchMore
+            }, fetchingMore ? "Fetching…" : "Fetch more rows"),
+            result.nextUrl ? " or use " : "Use ",
+            "Data Export (Bulk API) for very large sets."),
         result && (rf && !visibleRows.length
           ? h("div", {className: "insp-empty"}, "No matching rows.")
           : h(ResultTable, {
               columns: result.columns,
-              rows: displayRows,
-              maxRows: SOQL_TABLE_MAX_ROWS,
+              rows: pageRows,
+              maxRows: SOQL_PAGE_SIZE,
               onRowClick: openSoqlDetail,
               rowHint: "Click to show all data",
               wrapClass: "soql-results-table",
@@ -987,6 +1102,21 @@ function SoqlTab() {
               sortCol, sortDir, onSort: toggleSort,
               fieldTypes: soqlFieldTypes
             })),
+        pageCount > 1 && h("div", {className: "insp-toolbar soql-pager", role: "navigation", "aria-label": "Result pages"},
+          h("button", {
+            className: "btn btn-secondary btn-sm",
+            disabled: curPage === 0,
+            onClick: () => setPage(curPage - 1)
+          }, "‹ Prev"),
+          h("span", {className: "insp-meta"},
+            `Rows ${(curPage * SOQL_PAGE_SIZE + 1).toLocaleString()}–` +
+            `${Math.min((curPage + 1) * SOQL_PAGE_SIZE, displayRows.length).toLocaleString()} of ` +
+            `${displayRows.length.toLocaleString()}${rf ? " matching" : ""}`),
+          h("button", {
+            className: "btn btn-secondary btn-sm",
+            disabled: curPage >= pageCount - 1,
+            onClick: () => setPage(curPage + 1)
+          }, "Next ›")),
         ), // sq3-results-card
         detailHint && h("div", {className: "insp-meta"}, detailHint),
         (soqlDetailLoading || soqlDetail) && h(RecordDetailPanel, {

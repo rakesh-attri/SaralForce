@@ -80,7 +80,7 @@ Progress stored per tour id + version in `chrome.storage.local`; a user can dism
 
 Each wave is its own minor release (2.1, 2.2, …) after 2.0 ships the new shell + tour + fixes.
 
-**Wave A — Query & data (benchmark: BoltForce Smart Query Tools)**
+**Wave A — Query & data (benchmark: BoltForce Smart Query Tools)** — in progress: autocomplete, natural language → SOQL + explain, and result paging / fetch more are done (no design change; AI row shows only with LLM assistance on).
 - Context-aware SOQL autocomplete (objects, fields, relationship paths like `Account.Owner.Name`, `FIELDS()`).
 - Visual query builder (pick fields/filters/order, two-way sync with the editor).
 - **AI: natural language → SOQL** using describe data; explain-this-query.

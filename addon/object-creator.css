@@ -8424,3 +8424,61 @@ html[data-theme="dark"] .covdash-tab-t {
     padding-bottom: 76px;
   }
 }
+
+/* SOQL autocomplete popup (inherits the editor's --code-* palette). */
+.soql-ac {
+  position: fixed;
+  z-index: 1000;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.18);
+  font-family: var(--font-code);
+  font-size: 12.5px;
+}
+
+.soql-ac-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.soql-ac-item.active {
+  background: var(--code-sel);
+}
+
+.soql-ac-kind {
+  flex: 0 0 16px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--tok-col);
+}
+
+.soql-ac-kind.k-object, .soql-ac-kind.k-child { color: var(--tok-t); }
+.soql-ac-kind.k-relationship { color: var(--tok-n); }
+.soql-ac-kind.k-keyword { color: var(--tok-k); }
+
+.soql-ac-val {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.soql-ac-detail {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--code-gutter-fg);
+  font-size: 11px;
+}
+
+/* Plain English -> SOQL row (visible with LLM assistance on). */
+.soql-ai-row {
+  margin: 0 0 12px;
+}
