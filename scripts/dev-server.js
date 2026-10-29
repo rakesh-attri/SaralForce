@@ -210,6 +210,33 @@ function serveFile(res, filePath) {
 // a real key: set provider "OpenAI Compatible", base URL
 // http://127.0.0.1:<PORT>/mock-llm/v1 and any key.
 let lastLlmRequest = null;
+// Canned LWC bundle for "Build with AI" (valid enough to pass checkLwcBundle).
+function mockLwcBundle(name) {
+  const cls = name.charAt(0).toUpperCase() + name.slice(1);
+  return JSON.stringify({
+    label: "Open Cases", description: "Open cases of the account on its record page.", targets: ["lightning__RecordPage"],
+    files: {
+      html: `<template>\n    <lightning-card title="Open Cases" icon-name="standard:case">\n        <lightning-datatable key-field="Id" data={cases} columns={columns} hide-checkbox-column></lightning-datatable>\n    </lightning-card>\n</template>`,
+      js: `import { LightningElement, api, wire } from 'lwc';\nimport getOpenCases from '@salesforce/apex/OpenCasesController.getOpenCases';\n\n` +
+        `export default class ${cls} extends LightningElement {\n    @api recordId;\n    columns = [\n        { label: 'Case', fieldName: 'CaseNumber' },\n        { label: 'Subject', fieldName: 'Subject' }\n    ];\n` +
+        `    cases = [];\n\n    @wire(getOpenCases, { accountId: '$recordId' })\n    wired({ data }) {\n        if (data) this.cases = data;\n    }\n}`,
+      css: ":host {\n    display: block;\n}",
+    },
+    apex: [{name: "OpenCasesController", body: "public with sharing class OpenCasesController {\n    @AuraEnabled(cacheable=true)\n" +
+      "    public static List<Case> getOpenCases(Id accountId) {\n        return [SELECT Id, CaseNumber, Subject FROM Case WHERE AccountId = :accountId AND IsClosed = false WITH SECURITY_ENFORCED LIMIT 50];\n    }\n}"}],
+    explanation: "Shows the account's open cases in a table. Add it to an Account record page in Lightning App Builder.",
+  });
+}
+
+// Canned edit for "Ask AI to change" / "Fix with AI": restyle the CSS file.
+function mockRevision(user) {
+  const name = (/\nName: ([A-Za-z0-9_]+)/.exec("\n" + user) || [])[1] || "c";
+  const path = (/=== (lwc\/[^ ]+\.css) ===/.exec(user) || [])[1] || `lwc/${name}/${name}.css`;
+  const fixing = /deploy error to fix/.test(user);
+  return JSON.stringify({files: {[path]: ":host {\n    display: block;\n}\n\nlightning-card {\n    --slds-c-card-spacing-block: 0.75rem;\n}"},
+    explanation: fixing ? "Fixed the reported error by tidying the stylesheet." : "Tightened the card spacing in the stylesheet."});
+}
+
 function mockLlm(req, res) {
   let raw = "";
   req.on("data", c => { raw += c; });
@@ -218,7 +245,12 @@ function mockLlm(req, res) {
     try { body = JSON.parse(raw || "{}"); } catch { /* keep empty */ }
     lastLlmRequest = body;
     const system = String(((body.messages || [])[0] || {}).content || "");
-    const content = /writing validation rules/.test(system)
+    const user = String(((body.messages || [])[1] || {}).content || "");
+    const content = /Write ONE complete, deployable component/.test(system)
+      ? mockLwcBundle((/Component folder name: ([A-Za-z0-9]+)/.exec(user) || [])[1] || "openCases")
+      : /editing a draft before it is deployed/.test(system)
+      ? mockRevision(user)
+      : /writing validation rules/.test(system)
       ? JSON.stringify({ruleName: "Close_Date_Not_Past", formula: "AND(\n  ISPICKVAL(Industry, \"Energy\"),\n  ISBLANK(Phone),\n  NOT($Permission.Bypass_Validation),\n  $Profile.Name <> \"System Administrator\"\n)",
         errorMessage: "Energy accounts need a phone number.", errorDisplayField: "Phone", description: "Phone required for energy accounts; admins can skip it.",
         explanation: "Blocks saving an Energy account with no phone, unless you are a System Administrator."})

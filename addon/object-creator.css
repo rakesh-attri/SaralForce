@@ -10061,3 +10061,8 @@ textarea.mdn-input {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+/* Editor AI row (Metadata draft editor). */
+.mdn-ai-row {
+  margin: 0 0 8px;
+}

@@ -100,7 +100,8 @@ export function mergeRevision(draft, changed) {
       if (files.some(x => x.path === path) || !text(content).trim()) continue;
       const res = new RegExp(`^lwc/${name}/${name}\\.(html|js|css|svg)$`).exec(path);
       const cls = /^classes\/([A-Za-z][A-Za-z0-9_]{0,39})\.cls$/.exec(path);
-      if (res) files.splice(files.length - 1, 0, {path, format: res[1], lang: res[1] === "js" ? "js" : res[1] === "css" ? "css" : "markup", content: text(content)});
+      const meta = files.findIndex(x => x.generated);
+      if (res) files.splice(meta < 0 ? files.length : meta, 0, {path, format: res[1], lang: res[1] === "js" ? "js" : res[1] === "css" ? "css" : "markup", content: text(content)});
       else if (cls) files.push({path, format: "apex", role: "apex", name: cls[1], lang: "apex", content: text(content)});
     }
   }

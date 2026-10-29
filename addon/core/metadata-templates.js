@@ -752,7 +752,8 @@ export function validateForm(kind, form) {
     if (!String(f.message || "").trim()) errors.message = "Error message is required.";
   }
   if (kind === "lwc" && f.exposed && !(f.targets && f.targets.length)) errors.targets = "Exposed components need at least one target.";
-  if ((kind === "lwc" || kind === "aura") && TEMPLATES_NEEDING_OBJECT.has(f.template) && !OBJECT_RE.test(f.object || "")) {
+  const aiBundle = kind === "lwc" && Array.isArray(f.aiFiles) && f.aiFiles.length > 0;
+  if ((kind === "lwc" || kind === "aura") && !aiBundle && TEMPLATES_NEEDING_OBJECT.has(f.template) && !OBJECT_RE.test(f.object || "")) {
     errors.object = "This template needs an object.";
   }
   if (kind === "cmdt") {
@@ -786,8 +787,20 @@ export function buildDraft(kind, form) {
   }
   case "pages":
     return {...base, title: `${name}.page`, files: [{path: `pages/${name}.page`, lang: "markup", content: visualforceSource({label: f.label, controller: f.controller})}]};
-  case "lwc":
-    return {...base, title: name, files: lwcFiles({...f, name}).map(x => ({...x, lang: LWC_LANG[x.format] || "text", readOnly: !!x.generated}))};
+  case "lwc": {
+    // An AI-written bundle (form.aiFiles) replaces the template files; the
+    // js-meta.xml is still generated from the form.
+    const files = Array.isArray(f.aiFiles) && f.aiFiles.length
+      ? [...f.aiFiles.filter(x => x.role !== "apex"),
+        {path: `lwc/${name}/${name}.js-meta.xml`, format: "xml", generated: true,
+          content: lwcMetaXml({apiVersion: f.apiVersion, exposed: f.exposed, label: f.label || pascalCase(name), description: f.description, targets: f.targets || []})},
+        ...f.aiFiles.filter(x => x.role === "apex")]
+      : lwcFiles({...f, name});
+    // The draft keeps its files; no need to store the AI copy twice.
+    const formRest = {...f};
+    delete formRest.aiFiles;
+    return {...base, form: formRest, title: name, files: files.map(x => ({...x, lang: LWC_LANG[x.format] || "text", readOnly: !!x.generated}))};
+  }
   case "aura":
     return {...base, title: name, files: auraFiles({...f, name}).map(x => ({...x, lang: x.role === "apex" ? "apex" : x.format === "JS" ? "js" : x.format === "CSS" ? "css" : "markup"}))};
   case "flows":

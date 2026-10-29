@@ -8,8 +8,79 @@ import {RuleAiBox} from "./metadata-views.js";
 import {ffDescribeObject} from "../shared/describe.js";
 import {apexHighlight} from "../shared/highlight.js";
 import {CMDT_FIELD_TYPES, toApiName} from "../../core/cmdt.js";
+import {hasValidConfig} from "../../llm/llm-service.js";
+import {lwcFromText, reviseDraftFromText} from "../shared/ai.js";
 
 const h = React.createElement;
+
+const NO_AI = "AI needs a provider + API key (Settings).";
+const aiError = e => (e && e.message === "NO_LLM_CONFIG" ? NO_AI : (e && e.message) || String(e));
+
+// New LWC dialog: describe the component, the AI writes the whole bundle.
+function LwcAiBox({form, onResult}) {
+  const [ask, setAsk] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const nameOk = /^[a-z][A-Za-z0-9]*$/.test(form.name || "");
+  const run = async () => {
+    if (!hasValidConfig()) { setError(NO_AI); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      onResult(await lwcFromText(ask, {name: form.name, label: form.label, object: form.object,
+        apiVersion: form.apiVersion, targets: form.targets}));
+    } catch (e) { setError(aiError(e)); }
+    finally { setBusy(false); }
+  };
+  return h("div", {className: "mdv-ai"},
+    h("div", {className: "mdv-ai-h"}, "✨ Build with AI"),
+    h("div", {className: "soql-save-row"},
+      h("input", {className: "soql-save-input", value: ask, "aria-label": "Describe the component",
+        placeholder: "e.g. Card on the Account page listing open Cases with a New Case button",
+        onChange: e => setAsk(e.target.value), onKeyDown: e => { if (e.key === "Enter" && ask.trim() && nameOk && !busy) run(); }}),
+      h("button", {className: "btn btn-primary btn-sm", disabled: !ask.trim() || !nameOk || busy, onClick: run},
+        busy ? "Writing…" : "✨ Write component")),
+    !nameOk && h("div", {className: "insp-meta"}, "Enter the component name first; the AI uses it for the files and class."),
+    busy && h("div", {className: "insp-meta"}, "Writing HTML, JS, CSS and any Apex it needs… this can take a little while."),
+    error && h("div", {className: "insp-error"}, error));
+}
+
+// Draft editor: change the files by instruction, or fix a deploy error.
+function DraftAiBar({draft, onChange, deployError}) {
+  const [ask, setAsk] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [note, setNote] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [undo, setUndo] = React.useState(null);
+  React.useEffect(() => { setNote(null); setError(null); setUndo(null); }, [draft.id]);
+  const run = async (opts) => {
+    if (!hasValidConfig()) { setError(NO_AI); return; }
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const r = await reviseDraftFromText(draft, opts.error ? "" : ask, opts);
+      setUndo(draft);
+      onChange(r.draft);
+      setNote(`${r.explanation || "Done."} Changed: ${r.changed.map(p => p.split("/").pop()).join(", ")}.`);
+      setAsk("");
+    } catch (e) { setError(aiError(e)); }
+    finally { setBusy(false); }
+  };
+  return h("div", {className: "mdv-ai mdn-ai-row"},
+    h("div", {className: "soql-save-row"},
+      h("input", {className: "soql-save-input", value: ask, "aria-label": "Ask AI to change this draft",
+        placeholder: draft.kind === "lwc" ? "✨ Ask AI to change this bundle, e.g. add a search box above the table" : "✨ Ask AI to change this draft",
+        onChange: e => setAsk(e.target.value), onKeyDown: e => { if (e.key === "Enter" && ask.trim() && !busy) run({}); }}),
+      h("button", {className: "btn btn-primary btn-sm", disabled: !ask.trim() || busy, onClick: () => run({})},
+        busy ? "Working…" : "✨ Apply"),
+      deployError && h("button", {className: "btn btn-secondary btn-sm", disabled: busy, onClick: () => run({error: deployError}),
+        title: "Send the deploy error to the AI and apply its fix"}, "✨ Fix with AI"),
+      undo && h("button", {className: "btn btn-secondary btn-sm", disabled: busy,
+        onClick: () => { onChange(undo); setUndo(null); setNote("AI change undone."); }}, "Undo AI change")),
+    note && h("div", {className: "insp-fix-why mdv-ai-note"}, "✨ " + note),
+    error && h("div", {className: "insp-error"}, error));
+}
 
 const NAME = (label, placeholder) => ({key: "name", label, type: "text", required: true, placeholder});
 const VERSION = {key: "apiVersion", label: "API Version", type: "version", required: true};
@@ -34,9 +105,10 @@ export const NEW_FORMS = {
   lwc: {title: "New Lightning Web Component", defaults: {template: "card", exposed: true, targets: LWC_TEMPLATE_TARGETS.card, css: false, svg: false, fields: "Name"}, fields: [
     NAME("Component Name", "camelCase, e.g. accountCard"),
     {key: "label", label: "Master Label", type: "text", placeholder: "Shown in builders"},
-    {key: "template", label: "Start from", type: "select", options: LWC_TEMPLATES, wide: true},
-    {key: "object", label: "Object", type: "object", required: true, placeholder: "e.g. Account", showIf: f => TEMPLATES_NEEDING_OBJECT.has(f.template)},
-    {key: "fields", label: "Fields", type: "text", placeholder: "API names, e.g. Name, Industry, Phone", showIf: f => TEMPLATES_NEEDING_OBJECT.has(f.template)},
+    {key: "ai", type: "ailwc", wide: true},
+    {key: "template", label: "Start from", type: "select", options: LWC_TEMPLATES, wide: true, showIf: f => !f.aiFiles},
+    {key: "object", label: "Object", type: "object", required: true, placeholder: "e.g. Account", showIf: f => !f.aiFiles && TEMPLATES_NEEDING_OBJECT.has(f.template)},
+    {key: "fields", label: "Fields", type: "text", placeholder: "API names, e.g. Name, Industry, Phone", showIf: f => !f.aiFiles && TEMPLATES_NEEDING_OBJECT.has(f.template)},
     {key: "checks", type: "checks", wide: true, items: [["exposed", "isExposed"], ["css", "include CSS File?"], ["svg", "include SVG File?"]]},
     {key: "targets", label: "Targets", type: "multi", options: LWC_TARGETS.map(t => [t, t]), placeholder: "Select targets", search: true},
     VERSION,
@@ -167,6 +239,25 @@ function NewDialog({kind, versions, objects, onClose, onCreate, onDeploy, busy, 
           setAiNote(r.explanation);
         }}),
         aiNote && h("div", {className: "insp-fix-why mdv-ai-note"}, "✨ " + aiNote));
+    }
+    if (fd.type === "ailwc") {
+      const n = form.aiFiles ? form.aiFiles.length : 0;
+      return h("div", {key: fd.key, className: "mdn-field mdn-wide"},
+        h(LwcAiBox, {form, onResult: r => {
+          setForm(f => ({...f, aiFiles: r.files,
+            label: f.label || r.label,
+            description: f.description || r.description,
+            exposed: r.targets.length ? true : f.exposed,
+            targets: !targetsPicked.current && r.targets.length ? r.targets : f.targets,
+            css: r.files.some(x => x.format === "css")}));
+          setAiNote(r.explanation);
+        }}),
+        form.aiFiles && h("div", {className: "insp-fix-why mdv-ai-note"},
+          "✨ ", aiNote ? aiNote + " " : "",
+          h("b", null, `AI draft ready: ${n} file(s). Press Create to review them before deploying. `),
+          h("button", {type: "button", className: "field-action-btn",
+            onClick: () => { setForm(f => { const x = {...f}; delete x.aiFiles; return x; }); setAiNote(null); }},
+          "Use a template instead")));
     }
     if (fd.type === "fieldrows") {
       const rows = form.fields || [];
@@ -310,6 +401,7 @@ function DraftEditor({draft, onChange, onDeploy, onDiscard, busy, error}) {
         }, fileIcon(f.path), treeFileLabel(f.path),
           f.original != null && f.content !== f.original && h("span", {className: "mdn-dot", title: "Changed"}, "●")))),
       h("div", {className: "mdn-code-wrap"},
+        draft.files.some(x => !x.readOnly && !x.generated) && h(DraftAiBar, {draft, onChange, deployError: error}),
         file.readOnly && h("div", {className: "insp-hint-strip mdn-ro"},
           "Generated from the form (isExposed, targets, label, API version) and set by Salesforce on deploy."),
         h("div", {className: "soql-editor-box mdn-code-box"},

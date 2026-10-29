@@ -271,6 +271,12 @@ debug-log analysis.
   functions it uses, a preview of the error the user sees, an Active switch, and in-place
   editing; **✨ Use AI** writes or changes the formula, message and error field from plain
   English using the object's real fields (also in New → Validation Rule)
+- **Build LWCs with AI** — in New → LWC, describe the component and **✨ Write component**
+  creates the HTML, JS, CSS, targets and any Apex controller it needs, using your org's real
+  fields; the bundle is checked (template root, class name, Apex imports, no innerHTML) and
+  opens in the editor for review. In the editor, **✨ Ask AI to change** edits any draft
+  (Apex, trigger, page, LWC, Aura), **✨ Fix with AI** sends a failed deploy's error back,
+  and **Undo AI change** restores the previous files. Nothing deploys until you press Deploy
 - **Real starter templates** — new LWCs start from a basic card, record details, record
   form, Apex data table with search (controller and test class included) or a quick action;
   Aura has card, record details, quick action and Apex data table
