@@ -279,6 +279,18 @@ debug-log analysis.
   opens in the editor for review. In the editor, **✨ Ask AI to change** edits any draft
   (Apex, trigger, page, LWC, Aura), **✨ Fix with AI** sends a failed deploy's error back,
   and **Undo AI change** restores the previous files. Nothing deploys until you press Deploy
+- **Edit existing components, by hand or with AI** — open any Apex class, trigger,
+  Visualforce page, LWC or Aura component in Metadata and press **✏️ Edit**: its files from the
+  org open in the editor (marked EDITING), where **✨ Ask AI to change** and **Undo AI change**
+  work as for new drafts. **Check compile** (Apex, triggers, pages) asks Salesforce to compile
+  without saving; **💾 Save to org** shows what changes, asks first, warns if someone changed it
+  in the org meanwhile, and on a compile error **✨ Fix with AI** sends the line-numbered error
+  back. Unsaved edits stay in this browser. Apex, triggers and pages save through a
+  MetadataContainer (like the Developer Console); LWC and Aura files update in place.
+  Components from managed packages stay read-only
+  > **Note:** Apex classes and triggers can only be changed this way in **sandboxes and
+  > developer orgs**. Salesforce blocks it in production; deploy those changes with a change
+  > set, VS Code or the Metadata API.
 - **Build Apex, triggers, pages and Aura with AI too** — the same **✨ Build with AI** box in
   New → Apex class (writes the class plus a test class), Trigger (a thin trigger plus a
   handler class), Visualforce page (and a controller only if needed) and Aura component

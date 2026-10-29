@@ -41,7 +41,9 @@ export function normalizeBundleReply(reply, name) {
 
 // Problems that would make the bundle fail to save or run. Empty = OK.
 // Used as the askAiJson validator so one bad reply is retried.
-export function checkLwcBundle(files, name) {
+// opts.orgApex: editing an existing bundle whose Apex already lives in the
+// org, so imports of classes not in the draft are fine.
+export function checkLwcBundle(files, name, opts = {}) {
   const problems = [];
   const byExt = ext => files.find(x => x.path === `lwc/${name}/${name}.${ext}`);
   const html = byExt("html");
@@ -61,7 +63,7 @@ export function checkLwcBundle(files, name) {
     while ((m = re.exec(js.content))) {
       const [, clsName, method] = m;
       const file = apex.find(a => a.name === clsName);
-      if (!file) problems.push(`The JS imports @salesforce/apex/${clsName}.${method} but no Apex class ${clsName} was returned.`);
+      if (!file) { if (!opts.orgApex) problems.push(`The JS imports @salesforce/apex/${clsName}.${method} but no Apex class ${clsName} was returned.`); }
       else if (!new RegExp(`@AuraEnabled[^\\n]*\\n?\\s*(public|global)\\s+static\\s+[\\w<>,\\s.]+\\s${method}\\s*\\(`).test(file.content)) {
         problems.push(`Apex class ${clsName} has no @AuraEnabled static method ${method}.`);
       }

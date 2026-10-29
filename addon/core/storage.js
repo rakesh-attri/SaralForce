@@ -12,9 +12,10 @@ const cache = new Map();
 let ready = false;
 let initPromise = null;
 
-function storageArea() {
-  const area = globalThis.chrome && globalThis.chrome.storage && globalThis.chrome.storage.local;
-  return area && typeof area.get === "function" ? area : null;
+// True inside the extension (chrome.storage.local is available).
+function hasChromeStorage() {
+  return typeof chrome !== "undefined" && !!chrome.storage && !!chrome.storage.local &&
+    typeof chrome.storage.local.get === "function";
 }
 
 function legacyStore() {
@@ -43,8 +44,7 @@ function readLegacy(key) {
 export function initSettings() {
   if (initPromise) return initPromise;
   initPromise = (async () => {
-    const area = storageArea();
-    if (!area) {
+    if (!hasChromeStorage()) {
       // Dev harness / unit tests: no chrome.storage, keep using localStorage.
       for (const key of SETTING_KEYS) {
         const v = readLegacy(key);
@@ -53,7 +53,7 @@ export function initSettings() {
       ready = true;
       return;
     }
-    const stored = await new Promise(resolve => area.get(SETTING_KEYS, items => resolve(items || {})));
+    const stored = await new Promise(resolve => chrome.storage.local.get(SETTING_KEYS, items => resolve(items || {})));
     const migrate = {};
     for (const key of SETTING_KEYS) {
       if (stored[key] !== undefined) {
@@ -67,12 +67,12 @@ export function initSettings() {
       }
     }
     if (Object.keys(migrate).length) {
-      await new Promise(resolve => area.set(migrate, resolve));
+      await new Promise(resolve => chrome.storage.local.set(migrate, resolve));
       const ls = legacyStore();
       if (ls) for (const key of Object.keys(migrate)) ls.removeItem(key);
     }
-    if (globalThis.chrome.storage.onChanged) {
-      globalThis.chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
         if (areaName !== "local") return;
         for (const [key, change] of Object.entries(changes)) {
           if (!SETTING_KEYS.includes(key)) continue;
@@ -99,9 +99,8 @@ export function getSetting(key, fallback) {
 
 export function setSetting(key, value) {
   cache.set(key, value);
-  const area = storageArea();
-  if (area) {
-    area.set({[key]: value});
+  if (hasChromeStorage()) {
+    chrome.storage.local.set({[key]: value});
     return;
   }
   const ls = legacyStore();

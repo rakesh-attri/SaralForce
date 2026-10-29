@@ -18,6 +18,9 @@ import {FFBadge} from "../shared/ui.js";
 import {ffIcon, FF_I_DB} from "../shared/icons.js";
 import {useFfSession, ffLoadJson, ffSaveJson} from "../shared/session-state.js";
 import {deployDraft, orgApiVersions} from "../shared/metadata-deploy.js";
+import {loadEditDraft, saveEditDraft} from "../shared/metadata-save.js";
+import {EDITABLE_KINDS, SANDBOX_ONLY_NOTE, changedFiles} from "../../core/edit-draft.js";
+import {confirmDialog} from "../../ui/confirm.js";
 import {NewDialog, DraftEditor, withOriginals, fileIcon} from "./metadata-new.js";
 import {CmdtDetail} from "./metadata-cmdt.js";
 import {DETAIL_VIEWS} from "./metadata-views.js";
@@ -204,7 +207,7 @@ function flowAiText(steps, summary) {
 }
 
 // ─── Component detail (header, overview/source, versions, explain) ───
-function ComponentDetail({kind, row, pkg, onTogglePkg, onChanged}) {
+function ComponentDetail({kind, row, pkg, onTogglePkg, onChanged, onEdit}) {
   const View = DETAIL_VIEWS[kind.id];
   const [source, setSource] = React.useState(null);
 
@@ -267,6 +270,13 @@ function ComponentDetail({kind, row, pkg, onTogglePkg, onChanged}) {
         disabled: !source || ai.busy,
         onClick: () => ai.run(kind.label, name, source)
       }, ai.busy ? "Explaining…" : "✨ Explain"),
+      onEdit && EDITABLE_KINDS.includes(kind.id) && !row.NamespacePrefix && h("button", {
+        className: "btn btn-primary btn-sm",
+        title: kind.id === "apex" || kind.id === "triggers"
+          ? "Open the code in the editor, change it yourself or with AI, then save it back. " + SANDBOX_ONLY_NOTE
+          : "Open the files in the editor, change them yourself or with AI, then save them back to the org.",
+        onClick: () => onEdit(row)
+      }, "✏️ Edit"),
       h("a", {className: "btn btn-secondary btn-sm", href: setupUrl(kind.setup(row)), target: "_blank", rel: "noreferrer"},
         kind.id === "flows" ? "Open in Flow Builder ↗" : "Open in Setup ↗"),
       h("button", {className: "btn btn-secondary btn-sm", onClick: () => onTogglePkg(kind.type, name)},
@@ -558,6 +568,70 @@ function MetadataTab() {
     if (!objects.length) ffGetObjects().then(setObjects).catch(() => {});
   };
 
+  // Edit an existing component: load it into an edit draft (or reopen the
+  // one already in progress for it).
+  const [editErr, setEditErr] = React.useState(null);
+  const [progress, setProgress] = React.useState(null);
+  const startEdit = async row => {
+    setEditErr(null);
+    setNotice(null);
+    setDeployErr(null);
+    const open = drafts.find(d => d.mode === "edit" && d.existing && d.existing.id === row.Id);
+    if (open) { setDraftId(open.id); return; }
+    setBusy(true);
+    try {
+      const d = await loadEditDraft(kind.id, row);
+      setDrafts([d, ...drafts]);
+      setDraftId(d.id);
+    } catch (e) {
+      setEditErr(`Could not open ${kind.name(row)} for editing: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Save an edit draft back to the org (or compile-check it).
+  const saveEdit = async (d, {checkOnly = false, force = false} = {}) => {
+    const files = changedFiles(d);
+    if (!checkOnly && !force) {
+      const ok = await confirmDialog({
+        title: `Save ${d.name} to the org?`,
+        message: `${files.length} file(s) will be updated: ${files.map(f => f.path.split("/").pop()).join(", ")}.` +
+          (d.kind === "apex" || d.kind === "triggers" ? "\n" + SANDBOX_ONLY_NOTE : ""),
+        confirmLabel: "Save to org"
+      });
+      if (!ok) return;
+    }
+    setBusy(true);
+    setDeployErr(null);
+    setNotice(null);
+    setProgress(checkOnly ? "Compiling…" : "Saving…");
+    try {
+      await saveEditDraft(d, {checkOnly, force, onProgress: setProgress});
+      if (checkOnly) {
+        setNotice(`${d.name} compiles cleanly. Nothing was saved.`);
+      } else {
+        setDrafts(drafts.filter(x => x.id !== d.id));
+        setDraftId(null);
+        setNotice(`Saved ${d.name} to the org (${files.length} file(s)).`);
+        refreshKind(d.kind);
+        setSelId(d.existing.id);
+      }
+    } catch (e) {
+      if (e.code === "CONFLICT") {
+        setBusy(false);
+        setProgress(null);
+        const ok = await confirmDialog({title: "Overwrite newer changes?", message: e.message, confirmLabel: "Overwrite", danger: true});
+        if (ok) await saveEdit(d, {force: true});
+        return;
+      }
+      setDeployErr(e.message);
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+
   // Deploy a draft (from the dialog or the editor), then show it in the list.
   const deploy = async (draft, fromDialog) => {
     setBusy(true);
@@ -621,6 +695,7 @@ function MetadataTab() {
       }, "Download package.xml"),
       count > 0 && h("button", {className: "btn btn-secondary btn-sm", onClick: () => setPkg({})}, "Clear")),
     notice && h("div", {className: "insp-status-ok"}, notice),
+    editErr && h("div", {className: "insp-error"}, editErr),
     kindId === "schema"
       ? h(SchemaView, {pkg, onTogglePkg})
       : h("div", {className: "usr-layout"},
@@ -637,15 +712,20 @@ function MetadataTab() {
               kindDrafts.map(d => h("div", {
                 key: d.id,
                 className: "sq3-saved-row md-row" + (d.id === draftId ? " selected" : ""),
-                role: "button", tabIndex: 0, title: "Unsaved draft — open to edit and deploy",
+                role: "button", tabIndex: 0,
+                title: d.mode === "edit" ? "Your unsaved changes to this component — open to continue" : "Unsaved draft — open to edit and deploy",
                 onClick: () => { setDraftId(d.id); setDeployErr(null); },
                 onKeyDown: e => { if (e.key === "Enter") setDraftId(d.id); }
               },
                 fileIcon(d.files[0].path),
                 h("span", {className: "sq3-saved-tx"},
                   h("span", {className: "sq3-saved-label"}, d.title),
-                  h("span", {className: "sq3-saved-q"}, `${d.files.length} file(s) · not deployed`)),
-                h("span", {className: "mdn-new"}, "NEW"))),
+                  h("span", {className: "sq3-saved-q"}, d.mode === "edit"
+                    ? `${changedFiles(d).length} change(s) · not saved`
+                    : `${d.files.length} file(s) · not deployed`)),
+                d.mode === "edit"
+                  ? h("span", {className: "mdn-new mdn-edit"}, "EDIT")
+                  : h("span", {className: "mdn-new"}, "NEW"))),
               kindDrafts.length > 0 && h("div", {className: "md-group-h"}, "In org"),
               errors[kind.id] && h("div", {className: "insp-error"}, errors[kind.id]),
               !lists[kind.id] && !errors[kind.id] && h("div", {className: "insp-meta"}, "Loading…"),
@@ -671,14 +751,16 @@ function MetadataTab() {
           h("div", {className: "usr-main"},
             draft
               ? h(DraftEditor, {
-                  draft, busy, error: deployErr,
+                  draft, busy, error: deployErr, progress,
                   onChange: d => setDrafts(drafts.map(x => (x.id === d.id ? d : x))),
-                  onDeploy: () => deploy(draft, false),
+                  onDeploy: () => (draft.mode === "edit" ? saveEdit(draft) : deploy(draft, false)),
+                  onCheck: draft.mode === "edit" && ["apex", "triggers", "pages"].includes(draft.kind)
+                    ? () => saveEdit(draft, {checkOnly: true}) : null,
                   onDiscard: () => { setDrafts(drafts.filter(x => x.id !== draft.id)); setDraftId(null); setDeployErr(null); }
                 })
               : sel
               ? (kind.id === "cmdt" ? h(CmdtDetail, {row: sel, pkg, onTogglePkg}) : h(ComponentDetail, {kind, row: sel, pkg, onTogglePkg,
-                  onChanged: () => refreshKind(kind.id)}))
+                  onChanged: () => refreshKind(kind.id), onEdit: busy ? null : startEdit}))
               : h("div", {className: "sq3-card md-placeholder"},
                   h("span", {className: "md-kind-tile lg t-" + kind.tone, "aria-hidden": "true"}, kind.icon),
                   h("div", {className: "md-placeholder-t"}, kind.label),

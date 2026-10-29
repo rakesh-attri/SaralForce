@@ -41,6 +41,17 @@ test("read-only files never count as changed", () => {
   assert.deepEqual(changedFiles(d), []);
 });
 
+test("editing an existing LWC allows Apex that already lives in the org", async () => {
+  const {checkLwcBundle} = await import("../../addon/core/lwc-ai.js");
+  const files = [
+    {path: "lwc/invoiceList/invoiceList.html", content: "<template></template>\n"},
+    {path: "lwc/invoiceList/invoiceList.js", content: "import { LightningElement } from 'lwc';\nimport getOpen from '@salesforce/apex/InvoiceService.getOpen';\n" +
+      "export default class InvoiceList extends LightningElement {}\n"},
+  ];
+  assert.match(checkLwcBundle(files, "invoiceList").join(), /no Apex class InvoiceService/);
+  assert.deepEqual(checkLwcBundle(files, "invoiceList", {orgApex: true}), []);
+});
+
 test("auraPath maps definition types", () => {
   assert.equal(auraPath("card", "COMPONENT"), "aura/card/card.cmp");
   assert.equal(auraPath("card", "CONTROLLER"), "aura/card/cardController.js");

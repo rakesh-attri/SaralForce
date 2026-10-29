@@ -114,6 +114,12 @@ const tables = {
   ...metadataTables(apexClasses)
 };
 
+// Bundle files need ids so edits PATCH them in place.
+let lastMemberBody = "";
+for (const t of ["lightningcomponentresource", "auradefinition"]) {
+  (tables[t] || []).forEach((r, i) => { if (!r.Id) r.Id = `0Rd${t === "auradefinition" ? "A" : "L"}N${String(i).padStart(10, "0")}AAA`; });
+}
+
 function soqlResult(q) {
   const from = /\bfrom\s+([A-Za-z0-9_]+)/i.exec(q);
   const obj = from ? from[1].toLowerCase() : "";
@@ -184,6 +190,25 @@ function api(req, res, url) {
     res.writeHead(200, {"Content-Type": "text/plain"});
     return res.end(LOG_BODY);
   }
+  // Compile-and-save (MetadataContainer) for editing existing Apex/pages:
+  // a member body containing "COMPILE_ERROR" fails like a real compile error.
+  const sob = /\/tooling\/sobjects\/([A-Za-z]+)\/?([a-zA-Z0-9]{15,18})?\/?$/.exec(p);
+  if (sob && req.method === "POST" && /^Apex(Class|Trigger|Page)Member$/.test(sob[1])) {
+    let raw = "";
+    req.on("data", c => { raw += c; });
+    req.on("end", () => {
+      try { lastMemberBody = String(JSON.parse(raw || "{}").Body || ""); } catch { lastMemberBody = ""; }
+      json(res, 201, {id: "1drdN000000MEMAAA", success: true, errors: []});
+    });
+    return undefined;
+  }
+  if (sob && req.method === "GET" && sob[1] === "ContainerAsyncRequest") {
+    const line = lastMemberBody.split("\n").findIndex(l => l.includes("COMPILE_ERROR")) + 1;
+    return json(res, 200, line
+      ? {Id: sob[2], State: "Failed", DeployDetails: {componentFailures: [{fileName: "classes/Demo.cls", lineNumber: line, columnNumber: 5,
+        problem: "Variable does not exist: COMPILE_ERROR", problemType: "Error"}]}}
+      : {Id: sob[2], State: "Completed"});
+  }
   const record = /\/sobjects\/([A-Za-z0-9_]+)\/([a-zA-Z0-9]{15,18})\/?$/.exec(p);
   if (record && req.method === "GET") {
     const rows = tables[record[1].toLowerCase()] || [];
@@ -252,8 +277,18 @@ function mockCode(user) {
 // Canned edit for "Ask AI to change" / "Fix with AI": restyle the CSS file.
 function mockRevision(user) {
   const name = (/\nName: ([A-Za-z0-9_]+)/.exec("\n" + user) || [])[1] || "c";
-  const path = (/=== (lwc\/[^ ]+\.css) ===/.exec(user) || [])[1] || `lwc/${name}/${name}.css`;
   const fixing = /deploy error to fix/.test(user);
+  // Code drafts: fix the first file (drop a COMPILE_ERROR line, else add a note).
+  if (!/^Kind: lwc$/m.test(user)) {
+    const m = /=== ([^\n]+?) ===\n([\s\S]*?)(?=\n=== |$)/.exec(user);
+    if (m && !/\.css$/.test(m[1])) {
+      const fixed = m[2].split("\n").filter(l => !l.includes("COMPILE_ERROR")).join("\n");
+      const content = fixed !== m[2] ? fixed : m[2].replace(/\{/, "{\n    // Reviewed by AI: null-safe and bulk-safe.");
+      return JSON.stringify({files: {[m[1]]: content},
+        explanation: fixed !== m[2] ? "Removed the line that referenced an undefined variable." : "Added a review note; the logic already looked bulk-safe."});
+    }
+  }
+  const path = (/=== (lwc\/[^ ]+\.css) ===/.exec(user) || [])[1] || `lwc/${name}/${name}.css`;
   return JSON.stringify({files: {[path]: ":host {\n    display: block;\n}\n\nlightning-card {\n    --slds-c-card-spacing-block: 0.75rem;\n}"},
     explanation: fixing ? "Fixed the reported error by tidying the stylesheet." : "Tightened the card spacing in the stylesheet."});
 }

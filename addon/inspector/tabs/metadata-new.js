@@ -406,19 +406,21 @@ function escHtml(s) {
 
 // Edit generated files before deploying. Highlighted mirror under a
 // transparent textarea, the same technique as the SOQL editor.
-function DraftEditor({draft, onChange, onDeploy, onDiscard, busy, error}) {
+function DraftEditor({draft, onChange, onDeploy, onDiscard, onCheck, busy, error, progress}) {
+  const editing = draft.mode === "edit";
   const [active, setActive] = React.useState(0);
   const hlRef = React.useRef(null);
   const file = draft.files[Math.min(active, draft.files.length - 1)];
-  const changed = draft.files.filter(f => f.original != null && f.content !== f.original).length;
+  // Edit drafts also count files the AI added (they have no org copy yet).
+  const changed = draft.files.filter(f => !f.readOnly && (f.original == null ? editing : f.content !== f.original)).length;
   const update = text => onChange({...draft, files: draft.files.map((f, i) => (f === file ? {...f, content: text} : f))});
   const html = file.lang === "apex" || file.lang === "js" ? apexHighlight(file.content) : escHtml(file.content);
   const folder = draft.files[0].path.split("/").slice(0, -1).join("/");
   return h("div", {className: "sq3-card mdn-editor"},
     h("div", {className: "sq3-card-h"},
       h("span", {className: "sq3-card-t"}, draft.title),
-      h(FFBadgeNew, null),
-      h("span", {className: "insp-meta mdn-editor-kind"}, NEW_FORMS[draft.kind].title.replace(/^New /, "")),
+      editing ? h("span", {className: "mdn-new mdn-edit"}, "EDITING") : h(FFBadgeNew, null),
+      h("span", {className: "insp-meta mdn-editor-kind"}, (editing ? "Editing existing " : "") + NEW_FORMS[draft.kind].title.replace(/^New /, "")),
       !isInspectorTab() && h("button", {className: "btn btn-secondary btn-sm", title: "Open the inspector in a new browser tab on this draft",
         onClick: () => openMetadataInTab(draft.kind, draft.id)
       }, "⛶ Full screen ↗")),
@@ -430,11 +432,15 @@ function DraftEditor({draft, onChange, onDeploy, onDiscard, busy, error}) {
           className: "mdn-tree-file" + (f === file ? " active" : ""),
           onClick: () => setActive(i), title: f.path
         }, fileIcon(f.path), treeFileLabel(f.path),
-          f.original != null && f.content !== f.original && h("span", {className: "mdn-dot", title: "Changed"}, "●")))),
+          (f.original != null ? f.content !== f.original : editing) && h("span", {className: "mdn-dot", title: f.original == null ? "New file" : "Changed"}, "●")))),
       h("div", {className: "mdn-code-wrap"},
+        editing && (draft.kind === "apex" || draft.kind === "triggers") && h("div", {className: "insp-hint-strip mdn-ro"},
+          "ℹ️ Note: Apex classes and triggers can only be changed this way in sandboxes and developer orgs. " +
+          "In production, deploy the change with a change set, VS Code or the Metadata API."),
         draft.files.some(x => !x.readOnly && !x.generated) && h(DraftAiBar, {draft, onChange, deployError: error}),
-        file.readOnly && h("div", {className: "insp-hint-strip mdn-ro"},
-          "Generated from the form (isExposed, targets, label, API version) and set by Salesforce on deploy."),
+        file.readOnly && h("div", {className: "insp-hint-strip mdn-ro"}, editing
+          ? "Read-only here: targets, exposure and label are bundle settings; change them in VS Code or the Metadata API."
+          : "Generated from the form (isExposed, targets, label, API version) and set by Salesforce on deploy."),
         h("div", {className: "soql-editor-box mdn-code-box"},
           h("div", {className: "soql-term mdn-term"},
             h("div", {className: "soql-pane"},
@@ -463,10 +469,15 @@ function DraftEditor({draft, onChange, onDeploy, onDiscard, busy, error}) {
             })))))),
     error && h("div", {className: "insp-error"}, error),
     h("div", {className: "mdn-foot"},
-      h("span", {className: "insp-meta"}, `${changed} changed · Draft saved locally`),
+      h("span", {className: "insp-meta"}, progress || `${changed} changed · ${editing ? "Not saved to the org yet" : "Draft saved locally"}`),
       h("div", {className: "mdn-foot-btns"},
-        h("button", {className: "btn btn-secondary btn-sm", disabled: busy, onClick: onDiscard}, "Discard"),
-        h("button", {className: "btn btn-primary btn-sm", disabled: busy, onClick: onDeploy}, busy ? "Deploying…" : "✓ Deploy"))));
+        h("button", {className: "btn btn-secondary btn-sm", disabled: busy, onClick: onDiscard,
+          title: editing ? "Close the editor and forget these changes; the org copy is untouched" : ""}, editing ? "Discard changes" : "Discard"),
+        editing && onCheck && h("button", {className: "btn btn-secondary btn-sm", disabled: busy || !changed, onClick: onCheck,
+          title: "Ask Salesforce to compile the change without saving it"}, "Check compile"),
+        editing
+          ? h("button", {className: "btn btn-primary btn-sm", disabled: busy || !changed, onClick: onDeploy}, busy ? "Saving…" : "💾 Save to org")
+          : h("button", {className: "btn btn-primary btn-sm", disabled: busy, onClick: onDeploy}, busy ? "Deploying…" : "✓ Deploy"))));
 }
 
 function FFBadgeNew() {

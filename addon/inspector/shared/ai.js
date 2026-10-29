@@ -308,7 +308,7 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
         return !before || before.content !== x.content;
       }).map(x => x.path).filter(p => editable.has(p) || !draft.files.some(y => y.path === p));
       if (!changed.length) return "None of the returned files changed an editable file of this draft; use the exact paths given.";
-      const problems = draft.kind === "lwc" ? checkLwcBundle(merged.files, draft.name)
+      const problems = draft.kind === "lwc" ? checkLwcBundle(merged.files, draft.name, {orgApex: draft.mode === "edit"})
         : AI_CODE_KINDS.includes(draft.kind)
         ? checkCodeBundle(draft.kind, merged.files, draft.name, {object: draft.kind === "triggers" ? (draft.form || {}).object : null})
         : [];

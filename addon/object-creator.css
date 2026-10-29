@@ -10066,3 +10066,9 @@ textarea.mdn-input {
 .mdn-ai-row {
   margin: 0 0 8px;
 }
+
+/* Editing an existing component (Metadata). */
+.mdn-new.mdn-edit {
+  background: #fef3c7;
+  color: #92400e;
+}
