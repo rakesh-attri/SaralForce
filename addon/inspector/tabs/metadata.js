@@ -21,6 +21,7 @@ import {deployDraft, orgApiVersions} from "../shared/metadata-deploy.js";
 import {NewDialog, DraftEditor, withOriginals, fileIcon} from "./metadata-new.js";
 import {CmdtDetail} from "./metadata-cmdt.js";
 import {DETAIL_VIEWS} from "./metadata-views.js";
+import {openCodeViewer} from "../shared/code-view.js";
 import {listCmdtTypes} from "../shared/cmdt-data.js";
 
 const h = React.createElement;
@@ -203,6 +204,9 @@ function flowAiText(steps, summary) {
 function ComponentDetail({kind, row, pkg, onTogglePkg, onChanged}) {
   const View = DETAIL_VIEWS[kind.id];
   const [source, setSource] = React.useState(null);
+  const [viewFiles, setViewFiles] = React.useState(null);
+  // Views report their text (for Explain / Copy) and files (for full screen).
+  const onViewSource = React.useCallback((text, files) => { setSource(text); setViewFiles(files || null); }, []);
   const [meta, setMeta] = React.useState(null);
   const [versions, setVersions] = React.useState(null);
   const [versionId, setVersionId] = React.useState(null);
@@ -266,7 +270,19 @@ function ComponentDetail({kind, row, pkg, onTogglePkg, onChanged}) {
         kind.id === "flows" ? "Open in Flow Builder ↗" : "Open in Setup ↗"),
       h("button", {className: "btn btn-secondary btn-sm", onClick: () => onTogglePkg(kind.type, name)},
         inPkg ? "✓ In package.xml" : "＋ package.xml"),
-      source && !kind.meta && h("button", {className: "btn btn-secondary btn-sm", onClick: () => safeCopyText(source)}, "Copy source")),
+      source && !kind.meta && h("button", {className: "btn btn-secondary btn-sm", onClick: () => safeCopyText(source)}, "Copy source"),
+      source && h("button", {
+        className: "btn btn-secondary btn-sm",
+        title: "Open the code in a new browser tab, full screen",
+        onClick: () => openCodeViewer({
+          title: name,
+          subtitle: `${kind.label} · ${kind.sub(row)}`,
+          files: viewFiles || (kind.meta && meta
+            ? [{path: `${name}.steps.txt`, lang: "text", content: source},
+               {path: `${name}.flow-meta.json`, lang: "text", content: JSON.stringify(meta, null, 2)}]
+            : [{path: `${name}.txt`, lang: kind.lang, content: source}])
+        })
+      }, "⛶ Full screen ↗")),
     ai.view,
     versions && versions.length > 0 && h("div", {className: "md-versions"},
       h("span", {className: "insp-meta"}, "Version"),
@@ -284,7 +300,7 @@ function ComponentDetail({kind, row, pkg, onTogglePkg, onChanged}) {
         key: id, role: "tab", "aria-selected": view === id,
         className: "sq3-pill" + (view === id ? " active" : ""), onClick: () => setView(id)
       }, label))),
-    View && h(View, {key: row.Id, row, kind, onSource: setSource, onChanged}),
+    View && h(View, {key: row.Id, row, kind, onSource: onViewSource, onChanged}),
     !View && error && h("div", {className: "insp-error"}, "Could not read it: " + error),
     !View && source == null && !error && h("div", {className: "insp-meta"}, "Loading…"),
     !View && source != null && !error && (

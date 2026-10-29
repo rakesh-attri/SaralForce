@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="dark light">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SaralForce · Code</title>
+  <link rel="icon" href="icon32.png">
+  <link rel="stylesheet" href="code-viewer.css">
+</head>
+<body>
+  <header class="cv-head">
+    <div class="cv-title">
+      <span class="cv-logo" aria-hidden="true">&lt;/&gt;</span>
+      <div>
+        <h1 id="cv-name">Loading…</h1>
+        <div id="cv-sub" class="cv-sub"></div>
+      </div>
+    </div>
+    <div class="cv-tools" role="toolbar" aria-label="Code view options">
+      <input id="cv-find" type="search" placeholder="Find in file…" aria-label="Find in file">
+      <span id="cv-hits" class="cv-hits"></span>
+      <button id="cv-wrap" type="button" aria-pressed="false" title="Wrap long lines">Wrap</button>
+      <button id="cv-smaller" type="button" title="Smaller text" aria-label="Smaller text">A−</button>
+      <button id="cv-bigger" type="button" title="Bigger text" aria-label="Bigger text">A+</button>
+      <button id="cv-theme" type="button" title="Light / dark">◐</button>
+      <button id="cv-copy" type="button">Copy</button>
+      <button id="cv-download" type="button">Download</button>
+    </div>
+  </header>
+  <nav id="cv-files" class="cv-files" role="tablist" aria-label="Files"></nav>
+  <main id="cv-main" class="cv-main"></main>
+  <script type="module" src="code-viewer.js"></script>
+</body>
+</html>

@@ -2,7 +2,8 @@ import {askAi, askAiJson} from "../../core/llm.js";
 import {ffDescribeObject, ffGetObjects} from "./describe.js";
 import {pickObjectsForPrompt} from "../../core/soql-complete.js";
 import {normalizeBundleReply, checkLwcBundle, bundleForPrompt, mergeRevision} from "../../core/lwc-ai.js";
-import {pascalCase, LWC_TARGETS} from "../../core/metadata-templates.js";
+import {pascalCase, LWC_TARGETS, validateName} from "../../core/metadata-templates.js";
+import {normalizeCodeReply, checkCodeBundle, expectedPaths, AI_CODE_KINDS} from "../../core/code-ai.js";
 
 const SOQL_FIX_SYSTEM =
   "You are a Salesforce SOQL expert helping a beginner. " +
@@ -170,9 +171,32 @@ const LWC_FROM_TEXT_SYSTEM =
   '"apex": [{"name": "<ClassName>", "body": "<full class>"}] (or [] when no Apex is needed), ' +
   '"explanation": "<two plain sentences: what it shows and where to add it>"}';
 
+const APEX_RULES =
+  "Apex rules: classes are `with sharing` unless the request needs otherwise; bulkify (no SOQL or DML inside loops, work on " +
+  "collections); use WITH SECURITY_ENFORCED or Security.stripInaccessible for user-facing reads, bind variables, and LIMIT; " +
+  "no hard-coded record ids; triggers stay thin and call a handler class; test classes use @IsTest, @TestSetup data, " +
+  "Test.startTest/stopTest and real asserts with messages (aim for full coverage). Visualforce pages start with <apex:page> " +
+  "and use lightningStylesheets=\"true\". Aura components start with <aura:component>; controller and helper JS files are " +
+  "object literals wrapped in ({ ... }); @AuraEnabled methods are static. Use only field API names from the schema given.";
+
+// What each kind is, for the "write it from a description" prompt.
+const CODE_KIND_BRIEF = {
+  apex: "an Apex class",
+  triggers: "an Apex trigger, with a handler class that holds the logic",
+  pages: "a Visualforce page (plus an Apex controller or extension only if the page needs one)",
+  aura: "an Aura component (markup, controller JS, helper JS when useful, CSS when useful, and an Apex controller only if data needs a query)",
+};
+
+const CODE_FROM_TEXT_SYSTEM =
+  "You are a senior Salesforce developer. Write ONE complete, deployable piece of metadata from the request. " + APEX_RULES +
+  " Reply with ONLY a JSON object: " +
+  '{"files": [{"path": "<one of the allowed paths>", "content": "<the full file>"}], ' +
+  '"label": "<short label, or empty>", "description": "<one sentence>", ' +
+  '"explanation": "<two plain sentences: what it does and how to use or test it>"}';
+
 const DRAFT_REVISE_SYSTEM =
   "You are a senior Salesforce developer editing a draft before it is deployed. Apply the request (or fix the Salesforce " +
-  "deploy error) with the smallest correct change and keep everything else as it is. " + LWC_RULES +
+  "deploy error) with the smallest correct change and keep everything else as it is. " + APEX_RULES + " " + LWC_RULES +
   " Reply with ONLY a JSON object: " +
   '{"files": {"<path exactly as given>": "<the FULL new content of that file>"}, "explanation": "<one or two plain sentences>"} ' +
   "Include only files you changed. You may add an Apex class as classes/<Name>.cls or a missing css/svg file of the component.";
@@ -220,6 +244,48 @@ async function lwcFromText(request, {name, label, object, apiVersion, targets, s
   };
 }
 
+// Plain English → an Apex class, trigger, Visualforce page or Aura
+// component (kind: apex | triggers | pages | aura). form gives name,
+// object, label, events/template hints. Returns {files, label,
+// description, explanation}; never deploys anything.
+async function codeFromText(kind, request, form = {}, {signal} = {}) {
+  const ask = String(request || "").trim();
+  if (!ask) throw new Error("Describe what you want first.");
+  if (!CODE_KIND_BRIEF[kind]) throw new Error("AI writing is not available for this kind.");
+  const name = String(form.name || "").trim();
+  const nameErr = validateName(name, {apex: "apex", triggers: "trigger", pages: "page", aura: "aura"}[kind]);
+  if (nameErr) throw new Error("Enter a valid name first: " + nameErr);
+  const object = kind === "pages" ? form.controller : form.object;
+  const schema = await schemaForRequest(object, ask);
+  let files = [];
+  const hints = [
+    `Kind: ${CODE_KIND_BRIEF[kind]}`,
+    `Name: ${name}`,
+    object ? `Object: ${object}` : "",
+    kind === "triggers" && form.events && form.events.length ? `Preferred events: ${form.events.join(", ")}` : "",
+    form.label ? `Label: ${form.label}` : "",
+    `API version: ${form.apiVersion || "latest"}`,
+    `Allowed paths:\n- ${expectedPaths(kind, name).join("\n- ")}`,
+    `Request: ${ask}`,
+  ].filter(Boolean).join("\n");
+  const parsed = await askAiJson({
+    system: CODE_FROM_TEXT_SYSTEM,
+    user: hints + (schema ? `\n\n${schema}` : ""),
+    validate: o => {
+      files = normalizeCodeReply(kind, o, name);
+      const problems = checkCodeBundle(kind, files, name, {object: kind === "triggers" ? object : null});
+      return problems.length ? "Fix these problems: " + problems.join(" ") : null;
+    },
+    signal
+  });
+  return {
+    files,
+    label: String(parsed.label || "").trim(),
+    description: String(parsed.description || "").trim(),
+    explanation: String(parsed.explanation || "").trim(),
+  };
+}
+
 // Change a draft from an instruction, or fix it from a deploy error.
 // Returns {draft, changed: [paths], explanation}.
 async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
@@ -242,10 +308,11 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
         return !before || before.content !== x.content;
       }).map(x => x.path).filter(p => editable.has(p) || !draft.files.some(y => y.path === p));
       if (!changed.length) return "None of the returned files changed an editable file of this draft; use the exact paths given.";
-      if (draft.kind === "lwc") {
-        const problems = checkLwcBundle(merged.files, draft.name);
-        if (problems.length) return "The result still has problems: " + problems.join(" ");
-      }
+      const problems = draft.kind === "lwc" ? checkLwcBundle(merged.files, draft.name)
+        : AI_CODE_KINDS.includes(draft.kind)
+        ? checkCodeBundle(draft.kind, merged.files, draft.name, {object: draft.kind === "triggers" ? (draft.form || {}).object : null})
+        : [];
+      if (problems.length) return "The result still has problems: " + problems.join(" ");
       return null;
     },
     signal
@@ -288,4 +355,4 @@ function logsAskLlm(systemPrompt, userText, {signal} = {}) {
   return askAi({system: systemPrompt, user: userText, signal});
 }
 
-export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, validationRuleFromText, lwcFromText, reviseDraftFromText, apexAiCheck, logsAskLlm};
+export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, apexAiCheck, logsAskLlm};

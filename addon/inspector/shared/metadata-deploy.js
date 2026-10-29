@@ -43,9 +43,18 @@ const body = (draft, path) => {
 
 // Apex classes a bundle template imports (controller + test) must exist
 // before the bundle saves, so they go first.
-async function createApexHelpers(draft, ver) {
-  for (const file of draft.files.filter(x => x.role === "apex")) {
+async function createApexHelpers(draft, ver, roles = ["apex"]) {
+  for (const file of draft.files.filter(x => roles.includes(x.role))) {
     await create("ApexClass", {Name: file.name, Body: file.content, ApiVersion: ver});
+  }
+}
+
+// Extra classes created after the main one (e.g. an AI-written test class).
+// The main class already exists then, so say which extra failed.
+async function createExtras(draft, ver) {
+  for (const file of draft.files.filter(x => x.role === "extra")) {
+    try { await create("ApexClass", {Name: file.name, Body: file.content, ApiVersion: ver}); }
+    catch (e) { throw new Error(`${draft.name} was created, but ${file.name} failed: ${e.message}`); }
   }
 }
 
@@ -55,19 +64,23 @@ async function deployDraft(draft) {
   const ver = Number(f.apiVersion) || Number(apiVersion);
   try {
     switch (draft.kind) {
-    case "apex":
-      return {type: "ApexClass", name: draft.name,
-        id: await create("ApexClass", {Name: draft.name, Body: body(draft), ApiVersion: ver})};
+    case "apex": {
+      const id = await create("ApexClass", {Name: draft.name, Body: body(draft, `classes/${draft.name}.cls`), ApiVersion: ver});
+      await createExtras(draft, ver);
+      return {type: "ApexClass", name: draft.name, id};
+    }
     case "triggers": {
-      const handler = draft.files.find(x => x.role === "handler");
-      if (handler) await create("ApexClass", {Name: handler.name, Body: handler.content, ApiVersion: ver});
-      const trig = draft.files.find(x => x.role !== "handler");
+      // Handler classes (template or AI) must exist before the trigger.
+      await createApexHelpers(draft, ver, ["handler", "apex"]);
       return {type: "ApexTrigger", name: draft.name,
-        id: await create("ApexTrigger", {Name: draft.name, TableEnumOrId: f.object, Body: trig.content, ApiVersion: ver})};
+        id: await create("ApexTrigger", {Name: draft.name, TableEnumOrId: f.object,
+          Body: body(draft, `triggers/${draft.name}.trigger`), ApiVersion: ver})};
     }
     case "pages":
+      await createApexHelpers(draft, ver);
       return {type: "ApexPage", name: draft.name,
-        id: await create("ApexPage", {Name: draft.name, MasterLabel: f.label || draft.name, Markup: body(draft), ApiVersion: ver})};
+        id: await create("ApexPage", {Name: draft.name, MasterLabel: f.label || draft.name,
+          Markup: body(draft, `pages/${draft.name}.page`), ApiVersion: ver})};
     case "lwc": {
       await createApexHelpers(draft, ver);
       const meta = {apiVersion: ver, isExposed: !!f.exposed, masterLabel: f.label || draft.name};

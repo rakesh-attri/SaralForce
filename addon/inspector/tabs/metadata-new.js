@@ -7,41 +7,61 @@ import {
 import {RuleAiBox} from "./metadata-views.js";
 import {ffDescribeObject} from "../shared/describe.js";
 import {apexHighlight} from "../shared/highlight.js";
+import {openCodeViewer} from "../shared/code-view.js";
 import {CMDT_FIELD_TYPES, toApiName} from "../../core/cmdt.js";
 import {hasValidConfig} from "../../llm/llm-service.js";
-import {lwcFromText, reviseDraftFromText} from "../shared/ai.js";
+import {lwcFromText, codeFromText, reviseDraftFromText} from "../shared/ai.js";
 
 const h = React.createElement;
 
 const NO_AI = "AI needs a provider + API key (Settings).";
 const aiError = e => (e && e.message === "NO_LLM_CONFIG" ? NO_AI : (e && e.message) || String(e));
 
-// New LWC dialog: describe the component, the AI writes the whole bundle.
-function LwcAiBox({form, onResult}) {
+// New dialog: describe it and the AI writes the files (LWC, Apex class,
+// trigger, Visualforce page, Aura component). Nothing is deployed here.
+const AI_WRITE = {
+  lwc: {button: "✨ Write component", wait: "Writing HTML, JS, CSS and any Apex it needs…",
+    placeholder: "e.g. Card on the Account page listing open Cases with a New Case button", nameRe: /^[a-z][A-Za-z0-9]*$/},
+  apex: {button: "✨ Write class", wait: "Writing the class (and a test class)…",
+    placeholder: "e.g. Service that closes Opportunities older than 90 days, with a test class"},
+  triggers: {button: "✨ Write trigger", wait: "Writing the trigger and its handler…",
+    placeholder: "e.g. When a Case is set to High priority, assign it to the Escalations queue"},
+  pages: {button: "✨ Write page", wait: "Writing the page…",
+    placeholder: "e.g. Printable invoice page for an Account with its open Opportunities as PDF"},
+  aura: {button: "✨ Write component", wait: "Writing markup, controller, helper and any Apex it needs…",
+    placeholder: "e.g. Record page card showing the Account contacts with a search box"},
+};
+
+function AiWriteBox({kind, form, onResult}) {
+  const cfg = AI_WRITE[kind];
   const [ask, setAsk] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const nameOk = /^[a-z][A-Za-z0-9]*$/.test(form.name || "");
+  const nameOk = (cfg.nameRe || /^[A-Za-z][A-Za-z0-9_]*$/).test(form.name || "");
+  const needsObject = kind === "triggers" && !/^[A-Za-z][A-Za-z0-9_]*$/.test(form.object || "");
+  const ready = nameOk && !needsObject;
   const run = async () => {
     if (!hasValidConfig()) { setError(NO_AI); return; }
     setBusy(true);
     setError(null);
     try {
-      onResult(await lwcFromText(ask, {name: form.name, label: form.label, object: form.object,
-        apiVersion: form.apiVersion, targets: form.targets}));
+      onResult(kind === "lwc"
+        ? await lwcFromText(ask, {name: form.name, label: form.label, object: form.object, apiVersion: form.apiVersion, targets: form.targets})
+        : await codeFromText(kind, ask, form));
     } catch (e) { setError(aiError(e)); }
     finally { setBusy(false); }
   };
   return h("div", {className: "mdv-ai"},
     h("div", {className: "mdv-ai-h"}, "✨ Build with AI"),
     h("div", {className: "soql-save-row"},
-      h("input", {className: "soql-save-input", value: ask, "aria-label": "Describe the component",
-        placeholder: "e.g. Card on the Account page listing open Cases with a New Case button",
-        onChange: e => setAsk(e.target.value), onKeyDown: e => { if (e.key === "Enter" && ask.trim() && nameOk && !busy) run(); }}),
-      h("button", {className: "btn btn-primary btn-sm", disabled: !ask.trim() || !nameOk || busy, onClick: run},
-        busy ? "Writing…" : "✨ Write component")),
-    !nameOk && h("div", {className: "insp-meta"}, "Enter the component name first; the AI uses it for the files and class."),
-    busy && h("div", {className: "insp-meta"}, "Writing HTML, JS, CSS and any Apex it needs… this can take a little while."),
+      h("input", {className: "soql-save-input", value: ask, "aria-label": "Describe what to build",
+        placeholder: cfg.placeholder,
+        onChange: e => setAsk(e.target.value), onKeyDown: e => { if (e.key === "Enter" && ask.trim() && ready && !busy) run(); }}),
+      h("button", {className: "btn btn-primary btn-sm", disabled: !ask.trim() || !ready || busy, onClick: run},
+        busy ? "Writing…" : cfg.button)),
+    !nameOk && h("div", {className: "insp-meta"}, "Enter the name first; the AI uses it for the files and class names."),
+    nameOk && needsObject && h("div", {className: "insp-meta"}, "Pick the object first; the trigger runs on it."),
+    busy && h("div", {className: "insp-meta"}, cfg.wait + " this can take a little while."),
     error && h("div", {className: "insp-error"}, error));
 }
 
@@ -89,23 +109,26 @@ const DESCRIPTION = {key: "description", label: "Description", type: "textarea",
 export const NEW_FORMS = {
   apex: {title: "New Apex Class", defaults: {template: "empty"}, fields: [
     NAME("Class Name", "PascalCase, e.g. InvoiceService"),
-    {key: "template", label: "Template", type: "select", options: APEX_TEMPLATES},
+    {key: "ai", type: "aiwrite", wide: true},
+    {key: "template", label: "Template", type: "select", options: APEX_TEMPLATES, showIf: f => !f.aiFiles},
     VERSION]},
   triggers: {title: "New Apex Trigger", defaults: {events: ["before insert", "before update"], handler: true}, fields: [
     NAME("Trigger Name", "e.g. AccountTrigger"),
     {key: "object", label: "Object", type: "object", required: true, placeholder: "e.g. Account"},
-    {key: "events", label: "Events", type: "multi", options: TRIGGER_EVENTS.map(e => [e, e]), placeholder: "Select events"},
+    {key: "ai", type: "aiwrite", wide: true},
+    {key: "events", label: "Events", type: "multi", options: TRIGGER_EVENTS.map(e => [e, e]), placeholder: "Select events", showIf: f => !f.aiFiles},
     VERSION,
-    {key: "checks", type: "checks", wide: true, items: [["handler", "Also create a handler class (recommended)"]]}]},
+    {key: "checks", type: "checks", wide: true, items: [["handler", "Also create a handler class (recommended)"]], showIf: f => !f.aiFiles}]},
   pages: {title: "New Visualforce Page", defaults: {}, fields: [
     NAME("Page Name", "e.g. InvoicePdf"),
     {key: "label", label: "Label", type: "text", placeholder: "Shown in Setup"},
     {key: "controller", label: "Standard controller", type: "object", placeholder: "Optional, e.g. Account"},
+    {key: "ai", type: "aiwrite", wide: true},
     VERSION]},
   lwc: {title: "New Lightning Web Component", defaults: {template: "card", exposed: true, targets: LWC_TEMPLATE_TARGETS.card, css: false, svg: false, fields: "Name"}, fields: [
     NAME("Component Name", "camelCase, e.g. accountCard"),
     {key: "label", label: "Master Label", type: "text", placeholder: "Shown in builders"},
-    {key: "ai", type: "ailwc", wide: true},
+    {key: "ai", type: "aiwrite", wide: true},
     {key: "template", label: "Start from", type: "select", options: LWC_TEMPLATES, wide: true, showIf: f => !f.aiFiles},
     {key: "object", label: "Object", type: "object", required: true, placeholder: "e.g. Account", showIf: f => !f.aiFiles && TEMPLATES_NEEDING_OBJECT.has(f.template)},
     {key: "fields", label: "Fields", type: "text", placeholder: "API names, e.g. Name, Industry, Phone", showIf: f => !f.aiFiles && TEMPLATES_NEEDING_OBJECT.has(f.template)},
@@ -116,9 +139,10 @@ export const NEW_FORMS = {
   aura: {title: "New Aura Component", defaults: {template: "card", interfaces: ["flexipage:availableForAllPageTypes"], fields: "Name"}, fields: [
     NAME("Component Name", "e.g. accountSummary"),
     {key: "label", label: "Label", type: "text", placeholder: "Shown in builders"},
-    {key: "template", label: "Start from", type: "select", options: AURA_TEMPLATES, wide: true},
-    {key: "object", label: "Object", type: "object", required: true, placeholder: "e.g. Account", showIf: f => TEMPLATES_NEEDING_OBJECT.has(f.template)},
-    {key: "fields", label: "Fields", type: "text", placeholder: "API names, e.g. Name, Industry, Phone", showIf: f => TEMPLATES_NEEDING_OBJECT.has(f.template)},
+    {key: "ai", type: "aiwrite", wide: true},
+    {key: "template", label: "Start from", type: "select", options: AURA_TEMPLATES, wide: true, showIf: f => !f.aiFiles},
+    {key: "object", label: "Object", type: "object", required: true, placeholder: "e.g. Account", showIf: f => !f.aiFiles && TEMPLATES_NEEDING_OBJECT.has(f.template)},
+    {key: "fields", label: "Fields", type: "text", placeholder: "API names, e.g. Name, Industry, Phone", showIf: f => !f.aiFiles && TEMPLATES_NEEDING_OBJECT.has(f.template)},
     {key: "interfaces", label: "Implements", type: "multi", options: AURA_INTERFACES.map(t => [t, t]), placeholder: "Select interfaces", search: true},
     VERSION,
     {key: "checks", type: "checks", wide: true, items: [["style", "include Style (CSS)?"]]},
@@ -240,16 +264,20 @@ function NewDialog({kind, versions, objects, onClose, onCreate, onDeploy, busy, 
         }}),
         aiNote && h("div", {className: "insp-fix-why mdv-ai-note"}, "✨ " + aiNote));
     }
-    if (fd.type === "ailwc") {
+    if (fd.type === "aiwrite") {
       const n = form.aiFiles ? form.aiFiles.length : 0;
       return h("div", {key: fd.key, className: "mdn-field mdn-wide"},
-        h(LwcAiBox, {form, onResult: r => {
-          setForm(f => ({...f, aiFiles: r.files,
-            label: f.label || r.label,
-            description: f.description || r.description,
-            exposed: r.targets.length ? true : f.exposed,
-            targets: !targetsPicked.current && r.targets.length ? r.targets : f.targets,
-            css: r.files.some(x => x.format === "css")}));
+        h(AiWriteBox, {kind, form, onResult: r => {
+          setForm(f => (kind === "lwc"
+            ? {...f, aiFiles: r.files,
+              label: f.label || r.label,
+              description: f.description || r.description,
+              exposed: r.targets.length ? true : f.exposed,
+              targets: !targetsPicked.current && r.targets.length ? r.targets : f.targets,
+              css: r.files.some(x => x.format === "css")}
+            : {...f, aiFiles: r.files,
+              label: kind === "pages" || kind === "aura" ? f.label || r.label : f.label,
+              description: f.description || r.description}));
           setAiNote(r.explanation);
         }}),
         form.aiFiles && h("div", {className: "insp-fix-why mdv-ai-note"},
@@ -390,7 +418,11 @@ function DraftEditor({draft, onChange, onDeploy, onDiscard, busy, error}) {
     h("div", {className: "sq3-card-h"},
       h("span", {className: "sq3-card-t"}, draft.title),
       h(FFBadgeNew, null),
-      h("span", {className: "insp-meta mdn-editor-kind"}, NEW_FORMS[draft.kind].title.replace(/^New /, ""))),
+      h("span", {className: "insp-meta mdn-editor-kind"}, NEW_FORMS[draft.kind].title.replace(/^New /, "")),
+      h("button", {className: "btn btn-secondary btn-sm", title: "Open these files in a new browser tab, full screen",
+        onClick: () => openCodeViewer({title: draft.title, subtitle: `Draft · ${NEW_FORMS[draft.kind].title.replace(/^New /, "")} · not deployed`,
+          files: draft.files.map(x => ({path: x.path, lang: x.lang === "apex" || x.lang === "js" ? x.lang : "text", content: x.content}))})
+      }, "⛶ Full screen ↗")),
     h("div", {className: "mdn-editor-body"},
       h("div", {className: "mdn-tree", role: "tablist", "aria-label": "Files"},
         h("div", {className: "mdn-tree-folder", title: folder || draft.name}, "▾ " + (folder || draft.name)),
