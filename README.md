@@ -10,8 +10,6 @@ full Salesforce inspector — build custom objects from natural language, then r
 Apex, manage users, read debug logs, export data to CSV and inspect your org without leaving
 the page.
 
-Session handling builds on ideas from [Salesforce Inspector Reloaded](https://github.com/tprouvot/Salesforce-Inspector-reloaded) (MIT licensed — see `LICENSE` and `THIRD-PARTY-NOTICES.md`). SaralForce is an independent project by Bhajan Mandali and is not affiliated with, sponsored, or endorsed by Salesforce, Inc.
-
 ## FAQ
 
 **What is SaralForce?**
@@ -260,7 +258,66 @@ debug-log analysis.
 
 ## What's New
 
-### Unreleased (v2 branch)
+### v2.0.0
+- **Readable metadata details** — every item opens on an Overview instead of plain text:
+  Apex shows its declaration (sharing, interfaces, annotations), counters (SOQL, DML,
+  callouts) and a method list that jumps to the line; triggers show the object, which of
+  the 7 events they run on and the handler they call; Visualforce shows its controller,
+  components and merge fields; source views have line numbers
+- **LWC and Aura bundles** — an Overview of where the component can be used (exposed,
+  targets), public properties, Apex and wire calls, child components and events (Aura:
+  interfaces, attributes, handlers, controller actions), plus a bundle file tree
+- **Validation rules you can read and edit** — highlighted formula with the fields and
+  functions it uses, a preview of the error the user sees, an Active switch, and in-place
+  editing; **✨ Use AI** writes or changes the formula, message and error field from plain
+  English using the object's real fields (also in New → Validation Rule)
+- **Build LWCs with AI** — in New → LWC, describe the component and **✨ Write component**
+  creates the HTML, JS, CSS, targets and any Apex controller it needs, using your org's real
+  fields; the bundle is checked (template root, class name, Apex imports, no innerHTML) and
+  opens in the editor for review. In the editor, **✨ Ask AI to change** edits any draft
+  (Apex, trigger, page, LWC, Aura), **✨ Fix with AI** sends a failed deploy's error back,
+  and **Undo AI change** restores the previous files. Nothing deploys until you press Deploy
+- **Real starter templates** — new LWCs start from a basic card, record details, record
+  form, Apex data table with search (controller and test class included) or a quick action;
+  Aura has card, record details, quick action and Apex data table
+- **Custom Metadata Types** in Metadata — browse types with all their fields and record
+  values, **edit records in place** and save them together, delete records, add a record,
+  create a new type with fields (Metadata API), download records as CSV and add types or
+  single records to package.xml
+- **Tool tabs in two rows** — data and code tools on top, admin tools below, divided by a
+  glass line, instead of one row that scrolls sideways
+- **Access → Approvals** — your approval inbox (direct and through queues), every pending
+  request in the org, and what you submitted; Approve or Reject with an optional comment
+  (asks first), and submit a recently viewed record for approval. Access now has a small
+  menu: Compare · Risky access · Approvals
+- **Metadata → New** — create an Apex class (9 templates: service, batch, queueable,
+  schedulable, invocable, REST, controller, test …), a trigger with an optional handler
+  class, a Visualforce page, a Lightning Web Component (name, label, isExposed, CSS/SVG,
+  searchable targets, API version, description), an Aura component, a flow (autolaunched,
+  record-triggered, screen or scheduled, saved as a draft) or a validation rule. **Create**
+  opens the generated files in an editor (drafts are kept in this browser); **Deploy**
+  creates them through the Tooling API, cleaning up if a step fails. Apex can only be
+  created in sandboxes and developer orgs
+- **Flows are readable** — a flow now shows what starts it, then every step in order with
+  plain-words details and where each decision branch goes; switch versions, see the outline
+  or the raw metadata
+- **Metadata look refreshed** — kind chips with icons and counts, coloured icon tiles in
+  lists, a clearer detail header and empty states
+- **Users search as you type** — the list narrows on every keystroke and the org is
+  searched after a short pause, so users beyond the first page are found too; Esc clears
+- **Access tab** — compare 2 to 5 profiles, permission sets or groups side by side
+  (system, object, tab and app permissions, "only differences", CSV download), and a
+  **Risky Access Audit** listing active users with powerful permissions such as Modify All
+  Data or Author Apex and what grants them, with an optional AI summary
+- **Users: assign and remove permission sets and groups** (removal asks first), plus an
+  **Access Check** sub-tab that answers "why can this user see this object, field or
+  system permission?" by listing every profile, set and group that grants it. Cloning a
+  user now copies permission set group assignments correctly
+- **Metadata tab** — browse Apex classes, triggers, Visualforce, LWC, Aura, flows (with
+  versions) and validation rules; read the source, open it in Setup, and **✨ Explain** it in
+  plain words. **Schema** shows every field with type details, picklists and formulas,
+  who can read or edit a field, where a custom field is used, and a relationship diagram.
+  Add items to a **package.xml** basket, or download an object's schema as JSON
 - **SOQL autocomplete** — suggestions appear as you type in the SOQL editor: objects after
   FROM, fields, relationship paths such as `Owner.Profile.Name` (any depth Salesforce allows),
   child relationships inside sub-queries, `FIELDS(ALL)` and clause keywords. Arrow keys
@@ -492,7 +549,7 @@ sf-object-creator/
 - API keys are stored locally in your browser (`localStorage`) and never sent anywhere except the LLM provider you configured
 - The extension communicates directly with Salesforce APIs using your existing session
 - Only your natural language descriptions are sent to LLM providers - object/field data stays in your org unless you paste it into the chat
-- Same authentication model as Salesforce Inspector Reloaded (OAuth2 PKCE + session cookies)
+- Signs in with OAuth2 PKCE or your existing Salesforce session cookie
 
 ## Permissions
 
@@ -520,6 +577,8 @@ npm run copy-react
 
 ## License
 
-MIT License — see `LICENSE`. Session/auth code derives in part from
-Salesforce-Inspector-reloaded (MIT © 2023 Thomas Prouvot); see
-`THIRD-PARTY-NOTICES.md` for full attribution.
+MIT License — see `LICENSE`. Includes third-party open-source code; see
+`THIRD-PARTY-NOTICES.md` for attributions.
+
+SaralForce is an independent project by Bhajan Mandali and is not affiliated with,
+sponsored, or endorsed by Salesforce, Inc.

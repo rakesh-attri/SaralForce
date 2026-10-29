@@ -17,7 +17,7 @@ import pixelmatch from "pixelmatch";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const shotsDir = path.join(root, "test", "visual");
 const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8321";
-const TABS = ["records", "soql", "apex", "export", "import", "users", "logs", "org", "apptabs", "coverage"];
+const TABS = ["records", "soql", "apex", "export", "import", "users", "access", "metadata", "logs", "org", "apptabs", "coverage"];
 const THEMES = ["light", "dark"];
 const FROZEN_TIME = new Date("2026-10-28T10:00:00Z");
 

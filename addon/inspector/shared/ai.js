@@ -1,6 +1,8 @@
 import {askAi, askAiJson} from "../../core/llm.js";
 import {ffDescribeObject, ffGetObjects} from "./describe.js";
 import {pickObjectsForPrompt} from "../../core/soql-complete.js";
+import {normalizeBundleReply, checkLwcBundle, bundleForPrompt, mergeRevision} from "../../core/lwc-ai.js";
+import {pascalCase, LWC_TARGETS} from "../../core/metadata-templates.js";
 
 const SOQL_FIX_SYSTEM =
   "You are a Salesforce SOQL expert helping a beginner. " +
@@ -112,6 +114,152 @@ function explainSoql(query, {signal} = {}) {
   return askAi({system: SOQL_EXPLAIN_SYSTEM, user: q.slice(0, 8000), signal});
 }
 
+const METADATA_EXPLAIN_SYSTEM =
+  "You are a senior Salesforce developer explaining org metadata to an admin. Given one component " +
+  "(an Apex class or trigger, a Flow outline, a validation rule, a Visualforce page or a Lightning component), " +
+  "write these sections in CAPITALS: WHAT IT DOES, WHEN IT RUNS, DATA IT TOUCHES, RISKS. " +
+  "Plain words, short bullet lines, no code blocks, no markdown tables. Say so when something is unclear from the source.";
+
+const VALIDATION_RULE_SYSTEM =
+  "You are a Salesforce admin expert writing validation rules. The formula must evaluate to TRUE when the record is INVALID " +
+  "(that blocks the save). Use only field API names from the schema given; use ISPICKVAL/TEXT for picklists, ISBLANK for empty " +
+  "checks, ISNEW/ISCHANGED/PRIORVALUE where the request implies create or change, $Profile.Name or $Permission for bypasses when asked. " +
+  "Keep it as simple as possible. Reply with ONLY a JSON object: " +
+  '{"ruleName": "<API name, letters digits underscores>", "formula": "<formula>", "errorMessage": "<message shown to the user>", ' +
+  '"errorDisplayField": "<field API name to show the error on, or empty for top of page>", "description": "<one sentence>", ' +
+  '"explanation": "<one plain sentence of when it blocks the save>"}';
+
+// Plain English → validation rule for an object. Returns the parsed JSON.
+async function validationRuleFromText(objectName, request, {current, signal} = {}) {
+  const text = String(request || "").trim();
+  if (!text) throw new Error("Describe what the rule should prevent.");
+  let schema = "";
+  try { schema = describeForPrompt(await ffDescribeObject(objectName)); }
+  catch (e) { schema = `(Could not describe ${objectName}: ${e.message})`; }
+  const parsed = await askAiJson({
+    system: VALIDATION_RULE_SYSTEM,
+    user: `Object: ${objectName}\nRequest: ${text}` + (current ? `\nCurrent formula (improve it): ${current}` : "") + `\n\n${schema}`,
+    validate: o => (String(o.formula || "").trim() ? null : "The JSON has no formula."),
+    signal
+  });
+  return {
+    ruleName: String(parsed.ruleName || "").replace(/[^A-Za-z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""),
+    formula: String(parsed.formula).trim(),
+    errorMessage: String(parsed.errorMessage || ""),
+    errorDisplayField: String(parsed.errorDisplayField || ""),
+    description: String(parsed.description || ""),
+    explanation: String(parsed.explanation || ""),
+  };
+}
+
+const LWC_RULES =
+  "LWC rules: the HTML root is <template>; the JS is `import { LightningElement, api, wire } from 'lwc'` and " +
+  "`export default class <ClassName> extends LightningElement`. Prefer lightning base components (lightning-card, " +
+  "lightning-datatable, lightning-record-form, lightning-input, lightning-button) and SLDS utility classes. On record pages " +
+  "use `@api recordId` and `@api objectApiName`. Read single records with lightning/uiRecordApi (getRecord, getFieldValue) " +
+  "and only add Apex when a query is needed. Apex classes are `public with sharing`, methods `@AuraEnabled(cacheable=true)` " +
+  "for reads, use WITH SECURITY_ENFORCED, bind variables, and LIMIT. Import Apex as `import m from '@salesforce/apex/Class.method'`. " +
+  "Show errors with lightning/platformShowToastEvent. No innerHTML, eval, <script>, external libraries or hard-coded ids. " +
+  "CSS is scoped to the component (use :host). Use only field API names from the schema given.";
+
+const LWC_FROM_TEXT_SYSTEM =
+  "You are a senior Salesforce Lightning Web Components developer. Write ONE complete, deployable component from the request. " +
+  LWC_RULES + " Reply with ONLY a JSON object: " +
+  '{"label": "<master label>", "description": "<one sentence>", "targets": ["lightning__RecordPage", ...], ' +
+  '"files": {"html": "<file>", "js": "<file>", "css": "<file or empty>"}, ' +
+  '"apex": [{"name": "<ClassName>", "body": "<full class>"}] (or [] when no Apex is needed), ' +
+  '"explanation": "<two plain sentences: what it shows and where to add it>"}';
+
+const DRAFT_REVISE_SYSTEM =
+  "You are a senior Salesforce developer editing a draft before it is deployed. Apply the request (or fix the Salesforce " +
+  "deploy error) with the smallest correct change and keep everything else as it is. " + LWC_RULES +
+  " Reply with ONLY a JSON object: " +
+  '{"files": {"<path exactly as given>": "<the FULL new content of that file>"}, "explanation": "<one or two plain sentences>"} ' +
+  "Include only files you changed. You may add an Apex class as classes/<Name>.cls or a missing css/svg file of the component.";
+
+async function schemaForRequest(object, request) {
+  let names = object ? [object] : [];
+  if (!names.length) {
+    try { names = pickObjectsForPrompt(request, await ffGetObjects(), 2); } catch (e) { names = []; }
+  }
+  const parts = [];
+  for (const n of names) {
+    try { parts.push(describeForPrompt(await ffDescribeObject(n))); } catch (e) { /* schema is a hint only */ }
+  }
+  return parts.join("\n\n");
+}
+
+// Plain English → a whole LWC bundle (html/js/css + Apex when needed).
+// Returns {files, label, description, targets, explanation}; files are
+// draft files without the js-meta.xml. Never deploys anything.
+async function lwcFromText(request, {name, label, object, apiVersion, targets, signal} = {}) {
+  const ask = String(request || "").trim();
+  if (!ask) throw new Error("Describe the component you want first.");
+  if (!/^[a-z][A-Za-z0-9]*$/.test(name || "")) throw new Error("Enter a camelCase component name first, e.g. openCases.");
+  const schema = await schemaForRequest(object, ask);
+  let files = [];
+  const parsed = await askAiJson({
+    system: LWC_FROM_TEXT_SYSTEM,
+    user: `Component folder name: ${name} (JS class ${pascalCase(name)})` +
+      (label ? `\nLabel: ${label}` : "") + (object ? `\nMain object: ${object}` : "") +
+      `\nAPI version: ${apiVersion || "latest"}` + (targets && targets.length ? `\nPreferred targets: ${targets.join(", ")}` : "") +
+      `\nRequest: ${ask}` + (schema ? `\n\n${schema}` : ""),
+    validate: o => {
+      files = normalizeBundleReply(o, name);
+      const problems = checkLwcBundle(files, name);
+      return problems.length ? "Fix these problems: " + problems.join(" ") : null;
+    },
+    signal
+  });
+  return {
+    files,
+    label: String(parsed.label || "").trim(),
+    description: String(parsed.description || "").trim(),
+    targets: (Array.isArray(parsed.targets) ? parsed.targets : []).filter(t => LWC_TARGETS.includes(t)),
+    explanation: String(parsed.explanation || "").trim(),
+  };
+}
+
+// Change a draft from an instruction, or fix it from a deploy error.
+// Returns {draft, changed: [paths], explanation}.
+async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
+  const ask = String(instruction || "").trim();
+  if (!ask && !error) throw new Error("Describe the change first.");
+  const editable = new Set(draft.files.filter(x => !x.generated && !x.readOnly).map(x => x.path));
+  let merged = draft;
+  let changed = [];
+  const parsed = await askAiJson({
+    system: DRAFT_REVISE_SYSTEM,
+    user: `Kind: ${draft.kind}\nName: ${draft.name}\n` +
+      (ask ? `Request: ${ask}\n` : "") + (error ? `Salesforce deploy error to fix: ${error}\n` : "") +
+      `\nCurrent files:\n${bundleForPrompt(draft.files)}`.slice(0, 60000),
+    validate: o => {
+      const files = o && o.files && typeof o.files === "object" ? o.files : null;
+      if (!files || !Object.keys(files).length) return "The JSON has no changed files.";
+      merged = mergeRevision(draft, files);
+      changed = merged.files.filter(x => {
+        const before = draft.files.find(y => y.path === x.path);
+        return !before || before.content !== x.content;
+      }).map(x => x.path).filter(p => editable.has(p) || !draft.files.some(y => y.path === p));
+      if (!changed.length) return "None of the returned files changed an editable file of this draft; use the exact paths given.";
+      if (draft.kind === "lwc") {
+        const problems = checkLwcBundle(merged.files, draft.name);
+        if (problems.length) return "The result still has problems: " + problems.join(" ");
+      }
+      return null;
+    },
+    signal
+  });
+  return {draft: merged, changed, explanation: String(parsed.explanation || "").trim()};
+}
+
+// Plain-words explanation of one metadata component. Never changes anything.
+function explainMetadata(kind, name, source, {signal} = {}) {
+  const text = String(source || "").slice(0, 15000);
+  if (!text.trim()) return Promise.reject(new Error("Nothing to explain: the source is empty."));
+  return askAi({system: METADATA_EXPLAIN_SYSTEM, user: `${kind}: ${name}\n\n${text}`, signal});
+}
+
 // Ask the Options-configured LLM to review Apex for compile errors BEFORE a run
 // (or after Salesforce rejects it). Never executes anything itself.
 // Returns {ok, error, line, explanation, fixedCode}.
@@ -140,4 +288,4 @@ function logsAskLlm(systemPrompt, userText, {signal} = {}) {
   return askAi({system: systemPrompt, user: userText, signal});
 }
 
-export {suggestSoqlFix, soqlFromText, explainSoql, apexAiCheck, logsAskLlm};
+export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, validationRuleFromText, lwcFromText, reviseDraftFromText, apexAiCheck, logsAskLlm};

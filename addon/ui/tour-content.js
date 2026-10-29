@@ -7,7 +7,7 @@ export const PANEL_TOUR = {
   id: "panel",
   steps: [
     {title: "Welcome to SaralForce", body: "Your Salesforce toolkit lives in this panel: an AI object builder plus inspector tools for data, code and admin work. This quick tour shows you around. It takes under a minute."},
-    {target: "[data-tour=inspector-tabs]", title: "Your tools", body: "Each tab is a tool: Records, SOQL, Run Apex, Export, Import, Users, Logs, Org info, App tabs and Code coverage. Click any tab to switch.", placement: "bottom"},
+    {target: "[data-tour=inspector-tabs]", title: "Your tools", body: "Each tab is a tool: Records, SOQL, Run Apex, Export, Import, Users, Access, Metadata, Logs, Org info, App tabs and Code coverage. Click any tab to switch.", placement: "bottom"},
     tabStep("records", "Records", "Shows the record or list you have open in Salesforce: every field, related lookups, and edit in place."),
     tabStep("soql", "SOQL", "Write and run queries with a field explorer and history. If a query fails, AI can explain the error and suggest a fix."),
     tabStep("logs", "Debug logs", "Load debug logs for any user and get a plain-English AI summary of what happened and what went wrong."),
@@ -33,7 +33,9 @@ const TAB_TOURS = {
   apex: ["Run Apex", "Run anonymous Apex and read the debug log right below. Select a few lines and use Execute Highlighted to run only those. With Use AI on, code is checked for compile errors first."],
   export: ["Export", "Build a query or pick an object, preview the rows, then download CSV, Excel or JSON. Bulk API handles very large exports."],
   import: ["Import", "Drop in a CSV, map columns to fields, and validate before you run. Deletes always ask for confirmation, and result files show every success and failure."],
-  users: ["Users", "Search users, inspect permissions and login history, log in as a user, or clone one with the same access. Reset and freeze actions ask before they run."],
+  users: ["Users", "Type to search users as you go. Inspect and assign permission sets, check why a user can see an object or field, log in as a user, or clone one with the same access. Reset, freeze and removals ask before they run."],
+  access: ["Access", "Compare up to five profiles or permission sets side by side, audit who holds powerful permissions such as Modify All Data, and work your approval inbox: approve, reject or submit records."],
+  metadata: ["Metadata", "Browse Apex, triggers, pages, components, flows, validation rules and custom metadata, read their source, and ask AI to explain them. Schema shows an object's fields, relationships and field access. Use New to start an Apex class, trigger, page, LWC, Aura component, flow or validation rule from a working template (or describe an LWC and let AI write it), edit it, ask AI for changes, then deploy. Add items to a package.xml."],
   logs: ["Debug logs", "Turn on logging for a user, load recent logs, and use AI Quick Analysis for a plain-English summary. Ask AI lets you ask questions about one log."],
   org: ["Org info", "Storage, API limits, recent setup changes and login history at a glance, plus an optional AI hygiene check."],
   apptabs: ["App tabs", "Add, reorder or remove tabs in a Lightning app, and control which profiles can see them."],
@@ -65,6 +67,18 @@ export const SETTINGS_TOUR = {
 
 // Highlights per release, shown once after an update (newest first).
 export const RELEASE_NOTES = [
+  {
+    version: "2.0.0",
+    title: "SaralForce 2.0",
+    items: [
+      "New Metadata tab: readable overviews of Apex, triggers, pages, LWC and Aura bundles, flows, validation rules and custom metadata, plus New from real templates.",
+      "Validation rules: edit in place, switch on or off, and let AI write the formula.",
+      "New Access tab: compare profiles and permission sets, audit risky access, and approve or reject requests.",
+      "SOQL autocomplete as you type, plain English to SOQL, and paging through every fetched row.",
+      "Users: live search, assign or remove permission sets, and a 'why can this user see it?' check.",
+      "Flows now read step by step, and tools are grouped in two rows."
+    ]
+  },
   {
     version: "1.7.0",
     title: "What's new in SaralForce",
