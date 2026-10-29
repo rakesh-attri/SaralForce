@@ -2,6 +2,7 @@
 // JSON reply to draft files, check the bundle before showing it, and turn
 // a draft into prompt text for edit requests. No chrome/window/DOM access.
 import {pascalCase} from "./metadata-templates.js";
+import {normalizeCodeReply, AI_CODE_KINDS} from "./code-ai.js";
 
 const APEX_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
 
@@ -95,6 +96,13 @@ export function mergeRevision(draft, changed) {
     const c = text(changed[x.path]);
     return c.trim() ? {...x, content: c.endsWith("\n") ? c : c + "\n"} : x;
   });
+  if (AI_CODE_KINDS.includes(draft.kind)) {
+    // New files only where the kind allows them (extra Apex classes, Aura
+    // definitions), with the same roles a fresh AI draft would get.
+    const added = normalizeCodeReply(draft.kind, {files: changed}, name)
+      .filter(x => !files.some(y => y.path === x.path));
+    files.push(...added);
+  }
   if (draft.kind === "lwc") {
     for (const [path, content] of Object.entries(changed)) {
       if (files.some(x => x.path === path) || !text(content).trim()) continue;

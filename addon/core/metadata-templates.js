@@ -745,14 +745,15 @@ export function validateForm(kind, form) {
   if ((kind === "triggers" || kind === "rules" || (kind === "flows" && f.flowKind === "record")) && !OBJECT_RE.test(f.object || "")) {
     errors.object = "Pick the object.";
   }
-  if (kind === "triggers" && !(f.events && f.events.length)) errors.events = "Pick at least one event.";
+  // An AI draft brings its own events/template choices.
+  const aiBundle = Array.isArray(f.aiFiles) && f.aiFiles.length > 0;
+  if (kind === "triggers" && !aiBundle && !(f.events && f.events.length)) errors.events = "Pick at least one event.";
   if (kind === "flows" && !String(f.label || "").trim()) errors.label = "Label is required.";
   if (kind === "rules") {
     if (!String(f.formula || "").trim()) errors.formula = "Formula is required.";
     if (!String(f.message || "").trim()) errors.message = "Error message is required.";
   }
   if (kind === "lwc" && f.exposed && !(f.targets && f.targets.length)) errors.targets = "Exposed components need at least one target.";
-  const aiBundle = kind === "lwc" && Array.isArray(f.aiFiles) && f.aiFiles.length > 0;
   if ((kind === "lwc" || kind === "aura") && !aiBundle && TEMPLATES_NEEDING_OBJECT.has(f.template) && !OBJECT_RE.test(f.object || "")) {
     errors.object = "This template needs an object.";
   }
@@ -774,6 +775,14 @@ export function buildDraft(kind, form) {
   const f = {...form};
   const name = f.name;
   const base = {kind, name, form: f, createdAt: Date.now()};
+  // An AI-written Apex class / trigger / page / Aura component replaces the
+  // template; LWC handles its generated meta file below.
+  if (kind !== "lwc" && Array.isArray(f.aiFiles) && f.aiFiles.length) {
+    const form = {...f};
+    delete form.aiFiles;
+    const title = kind === "apex" ? `${name}.cls` : kind === "triggers" ? `${name}.trigger` : kind === "pages" ? `${name}.page` : name;
+    return {...base, form, title, files: f.aiFiles.map(x => ({...x}))};
+  }
   switch (kind) {
   case "apex":
     return {...base, title: `${name}.cls`, files: [{path: `classes/${name}.cls`, lang: "apex", content: apexClassSource(name, f.template)}]};

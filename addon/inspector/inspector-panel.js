@@ -13,6 +13,7 @@ import {LogsTab} from "./tabs/logs.js";
 import {CoverageTab} from "./tabs/coverage.js";
 import {AccessTab} from "./tabs/access.js";
 import {MetadataTab} from "./tabs/metadata.js";
+import {metadataTargetFromUrl} from "./shared/inspector-tab.js";
 
 const h = React.createElement;
 
@@ -43,6 +44,8 @@ export function InspectorPanel() {
   // App Tab Manager tab (the manager consumes the payload on mount).
   React.useEffect(() => {
     if (ffHasAppTabPrefill()) setTab("apptabs");
+    // Metadata "Full screen" opens this tab straight on the Metadata tool.
+    else if (metadataTargetFromUrl()) setTab("metadata");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const tabs = INSPECTOR_TABS;

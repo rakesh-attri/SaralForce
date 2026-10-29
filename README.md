@@ -29,6 +29,8 @@ Microsoft Edge (install from the Edge Add-ons store) and Google Chrome (Chrome W
 
 ## Features
 
+> **Full feature guide:** see [docs/FEATURES.md](docs/FEATURES.md) for every tool, what it can view and change, and step-by-step details.
+
 - **Natural Language Object Design**: Describe what data you want to capture in plain English, and the AI proposes a complete Salesforce object with fields
 - **Multi-LLM Support**: Works with OpenAI, Anthropic Claude, Google Gemini, OpenRouter, and any OpenAI-compatible API (OpenCodeZen, etc.)
 - **Interactive Refinement**: Chat with the AI to modify the proposal - add fields, change types, adjust properties
@@ -277,6 +279,12 @@ debug-log analysis.
   opens in the editor for review. In the editor, **✨ Ask AI to change** edits any draft
   (Apex, trigger, page, LWC, Aura), **✨ Fix with AI** sends a failed deploy's error back,
   and **Undo AI change** restores the previous files. Nothing deploys until you press Deploy
+- **Build Apex, triggers, pages and Aura with AI too** — the same **✨ Build with AI** box in
+  New → Apex class (writes the class plus a test class), Trigger (a thin trigger plus a
+  handler class), Visualforce page (and a controller only if needed) and Aura component
+  (markup, controller, helper, CSS and any Apex). Each draft is checked before you see it
+  (class names, balanced braces, trigger name and object, page and component roots) and
+  deploys in the right order: handlers and controllers first, test classes after their class
 - **Real starter templates** — new LWCs start from a basic card, record details, record
   form, Apex data table with search (controller and test class included) or a quick action;
   Aura has card, record details, quick action and Apex data table

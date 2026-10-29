@@ -98,6 +98,10 @@
                     u += "&openRecId=" + encodeURIComponent(msg.rec.id);
                   }
                 }
+                if (msg && msg.md && /^[a-z]{2,20}$/.test(msg.md.kind || "")) {
+                  u += "&openTab=metadata&mdKind=" + encodeURIComponent(msg.md.kind);
+                  if (/^[\w.:-]{1,120}$/.test(msg.md.id || "")) u += "&mdId=" + encodeURIComponent(msg.md.id);
+                }
                 window.__inspectorUrl = u;
                 try { window.open(u, "_blank"); } catch (e) { /* popup blockers */ }
                 respond({ok: true, url: u});

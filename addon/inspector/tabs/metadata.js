@@ -21,6 +21,10 @@ import {deployDraft, orgApiVersions} from "../shared/metadata-deploy.js";
 import {NewDialog, DraftEditor, withOriginals, fileIcon} from "./metadata-new.js";
 import {CmdtDetail} from "./metadata-cmdt.js";
 import {DETAIL_VIEWS} from "./metadata-views.js";
+import {openMetadataInTab, metadataTargetFromUrl, isInspectorTab} from "../shared/inspector-tab.js";
+
+// True when this page is the inspector opened in its own browser tab.
+const inTab = isInspectorTab();
 import {listCmdtTypes} from "../shared/cmdt-data.js";
 
 const h = React.createElement;
@@ -203,6 +207,7 @@ function flowAiText(steps, summary) {
 function ComponentDetail({kind, row, pkg, onTogglePkg, onChanged}) {
   const View = DETAIL_VIEWS[kind.id];
   const [source, setSource] = React.useState(null);
+
   const [meta, setMeta] = React.useState(null);
   const [versions, setVersions] = React.useState(null);
   const [versionId, setVersionId] = React.useState(null);
@@ -266,7 +271,12 @@ function ComponentDetail({kind, row, pkg, onTogglePkg, onChanged}) {
         kind.id === "flows" ? "Open in Flow Builder ↗" : "Open in Setup ↗"),
       h("button", {className: "btn btn-secondary btn-sm", onClick: () => onTogglePkg(kind.type, name)},
         inPkg ? "✓ In package.xml" : "＋ package.xml"),
-      source && !kind.meta && h("button", {className: "btn btn-secondary btn-sm", onClick: () => safeCopyText(source)}, "Copy source")),
+      source && !kind.meta && h("button", {className: "btn btn-secondary btn-sm", onClick: () => safeCopyText(source)}, "Copy source"),
+      !inTab && h("button", {
+        className: "btn btn-secondary btn-sm",
+        title: "Open the inspector in a new browser tab on this item",
+        onClick: () => openMetadataInTab(kind.id, row.Id)
+      }, "⛶ Full screen ↗")),
     ai.view,
     versions && versions.length > 0 && h("div", {className: "md-versions"},
       h("span", {className: "insp-meta"}, "Version"),
@@ -507,6 +517,17 @@ function MetadataTab() {
   const [deployErr, setDeployErr] = React.useState(null);
   const [notice, setNotice] = React.useState(null);
   const kind = KINDS.find(k => k.id === kindId);
+
+  // Opened via "Full screen": select the kind and item named in the URL once.
+  React.useEffect(() => {
+    const t = metadataTargetFromUrl();
+    if (!t || (!KINDS.some(k => k.id === t.kind) && t.kind !== "schema")) return;
+    setKindId(t.kind);
+    if (!t.id) return;
+    if (drafts.some(d => d.id === t.id)) setDraftId(t.id);
+    else setSelId(t.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const setDrafts = next => { setDraftsState(next); ffSaveJson(DRAFTS_KEY, next); };
 
