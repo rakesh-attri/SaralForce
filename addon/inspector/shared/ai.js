@@ -1,5 +1,6 @@
 import {askAi, askAiJson} from "../../core/llm.js";
-import {ffDescribeObject} from "./describe.js";
+import {ffDescribeObject, ffGetObjects} from "./describe.js";
+import {pickObjectsForPrompt} from "../../core/soql-complete.js";
 
 const SOQL_FIX_SYSTEM =
   "You are a Salesforce SOQL expert helping a beginner. " +
@@ -45,6 +46,72 @@ async function suggestSoqlFix(failedQuery, sfError, {signal} = {}) {
   };
 }
 
+const SOQL_FROM_TEXT_SYSTEM =
+  "You are a Salesforce SOQL expert. Turn the user's request into ONE valid SOQL query. " +
+  "Rules: SELECT-only. Never use SELECT *. Use only objects and field API names from the schema given; " +
+  "parent fields use the relationship name (Owner.Name, Account__r.Name), child sub-queries use the child relationship name. " +
+  "Use date literals (TODAY, LAST_N_DAYS:30, THIS_YEAR) for relative dates. Add LIMIT 200 unless the user asks for a count or another limit; " +
+  "aggregate queries without GROUP BY must never have LIMIT. " +
+  "Reply with ONLY a JSON object: " +
+  '{"query": "<SOQL, single line>", "explanation": "<one plain sentence describing what it returns>"}';
+
+const SOQL_EXPLAIN_SYSTEM =
+  "You are a Salesforce SOQL expert helping an admin. Explain what the query returns in plain words: " +
+  "the object, the filters, sorting and limits, and any relationship or sub-query. " +
+  "Mention anything that could make it slow or fail (non-selective filters on large objects, missing LIMIT). " +
+  "Reply in at most 4 short sentences, no markdown, no code.";
+
+function describeForPrompt(d) {
+  const fields = (d.fields || []).slice(0, 150).map(f => {
+    let s = `${f.name} (${f.type}`;
+    if (f.type === "reference" && f.relationshipName) s += ` → ${(f.referenceTo || []).join("/")} via ${f.relationshipName}`;
+    if (f.type === "picklist" && Array.isArray(f.picklistValues) && f.picklistValues.length) {
+      s += ": " + f.picklistValues.filter(v => v.active !== false).slice(0, 15).map(v => v.value).join("|");
+    }
+    return s + ")";
+  });
+  const kids = (d.childRelationships || []).filter(r => r.relationshipName).slice(0, 30)
+    .map(r => `${r.relationshipName} (${r.childSObject})`);
+  return `Object ${d.name} fields: ${fields.join(", ")}` +
+    (kids.length ? `\nChild relationships of ${d.name}: ${kids.join(", ")}` : "");
+}
+
+// Plain English → SOQL. Sends the schema of the objects the request most
+// likely means (plus the editor's current FROM object) so the model uses
+// real API names. Returns {query, explanation}; never runs anything.
+async function soqlFromText(request, {currentObject, signal} = {}) {
+  const text = String(request || "").trim();
+  if (!text) throw new Error("Describe the records you want first.");
+  let objects = [];
+  try { objects = await ffGetObjects(); } catch (e) { /* schema hint only */ }
+  const picked = pickObjectsForPrompt(text, objects, 2);
+  if (currentObject && !picked.includes(currentObject) && picked.length < 2) picked.push(currentObject);
+  const schema = [];
+  for (const name of picked) {
+    try { schema.push(describeForPrompt(await ffDescribeObject(name))); }
+    catch (e) { /* skip objects we cannot describe */ }
+  }
+  const others = objects.filter(o => !picked.includes(o.name)).slice(0, 300).map(o => o.name);
+  const parsed = await askAiJson({
+    system: SOQL_FROM_TEXT_SYSTEM,
+    user: `Request: ${text}\n\n${schema.join("\n\n") || "(no schema matched)"}` +
+      (others.length ? `\n\nOther queryable objects: ${others.join(", ")}` : ""),
+    validate: o => (/^\s*select\b/i.test(String(o.query || "")) ? null : "The JSON has no SELECT query."),
+    signal
+  });
+  return {
+    query: String(parsed.query).trim(),
+    explanation: String(parsed.explanation || "")
+  };
+}
+
+// Plain-words explanation of a SOQL query.
+function explainSoql(query, {signal} = {}) {
+  const q = String(query || "").trim();
+  if (!q) return Promise.reject(new Error("Enter a SOQL query first."));
+  return askAi({system: SOQL_EXPLAIN_SYSTEM, user: q.slice(0, 8000), signal});
+}
+
 // Ask the Options-configured LLM to review Apex for compile errors BEFORE a run
 // (or after Salesforce rejects it). Never executes anything itself.
 // Returns {ok, error, line, explanation, fixedCode}.
@@ -73,4 +140,4 @@ function logsAskLlm(systemPrompt, userText, {signal} = {}) {
   return askAi({system: systemPrompt, user: userText, signal});
 }
 
-export {suggestSoqlFix, apexAiCheck, logsAskLlm};
+export {suggestSoqlFix, soqlFromText, explainSoql, apexAiCheck, logsAskLlm};
