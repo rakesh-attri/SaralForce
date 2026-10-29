@@ -50,4 +50,11 @@ async function runSoqlMore(nextUrl) {
   return {records, truncated: !!after, nextUrl: after};
 }
 
-export {runSoql, runSoqlMore};
+// Every record of a query (up to the row cap), standard or Tooling API.
+async function queryAll(soql, {tooling = false} = {}) {
+  const base = tooling ? "tooling/query/" : "query/";
+  const {records} = await fetchPages(`/services/data/v${apiVersion}/${base}?q=` + encodeURIComponent(soql));
+  return records;
+}
+
+export {runSoql, runSoqlMore, queryAll};

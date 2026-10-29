@@ -81,19 +81,21 @@ Progress stored per tour id + version in `chrome.storage.local`; a user can dism
 Each wave is its own minor release (2.1, 2.2, …) after 2.0 ships the new shell + tour + fixes.
 
 **Wave A — Query & data (benchmark: BoltForce Smart Query Tools)** — in progress: autocomplete, natural language → SOQL + explain, and result paging / fetch more are done (no design change; AI row shows only with LLM assistance on).
+
+**Follow-ups done:** Access → Approvals; Metadata → New (templates, draft editor, Tooling API deploy); readable flow steps; tool tabs wrap to two lines.
 - Context-aware SOQL autocomplete (objects, fields, relationship paths like `Account.Owner.Name`, `FIELDS()`).
 - Visual query builder (pick fields/filters/order, two-way sync with the editor).
 - **AI: natural language → SOQL** using describe data; explain-this-query.
 - Results in the new `DataGrid`: paging past 20k rows (honest totals), inline edit, mass update/delete with confirmation, clone records.
 - Import parity: sObject Collections batching (200/call), external-ID relationship mapping, saved mappings per object, rollback file for inserts.
 
-**Wave B — Users & access (benchmark: Permission Set Analyzer)**
+**Wave B — Users & access (benchmark: Permission Set Analyzer)** — done: new Access tab (compare 2-5, risky access audit + AI summary), Users assign/remove and Access Check.
 - Compare 2-5 permission sets / profiles side by side; matrix view (object CRUD, FLS, system perms, tabs, apps).
 - Effective user permissions (profile + perm sets + perm set groups), with "why does this user have access to X?".
 - Assign / remove permission sets and groups from the Users tab.
 - **AI: security audit** summarising over-privileged users and risky system permissions.
 
-**Wave C — Metadata & schema**
+**Wave C — Metadata & schema** — done: new Metadata tab (Apex, triggers, Visualforce, LWC, Aura, flows with versions, validation rules; schema with field access, where-used and ER diagram; package.xml + schema JSON; AI explain).
 - Metadata browser (Apex, triggers, Visualforce, LWC/Aura, Flows with versions, validation rules).
 - Object schema viewer with FLS, picklists, formulas, where-used; simple **ER diagram** of an object's relationships.
 - One-click Setup links; export `package.xml` / SFDX-friendly schema + queries (VS Code workflow).

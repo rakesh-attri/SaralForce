@@ -11,6 +11,8 @@ import {UsersTab} from "./tabs/users.js";
 import {ApexTab} from "./tabs/apex.js";
 import {LogsTab} from "./tabs/logs.js";
 import {CoverageTab} from "./tabs/coverage.js";
+import {AccessTab} from "./tabs/access.js";
+import {MetadataTab} from "./tabs/metadata.js";
 
 const h = React.createElement;
 
@@ -23,11 +25,16 @@ export const INSPECTOR_TABS = [
   {id: "export", label: "Export", icon: "📤", component: ExportTab},
   {id: "import", label: "Import", icon: "📥", component: ImportTab},
   {id: "users", label: "Users", icon: "👥", component: UsersTab},
+  {id: "access", label: "Access", icon: "🛡️", component: AccessTab},
+  {id: "metadata", label: "Metadata", icon: "🧩", component: MetadataTab},
   {id: "logs", label: "Logs", icon: "📝", component: LogsTab},
   {id: "org", label: "Org Info", icon: "🏢", component: OrgTab},
   {id: "apptabs", label: "App Tab Manager", icon: "📑", component: AppTabManager},
   {id: "coverage", label: "Code Coverage", icon: "</>", component: CoverageTab}
 ];
+
+// Admin tools sit on the second row of the tab bar.
+const TAB_ROW2 = new Set(["users", "access", "metadata", "org", "apptabs"]);
 
 export function InspectorPanel() {
   useSfTimeZoneTick();
@@ -57,19 +64,23 @@ export function InspectorPanel() {
   // The pill bar lives OUTSIDE the scroller (shell = nav + body) so it can
   // never scroll away with the content.
   return h("div", {className: "insp-shell"},
+    // Two rows: data & code tools, then admin tools, split by a glass line.
     h("div", {className: "insp-tabs", role: "tablist", "aria-label": "Inspector tools", "data-tour": "inspector-tabs"},
-      tabs.map(t =>
-        h("button", {
-          key: t.id,
-          id: "insp-tab-" + t.id,
-          role: "tab",
-          "aria-selected": active === t.id,
-          "aria-controls": "insp-tabpanel",
-          className: `insp-tab ${active === t.id ? "active" : ""}`,
-          "data-ico": t.icon,
-          onClick: () => pickTab(t.id)
-        }, t.label)
-      )
+      [1, 2].map(row => [
+        row === 2 && h("div", {key: "sep", className: "insp-tab-sep", role: "presentation"}),
+        h("div", {key: "row" + row, className: "insp-tab-row", role: "presentation"},
+          tabs.filter(t => (TAB_ROW2.has(t.id) ? 2 : 1) === row).map(t =>
+            h("button", {
+              key: t.id,
+              id: "insp-tab-" + t.id,
+              role: "tab",
+              "aria-selected": active === t.id,
+              "aria-controls": "insp-tabpanel",
+              className: `insp-tab ${active === t.id ? "active" : ""}`,
+              "data-ico": t.icon,
+              onClick: () => pickTab(t.id)
+            }, t.label)))
+      ])
     ),
     h("div", {
       className: "inspector-body",

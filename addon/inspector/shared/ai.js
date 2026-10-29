@@ -112,6 +112,51 @@ function explainSoql(query, {signal} = {}) {
   return askAi({system: SOQL_EXPLAIN_SYSTEM, user: q.slice(0, 8000), signal});
 }
 
+const METADATA_EXPLAIN_SYSTEM =
+  "You are a senior Salesforce developer explaining org metadata to an admin. Given one component " +
+  "(an Apex class or trigger, a Flow outline, a validation rule, a Visualforce page or a Lightning component), " +
+  "write these sections in CAPITALS: WHAT IT DOES, WHEN IT RUNS, DATA IT TOUCHES, RISKS. " +
+  "Plain words, short bullet lines, no code blocks, no markdown tables. Say so when something is unclear from the source.";
+
+const VALIDATION_RULE_SYSTEM =
+  "You are a Salesforce admin expert writing validation rules. The formula must evaluate to TRUE when the record is INVALID " +
+  "(that blocks the save). Use only field API names from the schema given; use ISPICKVAL/TEXT for picklists, ISBLANK for empty " +
+  "checks, ISNEW/ISCHANGED/PRIORVALUE where the request implies create or change, $Profile.Name or $Permission for bypasses when asked. " +
+  "Keep it as simple as possible. Reply with ONLY a JSON object: " +
+  '{"ruleName": "<API name, letters digits underscores>", "formula": "<formula>", "errorMessage": "<message shown to the user>", ' +
+  '"errorDisplayField": "<field API name to show the error on, or empty for top of page>", "description": "<one sentence>", ' +
+  '"explanation": "<one plain sentence of when it blocks the save>"}';
+
+// Plain English → validation rule for an object. Returns the parsed JSON.
+async function validationRuleFromText(objectName, request, {current, signal} = {}) {
+  const text = String(request || "").trim();
+  if (!text) throw new Error("Describe what the rule should prevent.");
+  let schema = "";
+  try { schema = describeForPrompt(await ffDescribeObject(objectName)); }
+  catch (e) { schema = `(Could not describe ${objectName}: ${e.message})`; }
+  const parsed = await askAiJson({
+    system: VALIDATION_RULE_SYSTEM,
+    user: `Object: ${objectName}\nRequest: ${text}` + (current ? `\nCurrent formula (improve it): ${current}` : "") + `\n\n${schema}`,
+    validate: o => (String(o.formula || "").trim() ? null : "The JSON has no formula."),
+    signal
+  });
+  return {
+    ruleName: String(parsed.ruleName || "").replace(/[^A-Za-z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""),
+    formula: String(parsed.formula).trim(),
+    errorMessage: String(parsed.errorMessage || ""),
+    errorDisplayField: String(parsed.errorDisplayField || ""),
+    description: String(parsed.description || ""),
+    explanation: String(parsed.explanation || ""),
+  };
+}
+
+// Plain-words explanation of one metadata component. Never changes anything.
+function explainMetadata(kind, name, source, {signal} = {}) {
+  const text = String(source || "").slice(0, 15000);
+  if (!text.trim()) return Promise.reject(new Error("Nothing to explain: the source is empty."));
+  return askAi({system: METADATA_EXPLAIN_SYSTEM, user: `${kind}: ${name}\n\n${text}`, signal});
+}
+
 // Ask the Options-configured LLM to review Apex for compile errors BEFORE a run
 // (or after Salesforce rejects it). Never executes anything itself.
 // Returns {ok, error, line, explanation, fixedCode}.
@@ -140,4 +185,4 @@ function logsAskLlm(systemPrompt, userText, {signal} = {}) {
   return askAi({system: systemPrompt, user: userText, signal});
 }
 
-export {suggestSoqlFix, soqlFromText, explainSoql, apexAiCheck, logsAskLlm};
+export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, validationRuleFromText, apexAiCheck, logsAskLlm};

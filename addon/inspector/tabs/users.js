@@ -8,6 +8,8 @@ import {ffIcon, FF_I_SLIDERS} from "../shared/icons.js";
 import {FFBadge} from "../shared/ui.js";
 import {useFfSession} from "../shared/session-state.js";
 import {usersEnsureDebugLevel} from "../shared/apex-debug.js";
+import {loadPermSetList} from "../shared/access-data.js";
+import {UserAccessCheck} from "./access.js";
 
 const h = React.createElement;
 
@@ -64,6 +66,9 @@ function UsersTab() {
   const [freezing, setFreezing] = React.useState(false);
   const [frozenLogin, setFrozenLogin] = React.useState(null);
   const [meId, setMeId] = React.useState(null);
+  const [assignable, setAssignable] = React.useState(null);
+  const [assignChoice, setAssignChoice] = React.useState("");
+  const [psBusy, setPsBusy] = React.useState(false);
   const USR_PAGE_SIZE = 8;
 
   const mapUserRows = (records) => (records || []).map(r => ({
@@ -80,31 +85,46 @@ function UsersTab() {
   }));
   const USER_LIST_FIELDS = "Id, Name, Username, Email, Alias, IsActive, ProfileId, UserRoleId, UserType, LanguageLocaleKey";
 
-  const search = async () => {
+  // Live search: the loaded list filters on every keystroke, and the org is
+  // queried after a short pause so users beyond the loaded page are found.
+  // An empty box brings back the default list. Stale replies are dropped.
+  const searchSeq = React.useRef(0);
+  const search = async (termText = q, {keepSelection = false} = {}) => {
+    const raw = String(termText || "").trim();
+    const mine = ++searchSeq.current;
     setError(null);
-    setSel(null);
-    setDetail(null);
-    const term = escapeSoqlLike(q.trim());
-    if (!term) { setError("Type a name, username, email or alias"); return; }
+    if (!keepSelection) { setSel(null); setDetail(null); }
+    const term = escapeSoqlLike(raw);
     setLoading(true);
     try {
-      const soql = `SELECT ${USER_LIST_FIELDS} ` +
-        `FROM User WHERE Name LIKE '%${term}%' OR Username LIKE '%${term}%' ` +
-        `OR Email LIKE '%${term}%' OR Alias LIKE '%${term}%' ORDER BY Name LIMIT 50`;
+      const soql = term
+        ? `SELECT ${USER_LIST_FIELDS} ` +
+          `FROM User WHERE Name LIKE '%${term}%' OR Username LIKE '%${term}%' ` +
+          `OR Email LIKE '%${term}%' OR Alias LIKE '%${term}%' ORDER BY Name LIMIT 50`
+        : `SELECT ${USER_LIST_FIELDS} FROM User ORDER BY Name LIMIT 25`;
       const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
         encodeURIComponent(soql), {useCache: false});
-      const flat = mapUserRows(res.records);
-      setUsers(flat);
+      if (mine !== searchSeq.current) return;
+      setUsers(mapUserRows(res.records));
       setUserCols(["Name", "Username", "Email", "Alias", "Active"]);
       setPage(1);
-      if (!flat.length) setError(`No users matching "${q.trim()}"`);
     } catch (e) {
-      setError(e.message);
-      setUsers([]);
+      if (mine === searchSeq.current) setError(e.message);
     } finally {
-      setLoading(false);
+      if (mine === searchSeq.current) setLoading(false);
     }
   };
+  const searchTimer = React.useRef(null);
+  const onSearchInput = (value) => {
+    setQ(value);
+    setPage(1);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => search(value, {keepSelection: true}), 350);
+  };
+  React.useEffect(() => () => clearTimeout(searchTimer.current), []);
+  const qTerm = q.trim().toLowerCase();
+  const matchesTerm = (u) => !qTerm ||
+    [u.Name, u.Username, u.Email, u.Alias].some(v => String(v || "").toLowerCase().includes(qTerm));
 
   // Filter dropdown data + first-page auto-load (best-effort; the tab is
   // usable even when Profile/UserRole listing fails).
@@ -389,9 +409,9 @@ function UsersTab() {
     const [assignRes, grpRes] = await Promise.all([
       sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
         encodeURIComponent(
-          `SELECT PermissionSetId, PermissionSet.Name, PermissionSet.Label, ` +
-          `PermissionSet.IsOwnedByProfile FROM PermissionSetAssignment ` +
-          `WHERE AssigneeId = '${userId}'`), {useCache: false}),
+          `SELECT Id, PermissionSetId, PermissionSet.Name, PermissionSet.Label, ` +
+          `PermissionSet.IsOwnedByProfile, PermissionSetGroupId, PermissionSetGroup.MasterLabel ` +
+          `FROM PermissionSetAssignment WHERE AssigneeId = '${userId}'`), {useCache: false}),
       sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
         encodeURIComponent(
           `SELECT GroupId FROM GroupMember WHERE UserOrGroupId = '${userId}'`),
@@ -400,24 +420,20 @@ function UsersTab() {
     const rows = assignRes.records || [];
     const direct = rows.filter(a =>
       a.PermissionSet && a.PermissionSet.IsOwnedByProfile !== true && a.PermissionSetId);
-    let psgIds = new Set();
-    try {
-      const ids = direct.map(a => `'${a.PermissionSetId}'`).join(",");
-      if (ids) {
-        const gRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-          encodeURIComponent(`SELECT Id FROM PermissionSetGroup WHERE Id IN (${ids})`),
-          {useCache: false});
-        psgIds = new Set((gRes.records || []).map(g => g.Id));
-      }
-    } catch (e) { /* treat all as permission sets */ }
+    // Group assignments carry PermissionSetGroupId; their PermissionSetId is
+    // the group's internal aggregate set, which cannot be assigned directly.
     const ps = [];
     const psg = [];
     for (const a of direct) {
       const entry = {
         id: a.PermissionSetId,
-        name: (a.PermissionSet && (a.PermissionSet.Label || a.PermissionSet.Name)) || a.PermissionSetId
+        assignmentId: a.Id,
+        groupId: a.PermissionSetGroupId || null,
+        name: a.PermissionSetGroupId
+          ? (a.PermissionSetGroup && a.PermissionSetGroup.MasterLabel) || a.PermissionSetGroupId
+          : (a.PermissionSet && (a.PermissionSet.Label || a.PermissionSet.Name)) || a.PermissionSetId
       };
-      (psgIds.has(a.PermissionSetId) ? psg : ps).push(entry);
+      (entry.groupId ? psg : ps).push(entry);
     }
     let groups = [];
     const grpIds = (grpRes.records || []).map(g => g.GroupId).filter(Boolean);
@@ -433,6 +449,67 @@ function UsersTab() {
       } catch (e) { /* skip groups */ }
     }
     return {ps, psg, groups};
+  };
+
+  // ── Assign / remove permission sets and groups (Permission Sets tab) ──
+  React.useEffect(() => {
+    if (userTab !== "ps" || assignable) return;
+    loadPermSetList()
+      .then(list => setAssignable(list.filter(p => p.kind !== "profile")))
+      .catch(() => setAssignable([]));
+  }, [userTab, assignable]);
+
+  const reloadAssignments = async (userId) => {
+    try { setSrcPerms(await fetchAssignments(userId)); }
+    catch (e) { setActionErr(e.message); }
+  };
+
+  const assignPerm = async () => {
+    const p = assignable && assignable.find(x => x.id === assignChoice);
+    if (!sel || !p) return;
+    setPsBusy(true);
+    setActionMsg(null);
+    setActionErr(null);
+    try {
+      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/PermissionSetAssignment`, {
+        method: "POST",
+        useCache: false,
+        body: p.groupId
+          ? {AssigneeId: sel.Id, PermissionSetGroupId: p.groupId}
+          : {AssigneeId: sel.Id, PermissionSetId: p.id}
+      });
+      setActionMsg(`Assigned ${p.name} to ${sel.Name}.`);
+      setAssignChoice("");
+      await reloadAssignments(sel.Id);
+    } catch (e) {
+      setActionErr(`Could not assign ${p.name}: ${e.message}`);
+    } finally {
+      setPsBusy(false);
+    }
+  };
+
+  const removePerm = async (p) => {
+    if (!sel || !p.assignmentId) return;
+    const ok = await confirmDialog({
+      title: p.groupId ? "Remove permission set group?" : "Remove permission set?",
+      message: `${sel.Name} will lose everything ${p.name} grants, effective immediately.`,
+      confirmLabel: "Remove",
+      danger: true
+    });
+    if (!ok) return;
+    setPsBusy(true);
+    setActionMsg(null);
+    setActionErr(null);
+    try {
+      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/PermissionSetAssignment/${encodeURIComponent(p.assignmentId)}`,
+        {method: "DELETE", useCache: false});
+      setActionMsg(`Removed ${p.name} from ${sel.Name}.`);
+      await reloadAssignments(sel.Id);
+    } catch (e) {
+      setActionErr(`Could not remove ${p.name}: ${e.message}`);
+    } finally {
+      setPsBusy(false);
+    }
   };
 
   // Detail-tab extras: assignments for the PS/Groups tabs + latest login IP.
@@ -581,7 +658,9 @@ function UsersTab() {
             await sfConn.rest(`/services/data/v${apiVersion}/sobjects/PermissionSetAssignment`, {
               method: "POST",
               useCache: false,
-              body: {AssigneeId: newId, PermissionSetId: p.id}
+              body: p.groupId
+                ? {AssigneeId: newId, PermissionSetGroupId: p.groupId}
+                : {AssigneeId: newId, PermissionSetId: p.id}
             });
             psOk++;
           } catch (e) {
@@ -632,7 +711,7 @@ function UsersTab() {
     }
   };
 
-  const filteredUsers = users.filter(u =>
+  const filteredUsers = users.filter(u => matchesTerm(u) &&
     (!profileFilter || u.ProfileId === profileFilter) &&
     (!roleFilter || u.RoleId === roleFilter));
   const usrPageCount = Math.max(1, Math.ceil(filteredUsers.length / USR_PAGE_SIZE));
@@ -648,7 +727,7 @@ function UsersTab() {
     return "";
   };
   const USR_TABS = [
-    ["details", "Details"], ["ps", "Permission Sets"], ["groups", "Groups"],
+    ["details", "Details"], ["ps", "Permission Sets"], ["access", "Access Check"], ["groups", "Groups"],
     ["profile", "Profiles"], ["role", "Roles"], ["settings", "Settings"]
   ];
 
@@ -679,16 +758,19 @@ function UsersTab() {
             h("input", {
               value: q,
               placeholder: "Search by name, email, or alias…",
-              disabled: loading,
-              onChange: e => setQ(e.target.value),
-              onKeyDown: e => { if (e.key === "Enter") search(); }
+              "aria-label": "Search users",
+              onChange: e => onSearchInput(e.target.value),
+              onKeyDown: e => {
+                if (e.key === "Enter") { clearTimeout(searchTimer.current); search(); }
+                if (e.key === "Escape" && q) onSearchInput("");
+              }
             }),
             h("button", {
               className: "btn btn-primary btn-sm",
-              disabled: loading || !q.trim(),
+              disabled: !q.trim(),
               title: "Search users",
-              onClick: search
-            }, loading ? "Searching…" : "Search users")
+              onClick: () => { clearTimeout(searchTimer.current); search(); }
+            }, "Search users")
           ),
           h("div", {className: "sq3-card-sub"}, "Filters"),
           h("div", {className: "usr-filters"},
@@ -711,7 +793,9 @@ function UsersTab() {
           error && h("div", {className: "insp-error"}, error),
           loading && !users.length && h("div", {className: "insp-meta"}, "Loading users…"),
           !loading && !filteredUsers.length && !error &&
-            h("div", {className: "insp-meta"}, "No users found — search above."),
+            h("div", {className: "insp-meta"}, q.trim()
+              ? `No users matching "${q.trim()}".`
+              : "No users found — search above."),
           usrPageUsers.map(u =>
             h("div", {
               key: u.Id,
@@ -901,7 +985,35 @@ function UsersTab() {
           srcPerms && [...srcPerms.psg, ...srcPerms.ps].map(p =>
             h("div", {key: p.id, className: "usr-kv-row"},
               h("span", {className: "usr-kv-v"}, p.name),
-              h("span", {className: "usr-kv-k"}, srcPerms.psg.some(g => g.id === p.id) ? "Group" : "Set")))),
+              h("span", {className: "usr-kv-k"}, p.groupId ? "Group" : "Set",
+                p.assignmentId && h("button", {
+                  className: "sq3-saved-x",
+                  title: `Remove ${p.name}`,
+                  "aria-label": `Remove ${p.name}`,
+                  disabled: psBusy,
+                  onClick: () => removePerm(p)
+                }, "×")))),
+          srcPerms && h("div", {className: "soql-save-row acc-pick-row"},
+            h("select", {
+              className: "soql-save-input",
+              value: assignChoice,
+              "aria-label": "Permission set or group to assign",
+              disabled: !assignable || psBusy,
+              onChange: e => setAssignChoice(e.target.value)
+            },
+              h("option", {value: ""}, assignable ? "Assign a permission set or group…" : "Loading…"),
+              assignable && [["set", "Permission sets"], ["group", "Permission set groups"]].map(([kind, label]) =>
+                h("optgroup", {key: kind, label},
+                  assignable
+                    .filter(p => p.kind === kind &&
+                      ![...srcPerms.ps, ...srcPerms.psg].some(a => a.id === p.id || (p.groupId && a.groupId === p.groupId)))
+                    .map(p => h("option", {key: p.id, value: p.id}, p.name))))),
+            h("button", {
+              className: "btn btn-primary btn-sm",
+              disabled: !assignChoice || psBusy,
+              onClick: assignPerm
+            }, psBusy ? "Saving…" : "Assign"))),
+        sel && userTab === "access" && h(UserAccessCheck, {userId: sel.Id}),
         sel && userTab === "groups" && h("div", {className: "sq3-card"},
           h("div", {className: "sq3-card-h"},
             h("span", {className: "sq3-card-t"}, "Groups")),

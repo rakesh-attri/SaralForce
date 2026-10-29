@@ -10,6 +10,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
+import {accessTables, metadataTables, permissionSetDescribe, applyWhere} from "./mock-access-metadata.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const addonDir = path.join(root, "addon");
@@ -72,6 +73,12 @@ const field = (name, type, label, extra = {}) => ({
   referenceTo: [], relationshipName: null, picklistValues: [], length: type === "string" ? 255 : 0, externalId: false, unique: false, ...extra
 });
 const describes = {
+  PermissionSet: permissionSetDescribe,
+  Feature_Flag__mdt: {name: "Feature_Flag__mdt", label: "Feature Flag", labelPlural: "Feature Flags", custom: true, queryable: true, fields: [
+    field("Id", "id"), field("DeveloperName", "string", "Custom Metadata Record Name"), field("MasterLabel", "string", "Label"),
+    field("Enabled__c", "boolean", "Enabled", {custom: true, nillable: false}), field("Rollout_Percent__c", "percent", "Rollout %", {custom: true}),
+    field("Owner_Team__c", "picklist", "Owner Team", {custom: true, picklistValues: ["Sales", "Service", "Platform"].map(v => ({value: v, label: v, active: true}))})
+  ]},
   Account: {name: "Account", label: "Account", labelPlural: "Accounts", keyPrefix: "001", custom: false, queryable: true, createable: true, updateable: true, fields: [
     field("Id", "id", "Account ID"), field("Name", "string", "Account Name", {nillable: false}), field("Industry", "picklist", "Industry", {picklistValues: ["Manufacturing", "Energy", "Technology", "Healthcare", "Retail"].map(v => ({value: v, label: v, active: true}))}),
     field("AnnualRevenue", "currency", "Annual Revenue"), field("Phone", "phone"), field("BillingCity", "string", "Billing City"),
@@ -84,7 +91,7 @@ const describes = {
     field("UserRoleId", "reference", "Role ID", {referenceTo: ["UserRole"], relationshipName: "UserRole"}), field("LastLoginDate", "datetime", "Last Login")
   ]}
 };
-const sobjectList = ["Account", "Contact", "Opportunity", "Case", "Lead", "User", "Profile", "Support_Ticket__c", "Invoice__c"]
+const sobjectList = ["Account", "Contact", "Opportunity", "Case", "Lead", "User", "Profile", "Support_Ticket__c", "Invoice__c", "Feature_Flag__mdt"]
   .map(name => ({name, label: name.replace(/__c$/, "").replace(/_/g, " "), labelPlural: name.replace(/__c$/, "").replace(/_/g, " ") + "s", custom: name.endsWith("__c"), queryable: true, keyPrefix: describes[name]?.keyPrefix || null, layoutable: true, createable: true}));
 
 // Large table for result paging and "Fetch more" (Salesforce pages by 2000).
@@ -98,7 +105,13 @@ const tables = {
   loginhistory: [0, 1, 2].map(i => ({Id: `0Ya00000000000${i}AAA`, UserId: ME, LoginTime: iso((i + 1) * 3600e3), SourceIp: `203.0.113.${10 + i}`, Status: "Success", Application: "Browser", Browser: "Chrome", Platform: "Windows"})),
   setupaudittrail: [0, 1, 2].map(i => ({Id: `0Ym00000000000${i}AAA`, Action: ["createdCustomObject", "changedProfile", "permSetAssign"][i], Display: ["Created custom object: Support Ticket", "Changed profile Standard User", "Assigned permission set Sales Ops"][i], Section: "Customize", CreatedDate: iso((i + 1) * 7200e3), CreatedBy: {Name: "Rakesh Sharma"}})),
   customapplication: [{Id: "02u000000000001AAA", DeveloperName: "Sales", MasterLabel: "Sales", NavType: "Standard", UiType: "Lightning"}, {Id: "02u000000000002AAA", DeveloperName: "Service_Console", MasterLabel: "Service Console", NavType: "Console", UiType: "Lightning"}],
-  entitydefinition: sobjectList.map(o => ({QualifiedApiName: o.name, Label: o.label, DurableId: o.name, KeyPrefix: o.keyPrefix}))
+  entitydefinition: sobjectList.map(o => ({QualifiedApiName: o.name, Label: o.label, DurableId: o.name, KeyPrefix: o.keyPrefix})),
+  feature_flag__mdt: [
+    {Id: "m00dN0000000001AAA", DeveloperName: "Checkout_v2", MasterLabel: "Checkout v2", NamespacePrefix: null, Enabled__c: true, Rollout_Percent__c: 25, Owner_Team__c: "Sales"},
+    {Id: "m00dN0000000002AAA", DeveloperName: "New_Case_Form", MasterLabel: "New Case Form", NamespacePrefix: null, Enabled__c: false, Rollout_Percent__c: 0, Owner_Team__c: "Service"}
+  ],
+  ...accessTables({users, profiles}),
+  ...metadataTables(apexClasses)
 };
 
 function soqlResult(q) {
@@ -108,7 +121,7 @@ function soqlResult(q) {
     return {totalSize: (tables[obj] || []).length, done: true, records: []};
   }
   const limit = /\blimit\s+(\d+)/i.exec(q);
-  let records = tables[obj] || [];
+  let records = applyWhere(q, tables[obj] || []);
   if (limit) records = records.slice(0, Number(limit[1]));
   return soqlPage(q, records, 0, from ? from[1] : "SObject");
 }
@@ -141,7 +154,12 @@ function api(req, res, url) {
     res.writeHead(204, {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*"});
     return res.end();
   }
+  if (p.startsWith("/services/Soap/m/") && req.method === "POST") {
+    res.writeHead(200, {"Content-Type": "text/xml; charset=utf-8", "Access-Control-Allow-Origin": "*"});
+    return res.end('<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns="http://soap.sforce.com/2006/04/metadata"><soapenv:Body><createMetadataResponse><result><fullName>Mock__mdt</fullName><success>true</success></result></createMetadataResponse></soapenv:Body></soapenv:Envelope>');
+  }
   if (p.startsWith("/services/Soap/")) return soapUserInfo(res);
+  if (/^\/services\/data\/?$/.test(p)) return json(res, 200, ["66.0", "67.0", "68.0"].map(version => ({version, url: `/services/data/v${version}`})));
   if (p === "/services/oauth2/userinfo") {
     return json(res, 200, {user_id: ME, organization_id: ORG_ID, name: "Rakesh Sharma", preferred_username: "rakesh@demo.saralforce", nickname: "rakesh"});
   }
@@ -150,7 +168,7 @@ function api(req, res, url) {
     const q = url.searchParams.get("q") || "";
     const from = /\bfrom\s+([A-Za-z0-9_]+)/i.exec(q);
     const limit = /\blimit\s+(\d+)/i.exec(q);
-    let records = tables[from ? from[1].toLowerCase() : ""] || [];
+    let records = applyWhere(q, tables[from ? from[1].toLowerCase() : ""] || []);
     if (limit) records = records.slice(0, Number(limit[1]));
     return json(res, 200, soqlPage(q, records, Number(cursor[1]), from ? from[1] : "SObject"));
   }
@@ -200,7 +218,11 @@ function mockLlm(req, res) {
     try { body = JSON.parse(raw || "{}"); } catch { /* keep empty */ }
     lastLlmRequest = body;
     const system = String(((body.messages || [])[0] || {}).content || "");
-    const content = /request into ONE valid SOQL/.test(system)
+    const content = /writing validation rules/.test(system)
+      ? JSON.stringify({ruleName: "Close_Date_Not_Past", formula: "AND(\n  ISPICKVAL(Industry, \"Energy\"),\n  ISBLANK(Phone),\n  NOT($Permission.Bypass_Validation),\n  $Profile.Name <> \"System Administrator\"\n)",
+        errorMessage: "Energy accounts need a phone number.", errorDisplayField: "Phone", description: "Phone required for energy accounts; admins can skip it.",
+        explanation: "Blocks saving an Energy account with no phone, unless you are a System Administrator."})
+      : /request into ONE valid SOQL/.test(system)
       ? JSON.stringify({query: "SELECT Id, Name, Industry FROM Account WHERE Industry = 'Energy' LIMIT 200", explanation: "Accounts in the Energy industry, up to 200."})
       : /suggest|fix/i.test(system) && /fixedQuery/.test(system)
       ? JSON.stringify({explanation: "Mock fix.", fixedQuery: "SELECT Id, Name FROM Account LIMIT 50"})
