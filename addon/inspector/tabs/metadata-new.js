@@ -7,7 +7,7 @@ import {
 import {RuleAiBox} from "./metadata-views.js";
 import {ffDescribeObject} from "../shared/describe.js";
 import {apexHighlight} from "../shared/highlight.js";
-import {openCodeViewer} from "../shared/code-view.js";
+import {openMetadataInTab, isInspectorTab} from "../shared/inspector-tab.js";
 import {CMDT_FIELD_TYPES, toApiName} from "../../core/cmdt.js";
 import {hasValidConfig} from "../../llm/llm-service.js";
 import {lwcFromText, codeFromText, reviseDraftFromText} from "../shared/ai.js";
@@ -419,9 +419,8 @@ function DraftEditor({draft, onChange, onDeploy, onDiscard, busy, error}) {
       h("span", {className: "sq3-card-t"}, draft.title),
       h(FFBadgeNew, null),
       h("span", {className: "insp-meta mdn-editor-kind"}, NEW_FORMS[draft.kind].title.replace(/^New /, "")),
-      h("button", {className: "btn btn-secondary btn-sm", title: "Open these files in a new browser tab, full screen",
-        onClick: () => openCodeViewer({title: draft.title, subtitle: `Draft · ${NEW_FORMS[draft.kind].title.replace(/^New /, "")} · not deployed`,
-          files: draft.files.map(x => ({path: x.path, lang: x.lang === "apex" || x.lang === "js" ? x.lang : "text", content: x.content}))})
+      !isInspectorTab() && h("button", {className: "btn btn-secondary btn-sm", title: "Open the inspector in a new browser tab on this draft",
+        onClick: () => openMetadataInTab(draft.kind, draft.id)
       }, "⛶ Full screen ↗")),
     h("div", {className: "mdn-editor-body"},
       h("div", {className: "mdn-tree", role: "tablist", "aria-label": "Files"},

@@ -101,7 +101,7 @@ function ApexView({row, onSource}) {
   const st = useLoad(async () => ((await queryAll(byId("Body FROM ApexClass", row.Id), tooling))[0] || {}).Body || "", [row.Id]);
   const [tab, setTab] = React.useState("overview");
   const [line, setLine] = React.useState(null);
-  React.useEffect(() => { if (st.data != null) onSource(st.data, [{path: `${row.NamespacePrefix ? row.NamespacePrefix + "__" : ""}${row.Name}.cls`, lang: "apex", content: st.data}]); }, [st.data, onSource]);
+  React.useEffect(() => { if (st.data != null) onSource(st.data); }, [st.data, onSource]);
   if (st.data == null) return h(LoadState, {state: st});
   if (!st.data) return h("div", {className: "insp-meta"}, "No source available (managed or empty).");
   const o = apexOutline(st.data);
@@ -151,7 +151,7 @@ const ALL_EVENTS = ["before insert", "before update", "before delete", "after in
 function TriggerView({row, onSource}) {
   const st = useLoad(async () => ((await queryAll(byId("Body FROM ApexTrigger", row.Id), tooling))[0] || {}).Body || "", [row.Id]);
   const [tab, setTab] = React.useState("overview");
-  React.useEffect(() => { if (st.data != null) onSource(st.data, [{path: `${row.Name}.trigger`, lang: "apex", content: st.data}]); }, [st.data, onSource]);
+  React.useEffect(() => { if (st.data != null) onSource(st.data); }, [st.data, onSource]);
   if (st.data == null) return h(LoadState, {state: st});
   const o = triggerOutline(st.data);
   return h("div", null,
@@ -176,7 +176,7 @@ function TriggerView({row, onSource}) {
 function PageView({row, onSource}) {
   const st = useLoad(async () => ((await queryAll(byId("Markup FROM ApexPage", row.Id), tooling))[0] || {}).Markup || "", [row.Id]);
   const [tab, setTab] = React.useState("overview");
-  React.useEffect(() => { if (st.data != null) onSource(st.data, [{path: `${row.Name}.page`, lang: "markup", content: st.data}]); }, [st.data, onSource]);
+  React.useEffect(() => { if (st.data != null) onSource(st.data); }, [st.data, onSource]);
   if (st.data == null) return h(LoadState, {state: st});
   const o = pageOutline(st.data);
   return h("div", null,
@@ -234,8 +234,7 @@ function LwcView({row, onSource}) {
   const [tab, setTab] = React.useState("overview");
   const [active, setActive] = React.useState(0);
   React.useEffect(() => {
-    if (st.data) onSource(st.data.files.map(f => `// ── ${f.path} ──\n${f.source}`).join("\n\n"),
-      st.data.files.map(f => ({path: f.path, lang: langOf(f.path), content: f.source})));
+    if (st.data) onSource(st.data.files.map(f => `// ── ${f.path} ──\n${f.source}`).join("\n\n"));
   }, [st.data, onSource]);
   if (!st.data) return h(LoadState, {state: st});
   const o = lwcOutline(st.data.files, st.data.meta || {});
@@ -274,8 +273,7 @@ function AuraView({row, onSource}) {
   const [tab, setTab] = React.useState("overview");
   const [active, setActive] = React.useState(0);
   React.useEffect(() => {
-    if (st.data) onSource(st.data.map(f => `// ── ${f.defType} ──\n${f.source}`).join("\n\n"),
-      st.data.map(f => ({path: f.path, lang: langOf(f.path), content: f.source})));
+    if (st.data) onSource(st.data.map(f => `// ── ${f.defType} ──\n${f.source}`).join("\n\n"));
   }, [st.data, onSource]);
   if (!st.data) return h(LoadState, {state: st});
   const o = auraOutline(st.data);
@@ -359,8 +357,7 @@ function RuleView({row, onSource, onChanged}) {
     if (!st.data) return;
     const m = st.data.meta;
     onSource([`Object: ${object}`, `Active: ${m.active ? "yes" : "no"}`, `Formula (TRUE blocks the save): ${m.errorConditionFormula}`,
-      `Error message: ${m.errorMessage}`, `Shown on: ${m.errorDisplayField || "top of page"}`, m.description ? `Description: ${m.description}` : ""].filter(Boolean).join("\n"),
-      [{path: `${object}.${row.ValidationName}.formula`, lang: "text", content: `${m.errorConditionFormula || ""}\n\n/* Error message: ${m.errorMessage || ""}\n   Shown on: ${m.errorDisplayField || "top of page"} */\n`}]);
+      `Error message: ${m.errorMessage}`, `Shown on: ${m.errorDisplayField || "top of page"}`, m.description ? `Description: ${m.description}` : ""].filter(Boolean).join("\n"));
   }, [st.data, object, onSource]);
   React.useEffect(() => { setEdit(null); setMsg(null); setErr(null); setAiNote(null); }, [row.Id]);
 

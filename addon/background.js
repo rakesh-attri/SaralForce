@@ -95,10 +95,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       ? request.rec.obj : "";
     const recId = request.rec && /^[a-zA-Z0-9]{15,18}$/.test(request.rec.id || "")
       ? request.rec.id : "";
-    const recSuffix = (recObj || recId)
+    let recSuffix = (recObj || recId)
       ? (recObj ? `&openRecObj=${encodeURIComponent(recObj)}` : "") +
         (recId ? `&openRecId=${encodeURIComponent(recId)}` : "")
       : "";
+    // Metadata "Full screen": land on the Metadata tab with that item open.
+    const md = request.md || null;
+    if (md && /^[a-z]{2,20}$/.test(md.kind || "")) {
+      recSuffix += `&openTab=metadata&mdKind=${encodeURIComponent(md.kind)}` +
+        (/^[\w.:-]{1,120}$/.test(md.id || "") ? `&mdId=${encodeURIComponent(md.id)}` : "");
+    }
     const openFresh = () => {
       let url = chrome.runtime.getURL("object-creator.html" + (request.host ? `?host=${encodeURIComponent(request.host)}` : ""));
       url += (url.includes("?") ? "&" : "?") + "view=inspector";

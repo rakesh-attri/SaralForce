@@ -271,7 +271,7 @@ top (each shows a count); **＋ New …** on the right creates one of that kind.
 | **Open in Setup ↗** | Jump to the item in Salesforce Setup (Flow Builder for flows). |
 | **＋ package.xml** | Add to the package.xml basket (see 12.12). |
 | Copy source | To the clipboard. |
-| **⛶ Full screen ↗** | Opens the code in a **new browser tab** for comfortable reading: every file of a bundle as tabs, line numbers, highlighting, **find in file** (Enter jumps to the next match, Ctrl+F focuses it), **Wrap** long lines, **A− / A+** text size, light/dark, Copy and Download. Also available in the draft editor. |
+| **⛶ Full screen ↗** | Opens the inspector in its **own browser tab**, straight on this item (same tool, kind and selection), so code and details get the whole screen. Also on drafts in the draft editor. |
 
 ### 12.2 Apex classes 👁
 
