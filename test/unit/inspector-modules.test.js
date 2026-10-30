@@ -40,12 +40,12 @@ test("inspector-tools.js facade re-exports resolve", () => {
   for (const spec of specs) assert.ok(fs.existsSync(path.resolve(path.dirname(facade), spec)), spec);
 });
 
-test("inspector-panel registry lists the 12 tabs in order", () => {
+test("inspector-panel registry lists the 13 tabs in order", () => {
   const src = fs.readFileSync(path.join(inspectorDir, "inspector-panel.js"), "utf8");
   const block = src.match(/export const INSPECTOR_TABS = \[([\s\S]*?)\n\];/);
   assert.ok(block, "INSPECTOR_TABS registry not found");
   const ids = [...block[1].matchAll(/\{id:\s*"([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(ids, ["records", "soql", "apex", "export", "import", "users", "access", "metadata", "logs", "org", "apptabs", "coverage"]);
+  assert.deepEqual(ids, ["records", "soql", "apex", "export", "import", "api", "logs", "users", "access", "metadata", "org", "apptabs", "coverage"]);
   for (const entry of block[1].matchAll(/\{id:[^\n]*\}/g)) {
     assert.match(entry[0], /component:\s*\w+/, `registry entry missing component: ${entry[0]}`);
   }

@@ -19,15 +19,16 @@ what you can **change**, how to do it, and where the limits are.
 6. [Export](#6-export)
 7. [Import](#7-import)
 8. [Logs](#8-logs-debug-logs)
-9. [Code Coverage](#9-code-coverage)
-10. [Users](#10-users)
-11. [Access](#11-access) — Compare · Risky access · Approvals
-12. [Metadata](#12-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · New · package.xml
-13. [Org Info](#13-org-info)
-14. [App Tab Manager](#14-app-tab-manager)
-15. [Settings & AI providers](#15-settings--ai-providers)
-16. [Safety, privacy and limits](#16-safety-privacy-and-limits)
-17. [Quick "can I…?" answers](#17-quick-can-i-answers)
+9. [API Explorer](#9-api-explorer)
+10. [Code Coverage](#10-code-coverage)
+11. [Users](#11-users)
+12. [Access](#12-access) — Compare · Risky access · Approvals
+13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · New · package.xml
+14. [Org Info](#14-org-info)
+15. [App Tab Manager](#15-app-tab-manager)
+16. [Settings & AI providers](#16-settings--ai-providers)
+17. [Safety, privacy and limits](#17-safety-privacy-and-limits)
+18. [Quick "can I…?" answers](#18-quick-can-i-answers)
 
 ---
 
@@ -36,12 +37,13 @@ what you can **change**, how to do it, and where the limits are.
 | Feature | What it does |
 |---|---|
 | **Launcher button** | A floating SaralForce button on every Salesforce page opens the side panel. A one-time tip points it out on your first visit. |
-| **Two-row tool bar** | Top row = data & code tools (Records, SOQL, Run-Apex, Export, Import, Logs, Code Coverage). Bottom row = admin tools (Users, Access, Metadata, Org Info, App Tab Manager). A glass divider separates them; nothing scrolls sideways. |
+| **Two-row tool bar** | Top row = Records, SOQL, Run-Apex, Export, Import, API Explorer, Logs, Users. Bottom row = Access, Metadata, Org Info, App Tab Manager, Code Coverage. Each row stays on one line; tabs tighten as the panel narrows. A glass divider separates them; nothing scrolls sideways. |
 | **Header buttons** | **AI Object Builder ⇄ Inspector** switch · **Show / Hide API Names** · **Theme** (System → Light → Dark) · **?** Help menu · user initials. |
 | **Show API Names** 👁 | Adds each field's API name next to its label on the Salesforce record page behind the panel. The button changes to *Hide API Names* only once names are actually showing. |
 | **Help menu (?)** | Take the tour · Tour this tool · What's new · Open Settings · **Help** (opens the GitHub issues page). |
 | **Guided tours** | Welcome tour on first open, a one-tip intro the first time you open each tool, an Object Builder tour, a Settings tour after install, and a "What's new" card after each update. Replay any time from **?**. |
 | **Remembers your place** | The last tool, your queries, filters and results are kept when you close and reopen the panel. |
+| **Messages come to you** | When an action finishes with a success, warning or error message (e.g. *trace flag created*, an import error), the panel scrolls to it and flashes it once. |
 | **Theme** | Follows your device's light/dark setting by default; the header button overrides it. |
 
 ---
@@ -53,10 +55,14 @@ Design a custom object by describing it in plain English, then deploy it.
 | You can | Details |
 |---|---|
 | Describe an object | e.g. *"support tickets linked to accounts, with priority and status"*. The AI proposes label, API name, every field, data types, required flags, picklist values and Lookup / Master-Detail relationships. |
+| **23 field types** | Text, Text Area (plain, long, **rich**), Number, Currency, Percent, Date, Date/Time, **Time**, Checkbox, Picklist, Multi-Select Picklist, Email, Phone, URL, Lookup, Master-Detail, **Formula**, **Roll-Up Summary**, **Auto Number**, **Geolocation** and **Text (Encrypted)**. Picklists can use a **global value set** or depend on a **controlling field**. |
 | ✨ **Enhance Prompt** | Turns a one-liner into a full design brief (purpose, fields, volumes, relationships, security). **Accept** or **Discard**. |
-| Refine by chat | "add a resolution notes field", "make Priority required" — the proposal updates. |
-| **Plan mode** | Edit object label, API name, sharing model and every field inline; pick which **profiles** get the tab. |
-| **Build mode** ✏️ | Locks the plan and deploys: creates the object, all fields, field-level security and tab visibility. |
+| ✨ **Ask AI** (in Plan) | "add a resolution notes field", "make Priority required", "add a rule that Due Date can't be in the past" — the plan updates; nothing is deployed. |
+| **Plan mode** | Edit object label, API name, sharing model and every field inline. **⚙** on a field opens its details: length, decimals, picklist values and default, global value set, controlling field with a **dependency matrix**, related object and delete behaviour, formula and return type, roll-up operation, auto-number format, help text and **track history**. |
+| **Object settings** | Track field history, reports, activities, search, Chatter feed; **validation rules**, **list views** and a **compact layout** — all created with the object. |
+| **Field access** | Who gets read/edit on the new fields: **My profile**, the **tab visibility profiles**, or a **new permission set** (object + field access, assigned to you). Formula, roll-up and auto-number fields get read-only access. |
+| ✎ **Edit an existing object** | Load a custom object from the org; its fields are shown read-only and new fields, rules and list views are added beside them. |
+| **Build mode** ✏️ | Locks the plan and deploys: creates the object, the fields (controlling picklists before dependents, roll-ups last), field access, page layout, validation rules, list views, compact layout and the tab. |
 | Chat history | Earlier designs are saved; reopen or start new. |
 | Hand-off | After deploy, jump to **App Tab Manager** to put the new tab into an app. |
 
@@ -69,10 +75,13 @@ Open the record (or list) you are looking at in Salesforce, inside the panel.
 | You can | Details |
 |---|---|
 | 👁 View a record | Detects the record on the current Salesforce page automatically (record Id, object, fields with label, API name, type and value). |
+| ↻ **Reload page** | Moved to another record in Salesforce while the panel was open? The button turns blue (*The Salesforce page changed*); click it — or **Refresh** — to load the page you are on now. |
 | 👁 Load any object | **Load Object** by API name to see its details: total records, last updated, fields (Standard / Custom). **Refresh** reloads. |
 | Quick Overview | Key facts of the record or object at a glance. |
 | ✏️ Edit fields in place | Click a value (**Click to edit**), change it, **Save**; unsaved changes are marked. |
 | 👁 Show All Data | Every field of the record in a popup (Esc to close), including fields not on the layout; editable there too. |
+| 👁 **Related** | Parent records (lookups, with names) and every child list with a record count; expand a list to see the newest 50 and click one to open it. **‹ Back** returns along the trail (e.g. *Account › Contact*). |
+| 👁 **History** | Field history as a timeline (who changed what, old → new), when history tracking is on for the object. |
 | Export Records | Download the record's fields as CSV. |
 | Tooling API | Toggle to open setup records (e.g. a CustomField, Layout, Flow) that only the Tooling API serves — tried automatically when the standard API can't. |
 | Open in Salesforce ↗ | Jump to the record in a new tab. |
@@ -104,12 +113,14 @@ A query workbench with an editor, field explorer and results grid.
 
 | You can | Details |
 |---|---|
-| ✏️ Execute anonymous Apex | Terminal-style editor; **Ctrl+Enter** to run. |
-| Execute Highlighted | Run only the selected lines. |
+| ✏️ Execute anonymous Apex | Terminal-style editor; **Ctrl+Enter** to run (a second press while running is ignored). **Tab / Shift+Tab** indent and un-indent. |
+| Execute Highlighted | Run only the selected lines; error line numbers still point at the right line in the editor. |
+| One call, exact log | Runs through the Apex API and gets that run's own debug log back — no trace flag, no guessing which log is yours. Falls back to the REST API when the org blocks it. |
 | Log level & timeout | Choose before running. |
 | Quick Templates · Saved · Recent scripts | Reuse code. |
-| Execution Results | Debug log with event filters, Debug-only view, raw trace, **Download Log**. |
-| ✨ **Use AI** | Checks code for compile errors before running; shows a suggested fix (**Apply & Run**). |
+| Execution Results | Debug log with event filters, Debug-only view, raw trace, **Download Log**. **Go to line N** jumps to a compile or runtime error. |
+| **Limits** | CPU time, SOQL queries, DML, heap and the other governor limits the run used, as bars (amber/red when close). |
+| ✨ **Use AI** | Checks code for compile errors before running; shows a suggested fix (**Apply & Run**) or **Run anyway**. |
 
 ---
 
@@ -153,38 +164,54 @@ A query workbench with an editor, field explorer and results grid.
 
 ---
 
-## 9. Code Coverage
+## 9. API Explorer
+
+Call any Salesforce REST or SOAP API with your current session.
+
+| You can | Details |
+|---|---|
+| 👁 / ✏️ REST & Composite | GET, POST, PATCH, PUT, DELETE 🔒 to any path; JSON body with **Format**. Presets for org, data, composite, Tooling and Apex REST calls (API version filled in). |
+| SOAP | Partner, Metadata and Apex APIs with a ready envelope; your session is added only when sending. |
+| Response | Status, time, size, body and headers; **Copy** or **Download**. Paths inside a JSON response are links — click to GET them. |
+| History | The last 30 calls, per org. |
+
+---
+
+## 10. Code Coverage
 
 | You can | Details |
 |---|---|
 | 👁 Coverage per class/trigger | Covered vs. uncovered lines and %, summary, filter test classes, search. |
-| ✏️ Run tests | **Run All Tests** or **Run specific test class**; coverage refreshes when the run finishes. |
+| 👁 **Lines** | The class or trigger source with covered lines green and uncovered lines red; **First uncovered line** jumps there. |
+| ✏️ Run tests | **Run All Tests** or **Run specific test class**. Live progress per class, **Abort** 🔒, then passed / failed / skipped per method. |
+| Failures | Message and stack trace for each failing method, failures first. |
+| ✨ **Explain failure** | Why the test failed, where, and how to fix it — using the test method and the code under test. |
 
 ---
 
-## 10. Users
+## 11. Users
 
 Search, inspect and manage users.
 
-### 10.1 Find users
+### 11.1 Find users
 
 | You can | Details |
 |---|---|
 | **Live search** | Type a name, username, email or alias — the list narrows on every keystroke and the whole org is searched after a short pause. **Esc** clears. |
 | Filters | By **Profile** and **Role**. Paged list with Active / Inactive badges. |
 
-### 10.2 Inspect a user (detail sub-tabs) 👁
+### 11.2 Inspect a user (detail sub-tabs) 👁
 
 | Sub-tab | Shows |
 |---|---|
 | **Details** | User information, account & login, recent **login IP**, Is Active, **Is Frozen**. |
 | **Permission Sets** | Every directly assigned permission set and permission set group (labelled *Set* / *Group*). |
-| **Access Check** | *Why does this user have access?* — see 10.4. |
+| **Access Check** | *Why does this user have access?* — see 11.4. |
 | **Groups** | Public groups and queues the user belongs to. |
 | **Profiles** / **Roles** | The profile and role (with Ids). |
 | **Settings** | Language, time zone, locale, email encoding, active flag. |
 
-### 10.3 Change a user ✏️
+### 11.3 Change a user ✏️
 
 | Action | Details |
 |---|---|
@@ -198,7 +225,7 @@ Search, inspect and manage users.
 | **Clone User** | Wizard: choose what to copy (profile, role, permission sets **and permission set groups**, public groups/queues), enter the new user's details, confirm, create. |
 | Copy Id · View in Salesforce | Quick links. |
 
-### 10.4 Access Check — "why can this user see it?" 👁
+### 11.4 Access Check — "why can this user see it?" 👁
 
 Pick what to check, type it, **Check**:
 
@@ -218,11 +245,11 @@ they hold, shows the **effective** result (✓ / ✗ per permission) and lists e
 
 ---
 
-## 11. Access
+## 12. Access
 
 A small menu at the top: **Compare · Risky access · Approvals**.
 
-### 11.1 Compare 👁
+### 12.1 Compare 👁
 
 | You can | Details |
 |---|---|
@@ -232,7 +259,7 @@ A small menu at the top: **Compare · Risky access · Approvals**.
 | Filter | Find a permission or object by name. |
 | Download CSV | The whole matrix. |
 
-### 11.2 Risky access 👁 ✨
+### 12.2 Risky access 👁 ✨
 
 | You can | Details |
 |---|---|
@@ -241,7 +268,7 @@ A small menu at the top: **Compare · Risky access · Approvals**.
 | Per user | Users ranked by how many risky permissions they hold, and via what. |
 | ✨ **Summarize with AI** | A short report: summary, highest risks, who to review, next steps. |
 
-### 11.3 Approvals ✏️
+### 12.3 Approvals ✏️
 
 | You can | Details |
 |---|---|
@@ -255,12 +282,12 @@ A small menu at the top: **Compare · Risky access · Approvals**.
 
 ---
 
-## 12. Metadata
+## 13. Metadata
 
 Browse, understand, create and change org metadata. Pick a kind from the chips at the
 top (each shows a count); **＋ New …** on the right creates one of that kind.
 
-### 12.1 Common to every kind
+### 13.1 Common to every kind
 
 | You can | Details |
 |---|---|
@@ -269,11 +296,11 @@ top (each shows a count); **＋ New …** on the right creates one of that kind.
 | **Source** 👁 | The code with line numbers and highlighting. |
 | ✨ **Explain** | Plain-words report: what it does, when it runs, data it touches, risks. |
 | **Open in Setup ↗** | Jump to the item in Salesforce Setup (Flow Builder for flows). |
-| **＋ package.xml** | Add to the package.xml basket (see 12.12). |
+| **＋ package.xml** | Add to the package.xml basket (see 13.12). |
 | Copy source | To the clipboard. |
 | **⛶ Full screen ↗** | Opens the inspector in its **own browser tab**, straight on this item (same tool, kind and selection), so code and details get the whole screen. Also on drafts in the draft editor. |
 
-### 12.2 Apex classes 👁
+### 13.2 Apex classes 👁
 
 **Overview**: access, **sharing mode** (warns when missing), virtual/abstract, test class,
 annotations (e.g. `@RestResource`), extends / implements · counters: methods, fields,
@@ -281,18 +308,18 @@ annotations (e.g. `@RestResource`), extends / implements · counters: methods, f
 (name, parameters, return type, access, annotations) — **click a method to jump to its
 line** · fields & properties · inner classes.
 
-### 12.3 Triggers 👁
+### 13.3 Triggers 👁
 
 **Overview**: the object · all 7 events with the ones it runs on highlighted · handler
 classes it calls · trigger context it uses (`Trigger.new`, `oldMap`…) · counters, with a
 warning when SOQL/DML sits directly in the trigger.
 
-### 12.4 Visualforce pages 👁
+### 13.4 Visualforce pages 👁
 
 **Overview**: standard controller / controller / extensions, render-as (e.g. PDF),
 Lightning stylesheets · components used (with counts) · merge fields shown.
 
-### 12.5 Lightning Web Components (LWC) 👁
+### 13.5 Lightning Web Components (LWC) 👁
 
 **Overview**: where it can be used (**exposed in builders**, targets such as RecordPage,
 AppPage, Community), API version, description · **public properties** (`@api`) · **data**
@@ -301,13 +328,13 @@ fired, navigation, toasts, Lightning modules).
 **Bundle** tab: file tree (html, js, helpers, css, svg, js-meta.xml) with the code beside
 it. Long file names wrap; the part that differs is in bold.
 
-### 12.6 Aura components 👁
+### 13.6 Aura components 👁
 
 **Overview**: interfaces implemented, Apex controller · **attributes** table (name, type,
 default) · handlers and registered events · controller actions · child components.
 **Bundle** tab: component, controller, helper, renderer, style, design, docs, svg.
 
-### 12.7 Flows 👁
+### 13.7 Flows 👁
 
 | You can | Details |
 |---|---|
@@ -315,7 +342,7 @@ default) · handlers and registered events · controller actions · child compon
 | Versions | Switch between versions (active one marked ●). |
 | Outline · Metadata JSON | A text outline, or the raw flow metadata. |
 
-### 12.8 Validation rules ✏️ ✨
+### 13.8 Validation rules ✏️ ✨
 
 | You can | Details |
 |---|---|
@@ -325,7 +352,7 @@ default) · handlers and registered events · controller actions · child compon
 | ✨ **Use AI** | Describe the rule or the change (*"close date can't be in the past when stage is Closed Won"*, *"let admins skip it"*). The AI writes the formula, message, error field and description from the object's real fields and explains when it blocks the save. Review, then save. |
 | Managed rules | Rules from managed packages show 🔒 and can't be changed (Salesforce rule). |
 
-### 12.9 Custom Metadata Types ✏️
+### 13.9 Custom Metadata Types ✏️
 
 | You can | Details |
 |---|---|
@@ -342,7 +369,7 @@ default) · handlers and registered events · controller actions · child compon
 > Custom metadata has no on/off switch of its own — "enabling" usually means changing a
 > record's value (for example a checkbox field), which the editable grid does.
 
-### 12.10 Schema (any object) 👁
+### 13.10 Schema (any object) 👁
 
 | You can | Details |
 |---|---|
@@ -350,9 +377,10 @@ default) · handlers and registered events · controller actions · child compon
 | **Access** (per field) | Which profiles / permission sets can read or edit it. |
 | **Where used** (custom fields) | Components that reference it (Apex, layouts, flows…). |
 | **Relationships** | Diagram: lookups on the left, child objects on the right; click a box to open that object. |
+| **Data quality** | Profiles the newest 200 / 1,000 / 2,000 records: fill rate per field, distinct and most common values, extreme numbers, inactive picklist values and likely duplicates (same name, email, phone…), with a quality score. ✨ **AI review** turns it into top problems and quick wins. One query; nothing is changed. |
 | Export | **Download schema JSON**, **Copy SOQL** (all fields), **Open in Object Manager ↗**, add the object to package.xml. |
 
-### 12.11 Create new metadata — **＋ New** ✏️ ✨
+### 13.11 Create new metadata — **＋ New** ✏️ ✨
 
 Every form validates names before anything is sent. **Create** opens the generated files in
 the **draft editor** (nothing is saved to the org yet); **✓ Deploy** creates it in the org.
@@ -384,7 +412,7 @@ the **draft editor** (nothing is saved to the org yet); **✓ Deploy** creates i
 > Salesforce only allows creating **Apex classes and triggers** this way in **sandboxes and
 > developer orgs**; in production it refuses and the message says so (use a change set).
 
-### 12.12 package.xml basket
+### 13.12 package.xml basket
 
 Add any class, trigger, page, component, flow, rule, object, custom metadata type or single
 custom metadata record with **＋ package.xml**. The bar at the top shows the count;
@@ -392,7 +420,7 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 ---
 
-## 13. Org Info 👁
+## 14. Org Info 👁
 
 | You can | Details |
 |---|---|
@@ -405,7 +433,7 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 ---
 
-## 14. App Tab Manager ✏️
+## 15. App Tab Manager ✏️
 
 | You can | Details |
 |---|---|
@@ -417,7 +445,7 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 ---
 
-## 15. Settings & AI providers
+## 16. Settings & AI providers
 
 | Setting | Details |
 |---|---|
@@ -428,7 +456,7 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 ---
 
-## 16. Safety, privacy and limits
+## 17. Safety, privacy and limits
 
 - **Your data stays yours** — no accounts, analytics or tracking. Org data goes to your AI
   provider **only** when you press an ✨ button.
@@ -444,7 +472,7 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 ---
 
-## 17. Quick "can I…?" answers
+## 18. Quick "can I…?" answers
 
 | Question | Answer |
 |---|---|
@@ -464,3 +492,11 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 | Build a package.xml? | **Yes** — **＋ package.xml** on any item, then **Download**. |
 | Query more than 20,000 rows? | **Yes** — SOQL → **Fetch more rows**, or Export with **Bulk API 2.0**. |
 | Use it without an AI key? | **Yes** — only the ✨ features need one. |
+| Add fields to an object that already exists? | **Yes** — AI Object Builder → **✎ Edit an existing object**. |
+| Create formula, roll-up or dependent picklist fields? | **Yes** — Object Builder → Plan → field **⚙** details. |
+| Give a team access to a new object? | **Yes** — Object Builder → Field access → **New permission set** (then assign it in Setup). |
+| See why a test failed? | **Yes** — Code Coverage → run tests → failure → ✨ **Explain failure**. |
+| See which lines a test does not cover? | **Yes** — Code Coverage → **Lines**. |
+| Call a REST or SOAP API directly? | **Yes** — **API Explorer**. |
+| Find empty fields and duplicates? | **Yes** — Metadata → Schema → **Data quality**. |
+| Walk from an account to its contacts? | **Yes** — Records → Show All Data → **Related**. |

@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import {
   escXml, pickTabMotif, TAB_MOTIFS, safeRelationshipName, buildObjectXml, buildFieldXml,
   buildRecordTypeXml, buildTabXml, buildTabVisibilityXml, buildRecordTypeVisibilityXml,
-  buildProfileXml, buildLayoutXml, buildUpdateMetadataXml, buildReadMetadataBody, buildListMetadataBody
+  buildProfileXml, buildLayoutXml, buildUpdateMetadataXml, buildReadMetadataBody, buildListMetadataBody,
+  buildValidationRuleXml, buildListViewXml, buildCompactLayoutXml
 } from "../../addon/builder/metadata-xml.js";
 
 // Expected strings were captured from the App-class builders in
@@ -308,7 +309,7 @@ test("buildFieldXml does not mutate its input", () => {
 });
 
 test("buildFieldXml rejects unsupported types and empty picklists", () => {
-  assert.throws(() => buildFieldXml("A__c", {name: "X__c", label: "X", type: "Geolocation"}), /Unsupported field type: Geolocation/);
+  assert.throws(() => buildFieldXml("A__c", {name: "X__c", label: "X", type: "Hologram"}), /Unsupported field type: Hologram/);
   assert.throws(() => buildFieldXml("A__c", {name: "P__c", label: "P", type: "Picklist", values: ["", "  "]}), /Picklist field "P__c" has no values/);
 });
 
@@ -342,4 +343,48 @@ test("profile / layout / read / list fragments", () => {
     "<met:readMetadata><met:type>Profile</met:type><met:fullNames>A&amp;B</met:fullNames></met:readMetadata>");
   assert.equal(buildListMetadataBody("CustomTab"),
     "<met:listMetadata><met:queries><met:type>CustomTab</met:type></met:queries></met:listMetadata>");
+});
+
+test("buildFieldXml writes formula, roll-up, auto number and other new types", () => {
+  const f = buildFieldXml("A__c", {name: "Total__c", label: "Total", type: "Formula", returnType: "Currency", formula: "Qty__c * Price__c"});
+  assert.match(f, /<met:type>Currency<\/met:type>/);
+  assert.match(f, /<met:formula>Qty__c \* Price__c<\/met:formula>/);
+  assert.match(f, /<met:precision>18<\/met:precision>/);
+  const r = buildFieldXml("A__c", {name: "Lines__c", label: "Lines", type: "Summary", summaryOperation: "sum", summaryForeignKey: "Line__c.Order__c", summarizedField: "Line__c.Amount__c"});
+  assert.match(r, /<met:summaryOperation>sum<\/met:summaryOperation>/);
+  assert.match(r, /<met:summarizedField>Line__c.Amount__c<\/met:summarizedField>/);
+  const c = buildFieldXml("A__c", {name: "N__c", label: "N", type: "Summary", summaryOperation: "count", summaryForeignKey: "L__c.A__c"});
+  assert.doesNotMatch(c, /summarizedField/);
+  assert.match(buildFieldXml("A__c", {name: "No__c", label: "No", type: "AutoNumber", displayFormat: "INV-{0000}"}), /<met:displayFormat>INV-\{0000\}<\/met:displayFormat>/);
+  assert.match(buildFieldXml("A__c", {name: "Geo__c", label: "Geo", type: "geolocation"}), /<met:type>Location<\/met:type>[\s\S]*<met:scale>5<\/met:scale>/);
+  assert.match(buildFieldXml("A__c", {name: "T__c", label: "T", type: "Time"}), /<met:type>Time<\/met:type>/);
+  assert.match(buildFieldXml("A__c", {name: "H__c", label: "H", type: "richtext"}), /<met:type>Html<\/met:type>[\s\S]*<met:visibleLines>25/);
+  assert.match(buildFieldXml("A__c", {name: "S__c", label: "S", type: "EncryptedText", length: 400}), /<met:length>175<\/met:length>/);
+});
+
+test("buildFieldXml writes global, dependent and tracked picklists", () => {
+  const g = buildFieldXml("A__c", {name: "C__c", label: "C", type: "Picklist", globalValueSet: "Countries"});
+  assert.match(g, /<met:valueSetName>Countries<\/met:valueSetName>/);
+  assert.doesNotMatch(g, /valueSetDefinition/);
+  const d = buildFieldXml("A__c", {name: "Sub__c", label: "Sub", type: "Picklist", values: ["Laptop", "Phone", "Desk"],
+    controllingField: "Cat__c", dependencies: {Tech: ["Laptop", "phone"], Furniture: ["Desk"]}, trackHistory: true});
+  assert.match(d, /<met:controllingField>Cat__c<\/met:controllingField>/);
+  assert.match(d, /<met:controllingFieldValue>Tech<\/met:controllingFieldValue>\s*<met:valueName>Phone<\/met:valueName>/);
+  assert.match(d, /<met:trackHistory>true<\/met:trackHistory>/);
+  assert.doesNotMatch(buildFieldXml("A__c", {name: "F__c", label: "F", type: "Formula", formula: "1", trackHistory: true}), /trackHistory/);
+});
+
+test("object extras: settings flags, validation rules, list views, compact layouts", () => {
+  const o = buildObjectXml({label: "Order", pluralLabel: "Orders", name: "Order__c", enableHistory: true, enableReports: false});
+  assert.match(o, /<met:enableHistory>true<\/met:enableHistory>/);
+  assert.match(o, /<met:enableReports>false<\/met:enableReports>/);
+  assert.doesNotMatch(o, /enableFeeds/);
+  const v = buildValidationRuleXml("Order__c", {name: "Amount_Positive", formula: "Amount__c < 0", message: "Amount must be > 0"});
+  assert.match(v, /<met:fullName>Order__c.Amount_Positive<\/met:fullName>/);
+  assert.match(v, /Amount__c &lt; 0/);
+  assert.match(v, /<met:active>true<\/met:active>/);
+  const l = buildListViewXml("Order__c", {name: "Open", label: "Open Orders", columns: ["NAME", "Amount__c"]});
+  assert.match(l, /<met:columns>Amount__c<\/met:columns>/);
+  assert.match(l, /<met:filterScope>Everything<\/met:filterScope>/);
+  assert.match(buildCompactLayoutXml("Order__c", {fields: ["Name", "Amount__c"]}), /<met:fields>Amount__c<\/met:fields>/);
 });

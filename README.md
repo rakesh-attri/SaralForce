@@ -60,6 +60,13 @@ After the proposal arrives, the **Object Preview** opens in **Plan** mode: edit 
 label, API name, sharing model and every field inline, pick deployment-target profiles,
 then switch to **Build** to lock the plan and deploy.
 
+Plan mode also has **⚙ field details** for every type (formula, roll-up, dependencies…),
+**Object settings** (history, reports, activities, search, feeds, validation rules, list
+views, compact layout), **✨ Ask AI** to change the plan in plain English, and a **Field
+access** choice: your profile, the tab-visibility profiles, or a new permission set
+assigned to you. **✎ Edit an existing object** loads a custom object from the org so you
+can add fields, rules and list views beside the ones it already has.
+
 <img src="docs/screenshots/ai-object-creator.png" alt="Object Builder preview — Support Ticket plan with editable fields and deployment targets" width="720">
 
 ## Inspector Tools
@@ -246,6 +253,17 @@ The AI will update the proposal accordingly.
 | URL | Web links |
 | Lookup | Relationship to another object |
 | Master-Detail | Required relationship to another object |
+| Formula | Calculated from other fields (Text, Number, Currency, Percent, Date, Date/Time, Time or Checkbox result) |
+| Roll-Up Summary | COUNT, SUM, MIN or MAX of child records (master side of a Master-Detail) |
+| Auto Number | System-generated sequence, e.g. INV-{0000} |
+| Geolocation | Latitude and longitude |
+| Time | Time of day without a date |
+| Text Area (Rich) | Formatted text with images and links |
+| Text (Encrypted) | Sensitive text shown masked (up to 175 chars) |
+
+Picklists can also use an org **global value set**, or depend on a **controlling field**
+(picklist or checkbox) with a value-by-value dependency matrix. Any field can turn on
+**history tracking** and **help text**.
 
 ## LLM Provider Configuration
 
@@ -259,6 +277,25 @@ debug-log analysis.
 - **Models**: the Options page always lists the currently supported models
 
 ## What's New
+
+### v2.1.0
+- **Run Apex** — one call per run returns that run's own debug log (no trace flag);
+  a **Limits** tab shows CPU, SOQL, DML and heap used; **Go to line** for errors (also
+  when running highlighted lines); Shift+Tab un-indents; a double Ctrl+Enter runs once
+- **Test runner** — live progress per test class, **Abort**, passed / failed / skipped per
+  method with messages and stack traces, **✨ Explain failure**, and a **Lines** view of
+  covered and uncovered lines
+- **API Explorer** — REST, Composite, Tooling and SOAP (Partner, Metadata, Apex) calls
+  with presets, clickable response links, headers, timing and history
+- **Related records & field history** — Show All Data gains **Related** (parents and
+  child lists with counts; click through and come back) and **History** (timeline)
+- **Object Builder 2.0** — 7 new field types (formula, roll-up summary, auto number,
+  geolocation, time, rich text, encrypted text), global and dependent picklists, history
+  tracking, validation rules, list views and compact layouts, ⚙ field details, ✨ Ask AI
+  in Plan, field access for chosen profiles or a new permission set, and **Edit an
+  existing object**
+- **Data quality** — Metadata → Schema → Data quality profiles a record sample (fill
+  rate, repeated values, outliers, inactive picklist values, duplicates) with an ✨ AI review
 
 ### v2.0.0
 - **Readable metadata details** — every item opens on an Overview instead of plain text:

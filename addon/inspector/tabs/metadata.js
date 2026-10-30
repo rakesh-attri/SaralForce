@@ -23,6 +23,7 @@ import {EDITABLE_KINDS, SANDBOX_ONLY_NOTE, changedFiles} from "../../core/edit-d
 import {confirmDialog} from "../../ui/confirm.js";
 import {NewDialog, DraftEditor, withOriginals, fileIcon} from "./metadata-new.js";
 import {CmdtDetail} from "./metadata-cmdt.js";
+import {DataQualityPanel} from "./metadata-quality.js";
 import {DETAIL_VIEWS} from "./metadata-views.js";
 import {openMetadataInTab, metadataTargetFromUrl, isInspectorTab} from "../shared/inspector-tab.js";
 
@@ -466,10 +467,11 @@ function SchemaView({pkg, onTogglePkg}) {
           onClick: () => safeCopyText(`SELECT ${describe.fields.map(f => f.name).join(", ")} FROM ${describe.name} LIMIT 200`)
         }, "Copy SOQL")),
       h("div", {className: "sq3-pills", role: "group", "aria-label": "Schema view"},
-        [["fields", "Fields"], ["er", "Relationships"]].map(([id, label]) => h("button", {
+        [["fields", "Fields"], ["er", "Relationships"], ["quality", "Data quality"]].map(([id, label]) => h("button", {
           key: id, className: "sq3-pill" + (view === id ? " active" : ""), onClick: () => setView(id)
         }, label))),
       view === "er" && h(ErDiagram, {describe, onOpen: open}),
+      view === "quality" && h(DataQualityPanel, {describe, onFilter: name => { setFilter(name); setView("fields"); }}),
       view === "fields" && h("div", null,
         h("input", {
           className: "soql-save-input md-filter",

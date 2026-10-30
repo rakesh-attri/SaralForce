@@ -48,8 +48,22 @@ const apexClasses = ["PaymentGateway", "InvoiceService", "AccountTriggerHandler"
   .map((Name, i) => ({Id: `01pdN00000000${i}0AAA`, Name, NamespacePrefix: null, ApiVersion: 67, Status: "Active", LengthWithoutComments: 800 + i * 140}));
 const coverage = apexClasses.filter(c => !c.Name.endsWith("Test")).map((c, i) => ({
   Id: `715dN0000000${i}00AAA`, ApexClassOrTriggerId: c.Id, ApexClassOrTrigger: {Name: c.Name},
-  NumLinesCovered: [92, 61, 40, 15][i], NumLinesUncovered: [8, 39, 60, 85][i], LastModifiedDate: iso(7200e3)
+  NumLinesCovered: [92, 61, 40, 15][i], NumLinesUncovered: [8, 39, 60, 85][i], LastModifiedDate: iso(7200e3),
+  Coverage: {coveredLines: [1, 3, 4, 5, 6, 11, 12], uncoveredLines: [7, 8]}
 }));
+// One mock test job: two classes, one failing method.
+const TEST_JOB = "7070000000JOB01AAA";
+const testQueue = [
+  {Id: "709000000000001AAA", ParentJobId: TEST_JOB, ApexClassId: "01pdN0000000040AAA", ApexClass: {Name: "PaymentGatewayTest"}, Status: "Completed"},
+  {Id: "709000000000002AAA", ParentJobId: TEST_JOB, ApexClassId: "01pdN0000000050AAA", ApexClass: {Name: "InvoiceServiceTest"}, Status: "Completed"}
+];
+const testResults = [
+  {Id: "07M000000000001AAA", AsyncApexJobId: TEST_JOB, ApexClassId: "01pdN0000000040AAA", ApexClass: {Name: "PaymentGatewayTest"}, MethodName: "chargesCard", Outcome: "Pass", RunTime: 41},
+  {Id: "07M000000000002AAA", AsyncApexJobId: TEST_JOB, ApexClassId: "01pdN0000000040AAA", ApexClass: {Name: "PaymentGatewayTest"}, MethodName: "refundsCard", Outcome: "Pass", RunTime: 37},
+  {Id: "07M000000000003AAA", AsyncApexJobId: TEST_JOB, ApexClassId: "01pdN0000000050AAA", ApexClass: {Name: "InvoiceServiceTest"}, MethodName: "marksOverdue", Outcome: "Fail", RunTime: 58,
+    Message: "System.AssertException: Assertion Failed: Expected: 1, Actual: 0", StackTrace: "Class.InvoiceService.markOverdue: line 7, column 1\nClass.InvoiceServiceTest.marksOverdue: line 9, column 1"},
+  {Id: "07M000000000004AAA", AsyncApexJobId: TEST_JOB, ApexClassId: "01pdN0000000050AAA", ApexClass: {Name: "InvoiceServiceTest"}, MethodName: "skipsPaid", Outcome: "Pass", RunTime: 22}
+];
 const logs = [0, 1, 2, 3, 4].map(i => ({
   Id: `07LdN0000000${i}00AAA`, LogUserId: ME, LogUser: {Name: "Rakesh Sharma"}, Request: "API", Operation: ["/apex/execute", "Trigger", "Batch Apex", "VF Page", "API"][i],
   Application: "Unknown", Status: i === 1 ? "Attempt to de-reference a null object" : "Success", DurationMilliseconds: 120 + i * 37,
@@ -80,11 +94,17 @@ const describes = {
     field("Owner_Team__c", "picklist", "Owner Team", {custom: true, picklistValues: ["Sales", "Service", "Platform"].map(v => ({value: v, label: v, active: true}))})
   ]},
   Account: {name: "Account", label: "Account", labelPlural: "Accounts", keyPrefix: "001", custom: false, queryable: true, createable: true, updateable: true, fields: [
-    field("Id", "id", "Account ID"), field("Name", "string", "Account Name", {nillable: false}), field("Industry", "picklist", "Industry", {picklistValues: ["Manufacturing", "Energy", "Technology", "Healthcare", "Retail"].map(v => ({value: v, label: v, active: true}))}),
+    field("Id", "id", "Account ID"), field("Name", "string", "Account Name", {nillable: false, nameField: true}), field("Industry", "picklist", "Industry", {picklistValues: ["Manufacturing", "Energy", "Technology", "Healthcare", "Retail"].map(v => ({value: v, label: v, active: true}))}),
     field("AnnualRevenue", "currency", "Annual Revenue"), field("Phone", "phone"), field("BillingCity", "string", "Billing City"),
     field("OwnerId", "reference", "Owner ID", {referenceTo: ["User"], relationshipName: "Owner"}), field("CreatedDate", "datetime", "Created Date"),
     field("LastModifiedDate", "datetime", "Last Modified Date"), field("Customer_Tier__c", "picklist", "Customer Tier", {picklistValues: [{value: "Gold", label: "Gold", active: true}]})
-  ], childRelationships: [{relationshipName: "Contacts", childSObject: "Contact", field: "AccountId"}, {relationshipName: "Opportunities", childSObject: "Opportunity", field: "AccountId"}]},
+  ], childRelationships: [{relationshipName: "Contacts", childSObject: "Contact", field: "AccountId"}, {relationshipName: "Opportunities", childSObject: "Opportunity", field: "AccountId"}, {relationshipName: "Histories", childSObject: "AccountHistory", field: "AccountId"}]},
+  Invoice__c: {name: "Invoice__c", label: "Invoice", labelPlural: "Invoices", keyPrefix: "a01", custom: true, queryable: true, fields: [
+    field("Id", "id", "Record ID"), field("Name", "string", "Invoice Number", {nameField: true, autoNumber: true}),
+    field("Amount__c", "currency", "Amount", {custom: true}), field("Due_Date__c", "date", "Due Date", {custom: true}),
+    field("Status__c", "picklist", "Status", {custom: true, picklistValues: ["Draft", "Sent", "Paid"].map(v => ({value: v, label: v, active: true}))}),
+    field("Account__c", "reference", "Account", {custom: true, referenceTo: ["Account"], relationshipName: "Account__r", relationshipOrder: null})
+  ]},
   User: {name: "User", label: "User", labelPlural: "Users", keyPrefix: "005", custom: false, queryable: true, fields: [
     field("Id", "id", "User ID"), field("Name", "string", "Full Name"), field("Username", "string"), field("Email", "email"), field("Alias", "string"),
     field("IsActive", "boolean", "Active"), field("ProfileId", "reference", "Profile ID", {referenceTo: ["Profile"], relationshipName: "Profile"}),
@@ -95,11 +115,18 @@ const sobjectList = ["Account", "Contact", "Opportunity", "Case", "Lead", "User"
   .map(name => ({name, label: name.replace(/__c$/, "").replace(/_/g, " "), labelPlural: name.replace(/__c$/, "").replace(/_/g, " ") + "s", custom: name.endsWith("__c"), queryable: true, keyPrefix: describes[name]?.keyPrefix || null, layoutable: true, createable: true}));
 
 // Large table for result paging and "Fetch more" (Salesforce pages by 2000).
-const contacts = Array.from({length: 45000}, (_, i) => ({Id: "003" + String(i).padStart(12, "0") + "AAA", LastName: "Contact " + (i + 1), Email: "c" + (i + 1) + "@demo.test"}));
+const contacts = Array.from({length: 45000}, (_, i) => ({Id: "003" + String(i).padStart(12, "0") + "AAA", LastName: "Contact " + (i + 1), Name: "Contact " + (i + 1), Email: "c" + (i + 1) + "@demo.test",
+  AccountId: i < 3 ? accounts[0].Id : null, CreatedDate: iso((i + 1) * 3600e3)}));
+// Field history of the first account.
+const accountHistory = [
+  {Id: "017000000000001AAA", AccountId: accounts[0].Id, Field: "Industry", OldValue: "Technology", NewValue: "Manufacturing", CreatedDate: iso(2 * 86400e3), CreatedBy: {Name: "Priya Nair"}},
+  {Id: "017000000000002AAA", AccountId: accounts[0].Id, Field: "AnnualRevenue", OldValue: 2000000, NewValue: 2500000, CreatedDate: iso(5 * 86400e3), CreatedBy: {Name: "Rakesh Sharma"}},
+  {Id: "017000000000003AAA", AccountId: accounts[0].Id, Field: "created", OldValue: null, NewValue: null, CreatedDate: iso(30 * 86400e3), CreatedBy: {Name: "Rakesh Sharma"}}
+];
 const PAGE = 2000;
 
 const tables = {
-  contact: contacts, user: users, account: accounts, profile: profiles, userrole: roles, apexclass: apexClasses, apexcodecoverageaggregate: coverage, apexlog: logs,
+  contact: contacts, accounthistory: accountHistory, opportunity: [], user: users, account: accounts, profile: profiles, userrole: roles, apexclass: apexClasses, apexcodecoverageaggregate: coverage, apexlog: logs, apextestqueueitem: testQueue, apextestresult: testResults,
   organization: [{Id: ORG_ID, Name: "SaralForce Demo Org", IsSandbox: true, InstanceName: "IND42", OrganizationType: "Developer Edition", TrialExpirationDate: null, LanguageLocaleKey: "en_US", TimeZoneSidKey: "Asia/Kolkata", CreatedDate: iso(400 * 86400e3)}],
   permissionset: [{Id: "0PS000000000001AAA", Name: "Sales_Ops", Label: "Sales Ops", IsOwnedByProfile: false, License: {Name: "Salesforce"}}, {Id: "0PS000000000002AAA", Name: "API_Access", Label: "API Access", IsOwnedByProfile: false}],
   loginhistory: [0, 1, 2].map(i => ({Id: `0Ya00000000000${i}AAA`, UserId: ME, LoginTime: iso((i + 1) * 3600e3), SourceIp: `203.0.113.${10 + i}`, Status: "Success", Application: "Browser", Browser: "Chrome", Platform: "Windows"})),
@@ -124,7 +151,7 @@ function soqlResult(q) {
   const from = /\bfrom\s+([A-Za-z0-9_]+)/i.exec(q);
   const obj = from ? from[1].toLowerCase() : "";
   if (/^\s*select\s+count\(\)/i.test(q)) {
-    return {totalSize: (tables[obj] || []).length, done: true, records: []};
+    return {totalSize: applyWhere(q, tables[obj] || []).length, done: true, records: []};
   }
   const limit = /\blimit\s+(\d+)/i.exec(q);
   let records = applyWhere(q, tables[obj] || []);
@@ -154,12 +181,46 @@ function soapUserInfo(res) {
   res.end(`<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns="urn:partner.soap.sforce.com"><soapenv:Body><getUserInfoResponse><result><organizationId>${ORG_ID}</organizationId><organizationName>SaralForce Demo Org</organizationName><userFullName>Rakesh Sharma</userFullName><userId>${ME}</userId><userName>rakesh@demo.saralforce</userName><userTimeZone>Asia/Kolkata</userTimeZone></result></getUserInfoResponse></soapenv:Body></soapenv:Envelope>`);
 }
 
+// Apex SOAP executeAnonymous: a script containing "oops" fails to compile on
+// its 2nd line; anything else succeeds and returns a log with limit usage.
+function mockExecuteAnonymous(req, res) {
+  let raw = "";
+  req.on("data", c => { raw += c; });
+  req.on("end", () => {
+    const code = (/<apex:String>([\s\S]*?)<\/apex:String>/.exec(raw) || [])[1] || "";
+    const wantsLog = /DebuggingHeader/.test(raw);
+    const bad = /oops/.test(code);
+    const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const log = [
+      "67.0 APEX_CODE,DEBUG;APEX_PROFILING,INFO",
+      "12:00:00.0 (100)|EXECUTION_STARTED",
+      "12:00:00.0 (200)|USER_DEBUG|[1]|DEBUG|Hello from the mock org",
+      "12:00:00.0 (300)|SOQL_EXECUTE_BEGIN|[2]|Aggregations:0|SELECT Id FROM Account",
+      "12:00:00.0 (400)|LIMIT_USAGE_FOR_NS|(default)|",
+      "  Number of SOQL queries: 1 out of 100",
+      "  Number of query rows: 6 out of 50000",
+      "  Number of DML statements: 0 out of 150",
+      "  Maximum CPU time: 8200 out of 10000",
+      "  Maximum heap size: 0 out of 6000000",
+      "",
+      "12:00:00.0 (500)|EXECUTION_FINISHED",
+    ].join("\n");
+    const result = bad
+      ? "<column>9</column><compileProblem>Unexpected token &apos;oops&apos;.</compileProblem><compiled>false</compiled><exceptionMessage xsi:nil=\"true\"/><exceptionStackTrace xsi:nil=\"true\"/><line>2</line><success>false</success>"
+      : "<column>-1</column><compileProblem xsi:nil=\"true\"/><compiled>true</compiled><exceptionMessage xsi:nil=\"true\"/><exceptionStackTrace xsi:nil=\"true\"/><line>-1</line><success>true</success>";
+    res.writeHead(200, {"Content-Type": "text/xml; charset=utf-8", "Access-Control-Allow-Origin": "*"});
+    res.end(`<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns="http://soap.sforce.com/2006/08/apex" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><soapenv:Header>${wantsLog && !bad ? `<DebuggingInfo><debugLog>${esc(log)}</debugLog></DebuggingInfo>` : ""}</soapenv:Header><soapenv:Body><executeAnonymousResponse><result>${result}</result></executeAnonymousResponse></soapenv:Body></soapenv:Envelope>`);
+  });
+}
+
 function api(req, res, url) {
   const p = url.pathname;
   if (req.method === "OPTIONS") {
     res.writeHead(204, {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*"});
     return res.end();
   }
+  if (/\/tooling\/runTestsAsynchronous\/?$/.test(p) && req.method === "POST") return json(res, 200, TEST_JOB);
+  if (p.startsWith("/services/Soap/s/") && req.method === "POST") return mockExecuteAnonymous(req, res);
   if (p.startsWith("/services/Soap/m/") && req.method === "POST") {
     res.writeHead(200, {"Content-Type": "text/xml; charset=utf-8", "Access-Control-Allow-Origin": "*"});
     return res.end('<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns="http://soap.sforce.com/2006/04/metadata"><soapenv:Body><createMetadataResponse><result><fullName>Mock__mdt</fullName><success>true</success></result></createMetadataResponse></soapenv:Body></soapenv:Envelope>');
@@ -183,7 +244,7 @@ function api(req, res, url) {
   if (/\/sobjects\/?$/.test(p)) return json(res, 200, {encoding: "UTF-8", maxBatchSize: 200, sobjects: sobjectList});
   const describe = /\/sobjects\/([A-Za-z0-9_]+)\/describe\/?$/.exec(p);
   if (describe) {
-    const d = describes[describe[1]] || {name: describe[1], label: describe[1], labelPlural: describe[1] + "s", custom: describe[1].endsWith("__c"), queryable: true, fields: [field("Id", "id"), field("Name", "string")]};
+    const d = describes[describe[1]] || {name: describe[1], label: describe[1], labelPlural: describe[1] + "s", custom: describe[1].endsWith("__c"), queryable: true, fields: [field("Id", "id"), field("Name", "string", "Name", {nameField: true})]};
     return json(res, 200, d);
   }
   if (/\/ApexLog\/[^/]+\/Body\/?$/.test(p)) {
@@ -209,6 +270,14 @@ function api(req, res, url) {
         problem: "Variable does not exist: COMPILE_ERROR", problemType: "Error"}]}}
       : {Id: sob[2], State: "Completed"});
   }
+  // Object Builder field access: permission set, object/field permissions,
+  // assignment. Counted per type at /mock-perm.
+  const perm = /\/data\/v[\d.]+\/sobjects\/(PermissionSet|ObjectPermissions|FieldPermissions|PermissionSetAssignment)\/?$/.exec(p);
+  if (perm && req.method === "POST") {
+    permPosts[perm[1]] = (permPosts[perm[1]] || 0) + 1;
+    return json(res, 201, {id: "0PS" + String(Object.values(permPosts).reduce((a, b) => a + b, 0)).padStart(12, "0") + "AAA", success: true, errors: []});
+  }
+
   const record = /\/sobjects\/([A-Za-z0-9_]+)\/([a-zA-Z0-9]{15,18})\/?$/.exec(p);
   if (record && req.method === "GET") {
     const rows = tables[record[1].toLowerCase()] || [];
@@ -235,6 +304,7 @@ function serveFile(res, filePath) {
 // a real key: set provider "OpenAI Compatible", base URL
 // http://127.0.0.1:<PORT>/mock-llm/v1 and any key.
 let lastLlmRequest = null;
+const permPosts = {};
 // Canned LWC bundle for "Build with AI" (valid enough to pass checkLwcBundle).
 function mockLwcBundle(name) {
   const cls = name.charAt(0).toUpperCase() + name.slice(1);
@@ -293,6 +363,36 @@ function mockRevision(user) {
     explanation: fixing ? "Fixed the reported error by tidying the stylesheet." : "Tightened the card spacing in the stylesheet."});
 }
 
+// Object Builder: a plan using the newer field types; a refinement keeps the
+// current plan (embedded in the user message) and adds a Priority picklist.
+function mockObjectPlan(user, refine) {
+  if (refine) {
+    const m = /\{[\s\S]*\}/.exec(user);
+    let plan = null;
+    try { plan = m ? JSON.parse(m[0]) : null; } catch { plan = null; }
+    if (plan && Array.isArray(plan.fields)) {
+      plan.fields.push({label: "Priority", name: "Priority__c", type: "Picklist", values: ["Low", "Medium", "High"], description: "How urgent it is"});
+      return JSON.stringify(plan);
+    }
+  }
+  return JSON.stringify({
+    object: {label: "Order", pluralLabel: "Orders", name: "Order__c", description: "Customer orders", enableHistory: true,
+      nameField: {label: "Order Number", type: "AutoNumber", format: "ORD-{00000}"}, sharingModel: "ReadWrite"},
+    fields: [
+      {label: "Quantity", name: "Quantity__c", type: "Number", precision: 18, scale: 0, description: "Units ordered"},
+      {label: "Unit Price", name: "Unit_Price__c", type: "Currency", precision: 18, scale: 2, description: "Price per unit"},
+      {label: "Total", name: "Total__c", type: "Formula", returnType: "Currency", formula: "Quantity__c * Unit_Price__c", description: "Quantity × price"},
+      {label: "Category", name: "Category__c", type: "Picklist", values: ["Hardware", "Software"], description: "What was ordered", trackHistory: true},
+      {label: "Item", name: "Item__c", type: "Picklist", values: ["Laptop", "Phone", "License"], controllingField: "Category__c",
+        dependencies: {Hardware: ["Laptop", "Phone"], Software: ["License"]}, description: "Item for the category"},
+      {label: "Delivery Time", name: "Delivery_Time__c", type: "Time", description: "Preferred delivery time"}
+    ],
+    validationRules: [{name: "Quantity_Positive", formula: "Quantity__c <= 0", message: "Quantity must be at least 1", field: "Quantity__c"}],
+    listViews: [{name: "All_Orders", label: "All Orders", columns: ["NAME", "Quantity__c", "Total__c"]}],
+    compactLayout: {fields: ["Name", "Total__c", "Category__c"]}
+  });
+}
+
 function mockLlm(req, res) {
   let raw = "";
   req.on("data", c => { raw += c; });
@@ -301,8 +401,11 @@ function mockLlm(req, res) {
     try { body = JSON.parse(raw || "{}"); } catch { /* keep empty */ }
     lastLlmRequest = body;
     const system = String(((body.messages || [])[0] || {}).content || "");
-    const user = String(((body.messages || [])[1] || {}).content || "");
-    const content = /Write ONE complete, deployable piece of metadata/.test(system)
+    const msgs = body.messages || [];
+    const user = String((msgs[msgs.length - 1] || {}).content || "");
+    const content = /design custom objects|refine their custom object design/.test(system)
+      ? mockObjectPlan(user, /refine their custom object design/.test(system))
+      : /Write ONE complete, deployable piece of metadata/.test(system)
       ? mockCode(user)
       : /Write ONE complete, deployable component/.test(system)
       ? mockLwcBundle((/Component folder name: ([A-Za-z0-9]+)/.exec(user) || [])[1] || "openCases")
@@ -317,12 +420,22 @@ function mockLlm(req, res) {
       : /suggest|fix/i.test(system) && /fixedQuery/.test(system)
       ? JSON.stringify({explanation: "Mock fix.", fixedQuery: "SELECT Id, Name FROM Account LIMIT 50"})
       : "Returns the Id and Name of up to 50 Account records. There is no filter, so any 50 accounts may come back.";
+    if (body.stream) {
+      // Server-sent events in a few chunks, like a real streaming provider.
+      res.writeHead(200, {"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*"});
+      for (let i = 0; i < content.length; i += 400) {
+        res.write(`data: ${JSON.stringify({id: "mock", object: "chat.completion.chunk", choices: [{index: 0, delta: {content: content.slice(i, i + 400)}}]})}\n\n`);
+      }
+      res.write(`data: ${JSON.stringify({id: "mock", choices: [{index: 0, delta: {}, finish_reason: "stop"}]})}\n\n`);
+      return res.end("data: [DONE]\n\n");
+    }
     json(res, 200, {id: "mock", object: "chat.completion", choices: [{index: 0, message: {role: "assistant", content}, finish_reason: "stop"}]});
   });
 }
 
 http.createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+  if (url.pathname === "/mock-perm") return json(res, 200, permPosts);
   if (url.pathname.startsWith("/services/")) return api(req, res, url);
   if (url.pathname === "/mock-llm/last") return json(res, 200, lastLlmRequest);
   if (url.pathname.startsWith("/mock-llm/")) {

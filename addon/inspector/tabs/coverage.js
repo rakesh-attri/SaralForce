@@ -1,21 +1,32 @@
 import {sfConn, apiVersion} from "../../inspector.js";
 import {safeCopyText} from "../../utils.js";
 import {escapeSoqlString, escapeSoqlLike} from "../../core/soql.js";
-import {ffStoppedError, ffIsStopped, ffSleep, useUnmountSignal} from "../shared/hooks.js";
+import {useUnmountSignal} from "../shared/hooks.js";
 import {fmtNum} from "../shared/format.js";
+import {useTestRun, TestRunPanel, CoverageLines} from "./coverage-run.js";
 
 const h = React.createElement;
 
 function CoverageTab() {
   const [seq, setSeq] = React.useState(0);
   const [runMsg, setRunMsg] = React.useState(null);
-  const [running, setRunning] = React.useState(false);
+  const [resolving, setRunning] = React.useState(false);
+  const [linesOf, setLinesOf] = React.useState(null);
   const [filterNote, setFilterNote] = React.useState(null);
   const [quickName, setQuickName] = React.useState("");
   const [suggest, setSuggest] = React.useState([]);
   const [suggestOpen, setSuggestOpen] = React.useState(false);
   const suggestTimer = React.useRef(null);
   const unmountRef = useUnmountSignal();
+  // Test runs follow their job id; coverage reloads when a run finishes.
+  const testRun = useTestRun(unmountRef.current.signal, (final) => {
+    const r = final.results;
+    setRunMsg(final.status === "done"
+      ? `Run complete: ${r.passed} passed, ${r.failed} failed${r.skipped ? `, ${r.skipped} skipped` : ""} — coverage refreshed.`
+      : "Still running — results so far are shown below.");
+    setSeq(x => x + 1);
+  });
+  const running = resolving || testRun.running;
 
   React.useEffect(() => () => {
     if (suggestTimer.current) clearTimeout(suggestTimer.current);
@@ -49,59 +60,9 @@ function CoverageTab() {
     }, 300);
   };
 
-  const loadAggregates = async () => {
-    const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
-      encodeURIComponent("SELECT ApexClassOrTriggerId, ApexClassOrTrigger.Name, NumLinesCovered, NumLinesUncovered, LastModifiedDate FROM ApexCodeCoverageAggregate ORDER BY ApexClassOrTrigger.Name"),
-      {useCache: false});
-    return res.records || [];
-  };
-
-  const waitForFresh = async (sinceMs, label) => {
-    const t0 = Date.now();
-    const signal = unmountRef.current.signal;
-    for (let i = 0; i < 60; i++) {
-      await ffSleep(3000, signal);
-      setRunMsg(`Running ${label}… ${Math.round((Date.now() - t0) / 1000)}s`);
-      try {
-        const rows = await loadAggregates();
-        const max = rows.reduce((m, r) => Math.max(m, Date.parse(r.LastModifiedDate) || 0), 0);
-        if (max > sinceMs) return true;
-      } catch (e) { /* keep polling */ }
-      if (signal.aborted) throw ffStoppedError();
-    }
-    return false;
-  };
-
-  const runTests = async (body, label, targetName) => {
-    setRunning(true);
-    setRunMsg(`Running ${label}…`);
-    let before = null;
-    const classId = body && body.tests && body.tests[0] && body.tests[0].classId;
-    if (targetName) {
-      try {
-        const rows = await loadAggregates();
-        const hit = rows.find(r => nm(r) === targetName);
-        before = hit ? pctOf(hit) : null;
-      } catch (e) { /* ignore */ }
-    }
-    try {
-      await sfConn.rest(`/services/data/v${apiVersion}/tooling/runTestsAsynchronous`, {
-        method: "POST", useCache: false, body});
-      const since = Date.now();
-      if (await waitForFresh(since, label)) {
-        setRunMsg("Run complete — coverage refreshed." +
-          (targetName ? await describeRunCoverage(classId, targetName, before) : ""));
-        setSeq(s => s + 1);
-      } else {
-        setRunMsg("Still running — hit Refresh in a bit for the new numbers.");
-      }
-    } catch (e) {
-      // Tab closed mid-wait: the server-side test run keeps going.
-      if (ffIsStopped(e)) return;
-      setRunMsg("Run failed: " + (e.message || String(e)));
-    } finally {
-      if (!unmountRef.current.signal.aborted) setRunning(false);
-    }
+  const runTests = async (body, label) => {
+    setRunMsg(null);
+    await testRun.start(body, label);
   };
 
   const pctOf = (r) => {
@@ -109,37 +70,6 @@ function CoverageTab() {
     return c + u > 0 ? Math.round(c / (c + u) * 100) : null;
   };
   const nm = (r) => (r.ApexClassOrTrigger && r.ApexClassOrTrigger.Name) || r.ApexClassOrTriggerId || "(unknown)";
-
-  const describeRunCoverage = async (classId, targetName, before) => {
-    if (classId) {
-      try {
-        const r = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` +
-          encodeURIComponent(`SELECT ApexClassOrTriggerId, ApexClassOrTrigger.Name, TestMethodName, NumLinesCovered, NumLinesUncovered FROM ApexCodeCoverage WHERE ApexTestClassId = '${classId}'`),
-          {useCache: false});
-        const cov = r.records || [];
-        if (cov.length) {
-          const parts = cov.slice(0, 3).map(c => {
-            const n = (c.ApexClassOrTrigger && c.ApexClassOrTrigger.Name) || c.ApexClassOrTriggerId;
-            const t = (c.NumLinesCovered || 0) + (c.NumLinesUncovered || 0);
-            const p = t > 0 ? Math.round((c.NumLinesCovered || 0) / t * 100) : 0;
-            return `${n} ${p}% (${fmtNum(c.NumLinesCovered || 0)}/${fmtNum(t)} lines)`;
-          });
-          return ` — ${targetName} finished — covers ` + parts.join(", ") +
-            (cov.length > 3 ? ` +${cov.length - 3} more` : "");
-        }
-      } catch (e) { /* fall through to aggregate lookup */ }
-    }
-    try {
-      const rows = await loadAggregates();
-      const hit = rows.find(r => nm(r) === targetName);
-      const after = hit ? pctOf(hit) : null;
-      return after == null ? ` — ${targetName}: no coverage yet`
-        : before == null ? ` — ${targetName}: now ${after}%`
-        : after === before ? ` — ${targetName}: unchanged at ${after}%`
-        : ` — ${targetName}: ${before}% → ${after}%`;
-    } catch (e) { /* ignore */ }
-    return "";
-  };
 
   const quickRun = async () => {
     const name = quickName.trim();
@@ -155,7 +85,8 @@ function CoverageTab() {
         setRunMsg(`No Apex class named ${name}.`);
         return;
       }
-      await runTests({tests: [{classId: id}]}, name, name);
+      setRunning(false);
+      await runTests({tests: [{classId: id}]}, name);
     } finally {
       if (!unmountRef.current.signal.aborted) setRunning(false);
     }
@@ -166,6 +97,7 @@ function CoverageTab() {
   const runAll = () => runTests({testLevel: "RunLocalTests"}, "all tests");
 
   return h("div", {className: "covdash"},
+    linesOf && h(CoverageLines, {target: linesOf, onClose: () => setLinesOf(null)}),
     h("aside", {className: "covdash-side"},
       h("div", {className: "covdash-side-head"},
         h("span", {className: "covdash-side-ico", "aria-hidden": "true"}, "</>"),
@@ -238,6 +170,8 @@ function CoverageTab() {
         "Run Class")
     ),
     h(CoverageDataPanel, {
+      topSlot: h(TestRunPanel, {testRun}),
+      onLines: setLinesOf,
       key: "cov-" + seq,
       tooling: true,
       soql: "SELECT ApexClassOrTriggerId, ApexClassOrTrigger.Name, NumLinesCovered, NumLinesUncovered, LastModifiedDate FROM ApexCodeCoverageAggregate ORDER BY ApexClassOrTrigger.Name",
@@ -290,7 +224,7 @@ function covAgo(ms) {
 }
 
 function CoverageDataPanel({tooling, soql, postFetch, emptyText, placeholder,
-  match, nameOf, pctOf, running, runRow}) {
+  match, nameOf, pctOf, running, runRow, topSlot, onLines}) {
   const [rows, setRows] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -388,6 +322,7 @@ function CoverageDataPanel({tooling, soql, postFetch, emptyText, placeholder,
   ];
 
   return h("div", {className: "covdash-main"},
+    topSlot,
     h("section", {className: "covdash-card"},
       h("div", {className: "covdash-sum-h"},
         h("span", {className: "covdash-sum-ico", "aria-hidden": "true"}, "📊"),
@@ -498,6 +433,14 @@ function CoverageDataPanel({tooling, soql, postFetch, emptyText, placeholder,
                         style: {width: (p == null ? 0 : p) + "%"}
                       }))),
                   h("td", {className: "covdash-c-act"},
+                    onLines && h("button", {
+                      className: "covdash-runbtn covdash-linesbtn",
+                      title: `Show covered and uncovered lines of ${nameOf(r)}`,
+                      onClick: (e) => {
+                        e.stopPropagation();
+                        onLines({id: r.ApexClassOrTriggerId, name: nameOf(r), isTrigger: !!r._isTrigger});
+                      }
+                    }, "Lines"),
                     r._isTrigger
                       ? h("span", {
                           className: "covdash-noact",

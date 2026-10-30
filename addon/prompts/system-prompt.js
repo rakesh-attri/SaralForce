@@ -38,6 +38,13 @@ RULES:
    - Url: web links
    - Lookup: optional relationship to another object (needs "relatedTo")
    - MasterDetail: required parent relationship (needs "relatedTo")
+   - Formula: value calculated from other fields (needs "formula" and "returnType")
+   - Summary: roll-up summary of child records (only on the master side of a Master-Detail)
+   - AutoNumber: system-generated sequence other than the name field (needs "displayFormat")
+   - Location: latitude/longitude (geolocation)
+   - Time: time of day without a date
+   - Html: rich text with formatting
+   - EncryptedText: sensitive text shown masked (max 175 chars)
    Use these exact type values (e.g. "MasterDetail", not "Master-Detail"; "DateTime", not "Date/Time"). No other types are supported.
 6. For Picklist fields, provide 2-8 logical values based on the context.
 7. Include a Description for every object and field.
@@ -106,7 +113,22 @@ FIELD TYPE-SPECIFIC PROPERTIES (include these in the field object):
 - Url: (no extra props needed)
 - MasterDetail: "relatedTo" (e.g. "Account"); always required implicitly, so omit "required"
 - Lookup: "relatedTo" (e.g. "Contact"), "required" (usually false)
+- Formula: "returnType" (one of Text, Number, Currency, Percent, Date, DateTime, Time, Checkbox), "formula" (Salesforce formula syntax referencing this object's field API names), optional "precision"/"scale" for numeric return types. Never "required".
+- Summary: "summaryOperation" ("count", "sum", "min" or "max"), "summaryForeignKey" ("Child__c.Parent_Field__c", the child's Master-Detail field), "summarizedField" ("Child__c.Amount__c", omit for count). Only when the child object already exists in the org.
+- AutoNumber: "displayFormat" (e.g. "INV-{0000}"), optional "startingNumber".
+- Location: optional "scale" (default 5).
+- Html: optional "length" (default 32768), "visibleLines" (default 25).
+- EncryptedText: "length" (1-175), optional "maskType" ("all", "lastFour", "creditCard"...).
+- Picklist from an org-wide Global Value Set: "globalValueSet": "Set_Name" instead of "values".
+- Dependent picklist: "controllingField" (a Picklist or Checkbox field in this plan) and "dependencies": {"Controlling value": ["Dependent value", ...]}.
+- Any field may set "trackHistory": true when the object enables history tracking, and "inlineHelpText" for a hover tip.
 - "required": true is honored for Text, TextArea, Number, Currency, Percent, Date, DateTime, Picklist, Email, Phone, Url and Lookup; it is ignored for Checkbox, LongTextArea, MultiselectPicklist and MasterDetail.
+
+OBJECT EXTRAS (all optional — include only when the user asks or they clearly help):
+- On "object": "enableHistory", "enableReports", "enableActivities", "enableSearch", "enableFeeds" (true/false).
+- Top-level "validationRules": [{"name": "Amount_Must_Be_Positive", "formula": "Amount__c < 0", "message": "Amount must be positive", "field": "Amount__c"}]. The formula is the ERROR condition.
+- Top-level "listViews": [{"name": "All_Open", "label": "All Open", "columns": ["NAME", "Status__c"]}]. Columns are "NAME" or field API names from this plan.
+- Top-level "compactLayout": {"fields": ["Name", "Status__c"]} (up to 10 fields from this plan).
 
 IMPORTANT: If the user asks for modifications to a previous proposal, update the JSON accordingly. Always maintain the complete JSON structure in your response.`;
 
@@ -116,9 +138,10 @@ The user has an existing object proposal and wants to make changes. Analyze thei
 
 Keep all existing fields unless the user explicitly asks to remove or modify them. Add new fields or update existing ones based on the user's request.
 Keep existing recordTypes unless the user asks to change them; add recordTypes only when the user asks for record categories.
+Keep existing validationRules, listViews and compactLayout unless the user asks to change them. Use the same field types and properties as the original system prompt (including Formula, Summary, AutoNumber, Location, Time, Html, EncryptedText, global/dependent picklists and trackHistory).
 
 Always return the COMPLETE updated JSON (object + all fields + recordTypes if any), not just the changes.
-Use only these field type values: Text, TextArea, LongTextArea, Number, Currency, Percent, Date, DateTime, Checkbox, Picklist, MultiselectPicklist, Email, Phone, Url, Lookup, MasterDetail. Keep object.nameField as {"label", "type", "format"} and use "ControlledByParent" sharing only when there is a MasterDetail field.`;
+Use only these field type values: Text, TextArea, LongTextArea, Number, Currency, Percent, Date, DateTime, Checkbox, Picklist, MultiselectPicklist, Email, Phone, Url, Lookup, MasterDetail, Formula, Summary, AutoNumber, Location, Time, Html, EncryptedText. Keep object.nameField as {"label", "type", "format"} and use "ControlledByParent" sharing only when there is a MasterDetail field.`;
 
 export const USER_MESSAGE_TEMPLATE = (userDescription, existingProposal = null) => {  if (existingProposal) {
     return `Here is the current object proposal:

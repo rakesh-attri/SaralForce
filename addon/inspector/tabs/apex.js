@@ -8,12 +8,13 @@ import {ffLoadJson, ffSaveJson, useFfSession} from "../shared/session-state.js";
 import {Celebrate} from "../shared/celebrate.js";
 import {apexHighlight} from "../shared/highlight.js";
 import {appTabsResolveCurrentUserId, parseApexLog} from "../shared/apex-debug.js";
+import {
+  APEX_LOG_LEVELS, buildExecuteAnonymousEnvelope, parseExecuteAnonymousResponse,
+  parseLimitUsage, isLogTruncated, editorLine, outdent
+} from "../../core/apex-anon.js";
 
 const h = React.createElement;
 
-// Apex log levels for the TraceFlag DebugLevel (single dropdown drives
-// every workflow category).
-const APEX_LOG_LEVELS = ["Error", "Warn", "Info", "Debug", "Fine", "Finer", "Finest"];
 
 // Display name for a history entry: first non-empty code line, truncated.
 function apexRecentName(h) {
@@ -33,6 +34,38 @@ for (Account a : accs) {
 // Database.executeBatch(new MyBatchClass(), 200);
 System.debug('Uncomment the line above to run your batch');`}
 ];
+
+// Preferred path: Apex SOAP API executeAnonymous. The script goes in the
+// request body (no URL length limit) and this run's own debug log comes
+// back in the response at the requested level. Resolves null when the SOAP
+// endpoint can't be used (then the REST + TraceFlag path takes over).
+async function apexExecuteSoap(code, {timeoutMs, level}) {
+  const ctrl = new AbortController();
+  const timer = timeoutMs ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  let res;
+  try {
+    res = await fetch(`https://${sfConn.instanceHostname}/services/Soap/s/${apiVersion}`, {
+      method: "POST",
+      headers: {"Content-Type": "text/xml; charset=UTF-8", "SOAPAction": "\"\""},
+      body: buildExecuteAnonymousEnvelope(sfConn.sessionId, code, level),
+      signal: ctrl.signal
+    });
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error("Request timed out");
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  const text = await res.text();
+  const parsed = parseExecuteAnonymousResponse(text);
+  if (parsed.fault) {
+    // Endpoint missing or not allowed for this user → use the REST path.
+    if (res.status === 404 || /API_DISABLED|UNKNOWN_EXCEPTION.*Apex API/i.test(parsed.fault)) return null;
+    throw new Error(parsed.fault);
+  }
+  if (!res.ok && !/<(?:\w+:)?result\b/.test(text)) return null;
+  return {...parsed, via: "soap"};
+}
 
 async function apexExecute(code, opts) {
   const timeoutMs = opts && opts.timeoutMs > 0 ? opts.timeoutMs : 0;
@@ -154,6 +187,8 @@ function ApexTab() {
   const [aiBusy, setAiBusy] = React.useState(false);
   const [aiCheck, setAiCheck] = React.useState(null);
   const [aiNote, setAiNote] = React.useState(null);
+  const runningRef = React.useRef(false);
+  const [lastSnippet, setLastSnippet] = React.useState(null);
 
   const pushHistory = (snippet, ok) => {
     setHistory(prev => {
@@ -232,7 +267,7 @@ function ApexTab() {
           ? "Could not fetch debug log: " + lastErr.message
           : "No fresh debug log found — check Setup → Debug Logs, or tick Open Log and run again.");
       } else {
-        setLog(best.slice(0, 30000));
+        setLog(best);
         if (stable < 2) setLogNote("Log may still be writing — hit Refresh log in a few seconds for the remainder.");
       }
     } catch (e) {
@@ -244,19 +279,20 @@ function ApexTab() {
   };
 
   const run = async (snippetOverride, opts) => {
+    // A second Ctrl+Enter while a run is in flight must not run it twice.
+    if (runningRef.current) return;
     const skipAiCheck = !!(opts && opts.skipAiCheck);
+    const lineOffset = (opts && opts.lineOffset) || 0;
     const snippet = String(snippetOverride == null ? (code || "") : snippetOverride);
     if (!snippet.trim()) { setError("Enter some Apex code first"); return; }
-    if (encodeURIComponent(snippet).length > 16000) {
-      setError("Script is too long for URL-based execution — split it into smaller chunks.");
-      return;
-    }
     const timeoutMs = Math.round(Number(timeoutSec) * 1000);
     if (!Number.isFinite(timeoutMs) || timeoutMs < 10000 || timeoutMs > 600000) {
       setError("Timeout must be between 10 and 600 seconds.");
       return;
     }
+    runningRef.current = true;
     setRunning(true);
+    setLastSnippet(snippet);
     setError(null);
     setExec(null);
     setLog(null);
@@ -267,13 +303,6 @@ function ApexTab() {
     const startedAt = new Date().toISOString();
     const startMs = Date.now();
     try {
-      // Log level: make sure a TraceFlag points at a matching DebugLevel.
-      // Any failure degrades to org defaults — the run still proceeds.
-      try {
-        await apexEnsureTraceFlag(logLevel);
-      } catch (e) {
-        setLogNote("TraceFlag setup failed (" + e.message + ") — continuing with org defaults.");
-      }
       // Pre-flight: with "Use AI" on, let the model scan for compile errors
       // first — a detected problem BLOCKS the run and shows a suggested fix.
       if (useAi && !skipAiCheck) {
@@ -281,7 +310,7 @@ function ApexTab() {
         try {
           const chk = await apexAiCheck(snippet, null);
           if (!chk.ok) {
-            setAiCheck(Object.assign({stage: "preflight"}, chk));
+            setAiCheck(Object.assign({stage: "preflight", lineOffset}, chk));
             return;
           }
         } catch (e) {
@@ -292,7 +321,22 @@ function ApexTab() {
           setAiBusy(false);
         }
       }
-      const r = await apexExecute(snippet, {timeoutMs});
+      let r = await apexExecuteSoap(snippet, {timeoutMs, level: openLog ? logLevel : null});
+      if (!r) {
+        // Fallback: REST Tooling GET (script in the URL) + TraceFlag + log polling.
+        if (encodeURIComponent(snippet).length > 16000) {
+          throw new Error("Script is too long for the fallback REST path — split it into smaller chunks.");
+        }
+        if (openLog) {
+          try {
+            await apexEnsureTraceFlag(logLevel);
+          } catch (e) {
+            setLogNote("TraceFlag setup failed (" + e.message + ") — continuing with org defaults.");
+          }
+        }
+        r = {...(await apexExecute(snippet, {timeoutMs})), via: "rest"};
+      }
+      r.lineOffset = lineOffset;
       setExec(r);
       setLastRunAt(new Date().toISOString());
       pushHistory(snippet, r.compiled && r.success);
@@ -304,14 +348,25 @@ function ApexTab() {
         setAiBusy(true);
         try {
           const chk = await apexAiCheck(snippet, r.compileProblem);
-          if (!chk.ok) setAiCheck(Object.assign({stage: "server"}, chk));
+          if (!chk.ok) setAiCheck(Object.assign({stage: "server", lineOffset}, chk));
         } catch (e) {
           if (e.message !== "NO_LLM_CONFIG") setAiNote("AI fix unavailable: " + e.message);
         } finally {
           setAiBusy(false);
         }
       }
-      if (openLog) await fetchLog(startedAt);
+      if (openLog) {
+        if (r.via === "soap") {
+          if (r.debugLog) {
+            setLog(r.debugLog);
+            if (isLogTruncated(r.debugLog)) setLogNote("Salesforce cut this log off at its size limit — lower the log level to see the end.");
+          } else {
+            setLogNote("Salesforce returned no debug log for this run.");
+          }
+        } else {
+          await fetchLog(startedAt);
+        }
+      }
     } catch (e) {
       let msg = e.message;
       // XHR timeout surfaces as a network error — label it when the run
@@ -323,6 +378,7 @@ function ApexTab() {
       pushHistory(snippet, false);
     } finally {
       setDurationMs(Date.now() - startMs);
+      runningRef.current = false;
       setRunning(false);
     }
   };
@@ -336,6 +392,8 @@ function ApexTab() {
     setDurationMs(null);
     setLastRunAt(null);
     setSelRange({start: 0, end: 0});
+    setAiCheck(null);
+    setAiNote(null);
   };
 
   const runHighlighted = () => {
@@ -344,7 +402,8 @@ function ApexTab() {
     const s = ta.selectionStart ?? 0;
     const e = ta.selectionEnd ?? 0;
     if (e <= s) return;
-    run(String(code || "").slice(s, e));
+    const src = String(code || "");
+    run(src.slice(s, e), {lineOffset: src.slice(0, s).split("\n").length - 1});
   };
 
   const syncSel = e => {
@@ -360,6 +419,24 @@ function ApexTab() {
     }
     if (gutterRef.current) gutterRef.current.scrollTop = t.scrollTop;
   };
+
+  // Select a line in the editor and scroll it into view.
+  const goToLine = (n) => {
+    const ta = taRef.current;
+    if (!ta || !n) return;
+    const lines = String(code || "").split("\n");
+    const idx = Math.min(Math.max(1, n), lines.length) - 1;
+    const start = lines.slice(0, idx).reduce((sum, l) => sum + l.length + 1, 0);
+    try {
+      ta.focus();
+      ta.setSelectionRange(start, start + lines[idx].length);
+      const lh = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+      ta.scrollTop = Math.max(0, idx * lh - ta.clientHeight / 3);
+      setSelRange({start, end: start + lines[idx].length});
+    } catch (e) { /* ignore */ }
+  };
+  const errLine = exec ? editorLine(exec.line, exec.lineOffset) : null;
+  const limits = log ? parseLimitUsage(log) : [];
 
   const downloadLog = () => {
     if (!log) return;
@@ -528,6 +605,18 @@ function ApexTab() {
           onScroll: onTermScroll,
           onKeyDown: e => {
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
+            if (e.key === "Tab" && e.shiftKey) {
+              e.preventDefault();
+              const ta = taRef.current;
+              if (ta) {
+                const r = outdent(code, ta.selectionStart ?? 0, ta.selectionEnd ?? 0);
+                setCode(r.text);
+                requestAnimationFrame(() => {
+                  try { ta.focus(); ta.setSelectionRange(r.start, r.end); } catch (e2) { /* ignore */ }
+                });
+              }
+              return;
+            }
             if (e.key === "Tab") {
               e.preventDefault();
               const ta = taRef.current;
@@ -581,8 +670,9 @@ function ApexTab() {
       ? h("div", {className: "insp-ok"}, "Apex executed successfully (compiled ✓).")
       : h("div", {className: "insp-error"},
           exec.compileProblem
-            ? `Compile error${exec.line ? ` (line ${exec.line}${exec.column ? ", column " + exec.column : ""})` : ""}: ${exec.compileProblem}`
+            ? `Compile error${errLine ? ` (line ${errLine}${exec.column ? ", column " + exec.column : ""})` : ""}: ${exec.compileProblem}`
             : (exec.exceptionMessage || "Execution failed."),
+          errLine && h("button", {className: "field-action-btn apex-goto", onClick: () => goToLine(errLine)}, `Go to line ${errLine}`),
           exec.exceptionStackTrace && h("pre", {className: "insp-log insp-log-small"},
             String(exec.exceptionStackTrace).slice(0, 4000))
         )
@@ -594,7 +684,7 @@ function ApexTab() {
       h("div", {className: "insp-fix-why"},
         (aiCheck.stage === "server"
           ? `Salesforce compile error: ${aiCheck.error || exec?.compileProblem || "rejected the code"}`
-          : `Likely compile error${aiCheck.line ? ` (line ${aiCheck.line})` : ""}: ${aiCheck.error || "problem found"}`),
+          : `Likely compile error${aiCheck.line ? ` (line ${editorLine(aiCheck.line, aiCheck.lineOffset)})` : ""}: ${aiCheck.error || "problem found"}`),
         aiCheck.explanation ? ` — ${aiCheck.explanation}` : ""),
       aiCheck.fixedCode && h("div", {className: "insp-fix-query"}, aiCheck.fixedCode),
       h("div", {className: "insp-toolbar", style: {marginBottom: "0", marginTop: "8px"}},
@@ -608,6 +698,20 @@ function ApexTab() {
             run(fixed, {skipAiCheck: true});
           }
         }, running ? "Running…" : "Apply & Run"),
+        aiCheck.stage === "preflight" && lastSnippet && h("button", {
+          className: "btn btn-secondary btn-sm",
+          disabled: running,
+          title: "The AI can be wrong — run the code exactly as written",
+          onClick: () => {
+            const offset = aiCheck.lineOffset;
+            setAiCheck(null);
+            run(lastSnippet, {skipAiCheck: true, lineOffset: offset});
+          }
+        }, "Run anyway"),
+        aiCheck.line && h("button", {
+          className: "btn btn-secondary btn-sm",
+          onClick: () => goToLine(editorLine(aiCheck.line, aiCheck.lineOffset))
+        }, "Go to line"),
         h("button", {
           className: "btn btn-secondary btn-sm",
           onClick: async () => {
@@ -640,7 +744,7 @@ function ApexTab() {
           h("div", {className: "apex-empty-t"}, "No execution yet"),
           h("div", {className: "insp-meta"}, "Run a script above to see execution results here."))),
         ((exec || log || logLoading || logNote) && h("div", {className: "apex-result-tabs", role: "tablist"},
-          [["logs", "Logs"], ["result", "Result"], ["debug", "Debug Info"]].map(([id, label]) =>
+          [["logs", "Logs"], ["result", "Result"], ["limits", limits.length ? `Limits${limits.some(l => l.pct >= 80) ? " ⚠" : ""}` : "Limits"], ["debug", "Debug Info"]].map(([id, label]) =>
             h("button", {key: id, className: "apex-result-tab" + (resultView === id ? " active" : ""),
               role: "tab", "aria-selected": resultView === id ? "true" : "false",
               onClick: () => setResultView(id)}, label)))),
@@ -750,6 +854,17 @@ function ApexTab() {
                       h("td", null, h("span", {className: "ff-log-ev", title: r.event}, r.event)),
                       h("td", {className: "insp-nowrap", title: r.details}, r.details))))))
             : h("div", {className: "insp-empty"}, "No System.debug output in this log."))),
+        ((exec || log || logLoading || logNote) && resultView === "limits" && h("div", null,
+          limits.length
+            ? h("div", {className: "apex-limits"}, limits.map(l => h("div", {key: l.name, className: "apex-limit" + (l.pct >= 80 ? " hot" : l.pct >= 50 ? " warm" : "")},
+                h("div", {className: "apex-limit-h"},
+                  h("span", null, l.name.replace(/^(Number of|Maximum) /, "").replace(/^./, c => c.toUpperCase())),
+                  h("span", {className: "apex-limit-v"}, `${l.used.toLocaleString()} / ${l.max.toLocaleString()}`)),
+                h("div", {className: "limit-bar"}, h("div", {className: "limit-fill" + (l.pct >= 80 ? " crit" : l.pct >= 50 ? " warn" : ""),
+                  style: {width: Math.min(100, Math.max(l.used ? 2 : 0, l.pct)) + "%"}})))))
+            : h("div", {className: "insp-empty"}, log
+              ? "No limit usage in this log (Apex_profiling was not logged)."
+              : "Turn on Open Log and run to see governor limit usage."))),
         ((exec || log || logLoading || logNote) && resultView === "debug" && h("div", null,
           h("dl", {className: "apex-debug-list"},
             h("div", {className: "apex-debug-row"},
@@ -764,6 +879,9 @@ function ApexTab() {
             exec && exec.exceptionMessage && h("div", {className: "apex-debug-row"},
               h("dt", null, "Exception"),
               h("dd", null, exec.exceptionMessage)),
+            exec && h("div", {className: "apex-debug-row"},
+              h("dt", null, "Executed via"),
+              h("dd", null, exec.via === "soap" ? "Apex SOAP API (exact log for this run)" : "REST Tooling API (log matched by time)")),
             h("div", {className: "apex-debug-row"},
               h("dt", null, "Duration"),
               h("dd", null, durationMs != null ? `${(durationMs / 1000).toFixed(2)}s` : "n/a")),

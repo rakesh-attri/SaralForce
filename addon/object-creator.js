@@ -7,6 +7,7 @@ import {askAi, isAiConfigured} from "./core/llm.js";
 import {initSettings} from "./core/storage.js";
 import {openInspectorInNewTab} from "./core/preferences.js";
 import {showMenu} from "./ui/tour.js";
+import {installMessageFocus} from "./ui/message-focus.js";
 import {runTour, autoStartPanelTours, autoStartBuilderTour, showReleaseNotes} from "./ui/tour-runner.js";
 import {PANEL_TOUR, BUILDER_TOUR, tabTour} from "./ui/tour-content.js";
 import {getThemePreference, setThemePreference, applyTheme, resolveTheme, nextThemePreference, themeLabel, watchSystemTheme} from "./core/theme.js";
@@ -14,13 +15,16 @@ import {getParentOrigin, isTrustedFrameOrigin, setTrustedParentOrigin, postToPar
 import {
   FIELD_TYPES, SHARING_MODELS, normalizeFieldType, escapeSoqlString,
   suggestApiName, nextRetryName, resolveNameField, normalizeProposal, validateProposal,
-  parseJSONFromText, isNonTransientDeployError
+  parseJSONFromText, isNonTransientDeployError, sortFieldsForDeploy, CALCULATED_TYPES
 } from "./core/object-builder-rules.js";
 import {
   pickTabMotif, safeRelationshipName, buildObjectXml, buildFieldXml, buildRecordTypeXml,
-  buildTabXml, buildTabVisibilityXml, buildRecordTypeVisibilityXml, buildProfileXml, buildLayoutXml
+  buildTabXml, buildTabVisibilityXml, buildRecordTypeVisibilityXml, buildProfileXml, buildLayoutXml,
+  buildValidationRuleXml, buildListViewXml, buildCompactLayoutXml
 } from "./builder/metadata-xml.js";
 import {domLocal, domChildren, domFind, domFindAll, domToMetXml} from "./builder/metadata-dom.js";
+import {FieldDetails, ObjectSettings} from "./builder/plan-editor-ui.js";
+import {fieldDefaults, describeToProposal, permissionSetNameFor} from "./core/plan-fields.js";
 import {
   ensureLayoutCustomLinks, removeEmptyLayoutColumns, fixCustomLinksWithFields, layoutNeedsRepair,
   pickLayoutFieldColumn, findLayoutItemTemplate, buildLayoutItem
@@ -379,6 +383,7 @@ class App extends React.Component {
       error: null,
       activeChatId: null,
       visibilityMode: "all",
+      flsTarget: "me",
       selectedProfiles: [],
       recordTypesDone: false,
       builderMode: "plan",
@@ -550,6 +555,15 @@ class App extends React.Component {
 
       const parsed = parseJSONFromText(response);
       const proposal = parsed ? normalizeProposal(parsed) : null;
+      if (proposal && currentProposal && currentProposal.existing) {
+        // Editing an existing object: fields already in the org stay as
+        // they are, whatever the AI returned for them.
+        const inOrg = new Map(currentProposal.fields.filter(f => f.existing).map(f => [f.name, f]));
+        proposal.existing = true;
+        proposal.object = {...proposal.object, name: currentProposal.object.name};
+        proposal.fields = (proposal.fields || []).map(f => (f && inOrg.has(f.name) ? inOrg.get(f.name) : f));
+        for (const [name, f] of inOrg) if (!proposal.fields.some(x => x && x.name === name)) proposal.fields.unshift(f);
+      }
       if (proposal) {
         const validationErrors = validateProposal(proposal);
         if (validationErrors.length > 0) {
@@ -559,7 +573,7 @@ class App extends React.Component {
           this.addAssistantMessage(response, proposal);
           this.setState({
             currentProposal: proposal,
-            selectedFields: proposal.fields.map(f => f.name),
+            selectedFields: proposal.fields.filter(f => !f.existing).map(f => f.name),
             deploymentStatus: null,
             deploymentResults: [],
             recordTypesDone: false,
@@ -655,12 +669,16 @@ class App extends React.Component {
     const currentProposal = normalizeProposal(this.state.currentProposal);
     if (currentProposal !== this.state.currentProposal) this.setState({currentProposal});
 
-    const fieldsToDeploy = selectedFields
+    // Controlling picklists before their dependents, roll-ups last.
+    // Fields already in the org (Edit existing object) are never redeployed.
+    const fieldsToDeploy = sortFieldsForDeploy((selectedFields
       ? currentProposal.fields.filter(f => selectedFields.includes(f.name))
-      : currentProposal.fields;
+      : currentProposal.fields).filter(f => !f.existing));
 
-    if (fieldsToDeploy.length === 0) {
-      this.setState({error: "No fields selected for deployment. Please select at least one field."});
+    if (fieldsToDeploy.length === 0 && !(currentProposal.existing && this.planExtras(currentProposal).length)) {
+      this.setState({error: currentProposal.existing
+        ? "Add a new field (or a validation rule / list view) to deploy to this object."
+        : "No fields selected for deployment. Please select at least one field."});
       return;
     }
 
@@ -694,7 +712,8 @@ class App extends React.Component {
       error: null
     });
 
-    const totalSteps = fieldsToDeploy.length + 6;
+    const extras = this.planExtras(currentProposal);
+    const totalSteps = fieldsToDeploy.length + 6 + extras.length;
     let completedSteps = 0;
 
     try {
@@ -882,18 +901,25 @@ class App extends React.Component {
 
       this.setState({deploymentStep: "Granting field-level security..."});
       console.log("[SaralForce] Step 4: Granting FLS for", createdFieldNames.length, "created field(s)...");
+      let flsSummary = {label: "", granted: 0, failed: 0, error: null};
       if (createdFieldNames.length) {
-        await this.grantFieldPermissions(currentProposal.object.name, createdFieldNames);
+        // Formula, roll-up and auto number fields can only be granted read.
+        const readOnly = new Set(createdFields.filter(f => CALCULATED_TYPES.has(normalizeFieldType(f.type))).map(f => f.name));
+        this.setState({deploymentStep: "Granting field access..."});
+        flsSummary = await this.grantFieldPermissions(currentProposal.object.name, createdFieldNames, readOnly, this.state.flsTarget || "me");
       }
       completedSteps++;
       this.setState(prev => ({
         deploymentResults: [...prev.deploymentResults, {
           type: "fls",
           name: "FieldPermissions",
-          label: createdFieldNames.length
-            ? "Field-Level Security"
-            : "Field-Level Security (no new fields)",
-          status: "success"
+          label: !createdFieldNames.length
+            ? "Field-Level Security (no new fields)"
+            : `Field-Level Security — ${flsSummary.label}` +
+              (flsSummary.failed ? ` (${flsSummary.failed} grant(s) skipped — see console)` : ""),
+          // Warnings only: the fields exist; access can be fixed in Setup.
+          status: flsSummary.error && !flsSummary.granted ? "error" : "success",
+          error: flsSummary.error && !flsSummary.granted ? flsSummary.error : undefined
         }],
         deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
       }));
@@ -948,6 +974,29 @@ class App extends React.Component {
       }
 
       if (this._deployAborted) throw new Error("Deployment cancelled");
+
+      // Validation rules, list views, compact layout (Plan → Object settings).
+      for (const extra of extras) {
+        if (this._deployAborted) throw new Error("Deployment cancelled");
+        this.setState({deploymentStep: `Creating ${extra.kindLabel} "${extra.label}"...`});
+        let status = "success", error;
+        try {
+          await this.metadataCreate(extra.xml(objectName));
+        } catch (exErr) {
+          if (!isDuplicateError(exErr)) {
+            status = "error";
+            error = exErr.message;
+          }
+        }
+        completedSteps++;
+        this.setState(prev => ({
+          deploymentResults: [...prev.deploymentResults, {
+            type: extra.type, name: extra.name, label: `${extra.kindLabel}: ${extra.label}${extra.note && status === "success" ? " (" + extra.note + ")" : ""}`, status, error
+          }],
+          deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
+        }));
+        await this.delay(200);
+      }
 
       this.setState({deploymentStep: "Creating tab..."});
       console.log("[SaralForce] Step 5: Creating tab...");
@@ -1170,75 +1219,166 @@ class App extends React.Component {
     throw new Error("Could not get user identity (tried userinfo and /id, last status " + lastStatus + ")");
   }
 
-  async grantFieldPermissions(objectName, fieldNames) {
+  // Validation rules, list views and a compact layout from the plan, in the
+  // order they deploy (after the fields they reference).
+  planExtras(proposal) {
+    const obj = proposal || {};
+    const out = [];
+    for (const r of obj.validationRules || []) {
+      if (!r || !r.name || !r.formula) continue;
+      out.push({type: "validation", kindLabel: "Validation rule", name: r.name, label: r.name, xml: n => buildValidationRuleXml(n, r)});
+    }
+    for (const v of obj.listViews || []) {
+      if (!v || !v.name) continue;
+      out.push({type: "listview", kindLabel: "List view", name: v.name, label: v.label || v.name, xml: n => buildListViewXml(n, v)});
+    }
+    if (obj.compactLayout && (obj.compactLayout.fields || []).length) {
+      const c = obj.compactLayout;
+      out.push({type: "compact", kindLabel: "Compact layout", name: c.name || "SaralForce_Compact", label: c.label || "SaralForce Compact",
+        note: "assign it in Setup → Compact Layouts", xml: n => buildCompactLayoutXml(n, c)});
+    }
+    return out;
+  }
+
+  // The running user's profile-owned PermissionSet id. FieldPermissions.ParentId
+  // must be a PermissionSet id (0PS…), not a Profile id (00e…); profiles own a
+  // hidden PermissionSet with the same name.
+  async myProfilePermissionSetId() {
+    const userId = await this.resolveCurrentUserId();
+    if (!userId) throw new Error("No user_id in identity response");
+    const userRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=SELECT+ProfileId+FROM+User+WHERE+Id=%27${userId}%27`);
+    const profileId = userRes.records?.[0]?.ProfileId;
+    if (!profileId) return null;
     try {
-      // FieldPermissions.ParentId must be a PermissionSet id (0PS…), not a
-      // Profile id (00e…). Profiles own a hidden PermissionSet with the same
-      // name — resolve that first, else the REST POST fails with
-      // "Parent ID of incorrect type".
-      const userId = await this.resolveCurrentUserId();
-      if (!userId) throw new Error("No user_id in identity response");
-
-      const userRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=SELECT+ProfileId+FROM+User+WHERE+Id=%27${userId}%27`);
-      const profileId = userRes.records?.[0]?.ProfileId;
-      if (!profileId) {
-        console.warn("[SaralForce] Could not determine user profile for FLS");
-        return;
+      const psRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent(`SELECT Id FROM PermissionSet WHERE ProfileId = '${profileId}' AND IsOwnedByProfile = true LIMIT 1`));
+      if (psRes.records?.[0]?.Id) return psRes.records[0].Id;
+    } catch (psErr) {
+      console.warn("[SaralForce] PermissionSet lookup failed:", psErr.message);
+    }
+    // Fallback: match by profile name (Admin / System Administrator, etc.)
+    try {
+      const profRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent(`SELECT Name FROM Profile WHERE Id = '${profileId}'`));
+      const profName = profRes.records?.[0]?.Name;
+      if (profName) {
+        const byName = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent(`SELECT Id, Name FROM PermissionSet WHERE IsOwnedByProfile = true AND Name = '${escapeSoqlString(profName)}' LIMIT 1`));
+        return byName.records?.[0]?.Id || null;
       }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
 
-      let parentId = null;
+  // Where field access goes (Plan → Deployment Targets → Field access):
+  //   me       — the running user's profile (default)
+  //   profiles — the tab-visibility profiles (all, or the chosen ones)
+  //   permset  — a new permission set for this object, assigned to me
+  // Returns [{id, objectAccess}] — objectAccess: also grant object CRUD.
+  async resolveFlsParents(objectName, target) {
+    if (target === "permset") {
+      const {name, label} = permissionSetNameFor(objectName);
+      let id = null;
       try {
-        const psRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-          encodeURIComponent(`SELECT Id FROM PermissionSet WHERE ProfileId = '${profileId}' AND IsOwnedByProfile = true LIMIT 1`));
-        parentId = psRes.records?.[0]?.Id || null;
-      } catch (psErr) {
-        console.warn("[SaralForce] PermissionSet lookup failed:", psErr.message);
+        const res = await sfConn.rest(`/services/data/v${apiVersion}/sobjects/PermissionSet`, {
+          method: "POST", body: {Name: name, Label: label, Description: `Access to ${objectName}, created by SaralForce`}
+        });
+        id = res.id;
+      } catch (e) {
+        if (!/duplicate|already exists|DUPLICATE/i.test(e.message || "")) throw e;
+        const q = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent(`SELECT Id FROM PermissionSet WHERE Name = '${escapeSoqlString(name)}' LIMIT 1`));
+        id = q.records?.[0]?.Id || null;
       }
-      if (!parentId) {
-        // Fallback: match by profile name (Admin / System Administrator, etc.)
-        try {
-          const profRes = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-            encodeURIComponent(`SELECT Name FROM Profile WHERE Id = '${profileId}'`));
-          const profName = profRes.records?.[0]?.Name;
-          if (profName) {
-            const byName = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-              encodeURIComponent(`SELECT Id, Name FROM PermissionSet WHERE IsOwnedByProfile = true AND Name = '${profName.replace(/'/g, "\\'")}' LIMIT 1`));
-            parentId = byName.records?.[0]?.Id || null;
-          }
-        } catch (e) { /* ignore */ }
+      if (!id) throw new Error(`Could not create permission set ${name}`);
+      try {
+        const userId = await this.resolveCurrentUserId();
+        await sfConn.rest(`/services/data/v${apiVersion}/sobjects/PermissionSetAssignment`, {
+          method: "POST", body: {AssigneeId: userId, PermissionSetId: id}
+        });
+      } catch (e) {
+        if (!/duplicate|already/i.test(e.message || "")) console.warn("[SaralForce] Permission set assignment failed:", e.message);
       }
-      if (!parentId) {
-        console.warn("[SaralForce] No PermissionSet for profile", profileId, "- skipping FLS REST (use Setup → field → Set field-level security)");
-        return;
+      return {parents: [{id, objectAccess: true}], label: `permission set ${label} (assigned to you)`};
+    }
+    if (target === "profiles") {
+      let names = this.getVisibilityLabels();
+      if (this.state.visibilityMode !== "selected") {
+        const pres = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` + encodeURIComponent("SELECT Name FROM Profile ORDER BY Name"));
+        names = (pres.records || []).map(r => r.Name).filter(Boolean);
       }
+      const parents = [];
+      for (let i = 0; i < names.length; i += 50) {
+        const list = names.slice(i, i + 50).map(n => `'${escapeSoqlString(n)}'`).join(",");
+        if (!list) continue;
+        const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+          encodeURIComponent(`SELECT Id FROM PermissionSet WHERE IsOwnedByProfile = true AND Profile.Name IN (${list})`));
+        for (const r of res.records || []) parents.push({id: r.Id, objectAccess: true});
+      }
+      return {parents, label: `${parents.length} profile(s)`};
+    }
+    const id = await this.myProfilePermissionSetId();
+    return {parents: id ? [{id, objectAccess: false}] : [], label: "your profile"};
+  }
 
-      console.log("[SaralForce] Granting FLS via PermissionSet:", parentId, "for profile", profileId);
-
-      for (const fieldName of fieldNames) {
-        const fieldFullName = `${objectName}.${fieldName}`;
-        try {
-          await sfConn.rest(`/services/data/v${apiVersion}/sobjects/FieldPermissions`, {
-            method: "POST",
-            body: {
-              ParentId: parentId,
-              Field: fieldFullName,
-              SObjectType: objectName,
-              PermissionsRead: true,
-              PermissionsEdit: true
+  async grantFieldPermissions(objectName, fieldNames, readOnly = new Set(), target = "me") {
+    const summary = {label: "your profile", granted: 0, failed: 0, error: null};
+    try {
+      const {parents, label} = await this.resolveFlsParents(objectName, target);
+      summary.label = label;
+      if (!parents.length) {
+        summary.error = "No permission set found to grant access to (use Setup → field → Set field-level security)";
+        return summary;
+      }
+      console.log("[SaralForce] Granting FLS to", parents.length, "permission set(s):", label);
+      for (const parent of parents) {
+        if (this._deployAborted) break;
+        if (parent.objectAccess) {
+          // Field access needs object access first. Profiles whose licence
+          // does not allow it reject this; their fields are skipped below.
+          try {
+            await sfConn.rest(`/services/data/v${apiVersion}/sobjects/ObjectPermissions`, {
+              method: "POST",
+              body: {ParentId: parent.id, SobjectType: objectName, PermissionsRead: true, PermissionsCreate: true,
+                PermissionsEdit: true, PermissionsDelete: target === "permset"}
+            });
+          } catch (opErr) {
+            if (!/duplicate|already exists/i.test(opErr.message || "")) {
+              console.warn("[SaralForce] Object access skip for", parent.id, opErr.message);
             }
-          });
-          console.log("[SaralForce] FLS granted for:", fieldFullName);
-        } catch (flsErr) {
-          // Already exists is fine; anything else is worth a warning only.
-          if (!/duplicate|already exists/i.test(flsErr.message || "")) {
-            console.warn("[SaralForce] FLS skip for", fieldFullName, flsErr.message);
           }
         }
-        await new Promise(resolve => setTimeout(resolve, 300));
+        for (const fieldName of fieldNames) {
+          const fieldFullName = `${objectName}.${fieldName}`;
+          try {
+            await sfConn.rest(`/services/data/v${apiVersion}/sobjects/FieldPermissions`, {
+              method: "POST",
+              body: {
+                ParentId: parent.id,
+                Field: fieldFullName,
+                SObjectType: objectName,
+                PermissionsRead: true,
+                PermissionsEdit: !readOnly.has(fieldName)
+              }
+            });
+            summary.granted++;
+          } catch (flsErr) {
+            // Already exists is fine; anything else is counted and logged.
+            if (/duplicate|already exists/i.test(flsErr.message || "")) {
+              summary.granted++;
+            } else {
+              summary.failed++;
+              console.warn("[SaralForce] FLS skip for", fieldFullName, flsErr.message);
+            }
+          }
+          await this.delay(parents.length > 3 ? 50 : 200);
+        }
       }
     } catch (err) {
+      summary.error = err.message;
       console.warn("[SaralForce] Could not grant FLS:", err.message);
     }
+    return summary;
   }
 
   async addFieldsToDefaultLayout(objectName, fieldNames) {
@@ -1775,6 +1915,43 @@ class App extends React.Component {
     });
   }
 
+  refinePlanWithAi() {
+    const text = String(this.state.planAiInput || "").trim();
+    if (!text || this.state.isGenerating) return;
+    this.setState({planAiInput: "", expandedField: null});
+    this.sendMessage(text);
+  }
+
+  // Edit existing object: load its describe as a plan whose current custom
+  // fields are read-only; deploy then runs in resume mode (no object create).
+  async loadExistingObject(apiName) {
+    const name = String(apiName || "").trim();
+    if (!/^[A-Za-z][A-Za-z0-9_]*__c$/.test(name)) {
+      this.setState({error: "Enter a custom object API name ending in __c (e.g. Invoice__c)."});
+      return;
+    }
+    this.setState({existingLoading: true, error: null});
+    try {
+      const describe = await sfConn.rest(`/services/data/v${apiVersion}/sobjects/${encodeURIComponent(name)}/describe`);
+      const proposal = describeToProposal(describe);
+      this.addSystemMessage(`Loaded ${describe.label} (${describe.name}) with ${proposal.fields.length} custom field(s). Add fields, rules or list views, then deploy — existing fields are not changed.`);
+      this.setState({
+        currentProposal: proposal,
+        selectedFields: [],
+        deployedObjectName: proposal.object.name,
+        deploymentStatus: null,
+        deploymentResults: [],
+        builderMode: "plan",
+        existingPicker: false,
+        existingName: ""
+      }, () => this.loadProfiles().catch(() => {}));
+    } catch (e) {
+      this.setState({error: `Could not load ${name}: ${e.message}`});
+    } finally {
+      this.setState({existingLoading: false});
+    }
+  }
+
   deletePlanRecordType(index) {
     this.updatePlan(draft => {
       if (Array.isArray(draft.recordTypes)) draft.recordTypes.splice(index, 1);
@@ -1799,14 +1976,9 @@ class App extends React.Component {
       name: this.suggestApiName(label),
       type,
       required: false,
-      description: ""
+      description: "",
+      ...fieldDefaults(type)
     };
-    if (type === "Picklist" || type === "MultiselectPicklist") {
-      field.values = ["Option 1", "Option 2"];
-    }
-    if (type === "Lookup" || type === "MasterDetail") {
-      field.relatedTo = "Account";
-    }
     this.updatePlan(draft => {
       draft.fields.push(field);
     });
@@ -2173,6 +2345,33 @@ class App extends React.Component {
                 }, "Discard")
               )
             ),
+            h("div", {className: "plan-existing"},
+              this.state.existingPicker
+                ? [
+                  h("input", {
+                    key: "in",
+                    className: "plan-cell-input plan-cell-mono",
+                    placeholder: "Object API name, e.g. Invoice__c",
+                    
+                    autoFocus: true,
+                    value: this.state.existingName || "",
+                    onChange: e => this.setState({existingName: e.target.value}),
+                    onKeyDown: e => { if (e.key === "Enter") this.loadExistingObject(this.state.existingName); }
+                  }),
+                  h("button", {
+                    key: "go",
+                    className: "btn btn-secondary btn-sm",
+                    disabled: this.state.existingLoading,
+                    onClick: () => this.loadExistingObject(this.state.existingName)
+                  }, this.state.existingLoading ? "Loading…" : "Load"),
+                  h("button", {key: "x", className: "field-action-btn", onClick: () => this.setState({existingPicker: false})}, "Cancel")
+                ]
+                : h("button", {
+                  className: "field-action-btn",
+                  title: "Add fields, validation rules or list views to an object that already exists",
+                  onClick: () => this.setState({existingPicker: true})
+                }, "✎ Edit an existing object")
+            ),
             h("div", {className: "chat-input-row"},
               h("div", {className: "chat-input-wrap", "data-tour": "chat-input"},
                 h("textarea", {
@@ -2284,7 +2483,26 @@ class App extends React.Component {
           ),
 
           h("div", {className: "preview-content"},
-            (this.state.builderMode || "plan") === "plan"
+            // Ask the AI to change the plan (the chat is hidden once a plan exists).
+            (this.state.builderMode || "plan") === "plan" && hasConfig && h("div", {className: "plan-ai-row"},
+              h("span", {className: "plan-ai-label"}, "✨ Ask AI"),
+              h("input", {
+                className: "plan-cell-input",
+                placeholder: currentProposal.existing
+                  ? "e.g. add a Priority picklist and a rule that Due Date can't be in the past"
+                  : "e.g. add a formula for Total = Quantity × Price, track history on Status",
+                value: this.state.planAiInput || "",
+                disabled: isGenerating,
+                onChange: e => this.setState({planAiInput: e.target.value}),
+                onKeyDown: e => { if (e.key === "Enter") this.refinePlanWithAi(); }
+              }),
+              h("button", {
+                className: "btn btn-secondary btn-sm",
+                disabled: isGenerating || !String(this.state.planAiInput || "").trim(),
+                onClick: () => this.refinePlanWithAi()
+              }, isGenerating ? "Updating…" : "Update plan")
+            ),
+            (this.state.builderMode || "plan") === "plan" && !currentProposal.existing
               ? h("div", {className: "object-card plan-edit"},
                   h("div", {className: "plan-edit-grid"},
                     h("label", {className: "insp-field"},
@@ -2376,6 +2594,12 @@ class App extends React.Component {
                   )
                 ),
 
+            (this.state.builderMode || "plan") === "plan" && h(ObjectSettings, {
+              proposal: currentProposal, existing: !!currentProposal.existing,
+              onObject: patch => this.updatePlanObject(patch),
+              onPlan: mutator => this.updatePlan(mutator)
+            }),
+
             currentProposal && h("div", {className: "visibility-section targets-section"},
               h("div", {className: "fields-header"},
                 h("h4", null, "Deployment Targets")
@@ -2437,6 +2661,26 @@ class App extends React.Component {
                 ),
                 visibilityMode === "selected" && !(selectedProfiles || []).length &&
                   h("div", {className: "app-empty-msg"}, "Select at least one profile (or switch to All profiles).")
+              ),
+              h("div", {className: "targets-block"},
+                h("div", {className: "targets-label"}, "Field access (read/edit on the new fields)"),
+                h("div", {className: "visibility-options"},
+                  [
+                    ["me", "My profile", "Only your profile gets access (as before)"],
+                    ["profiles", "Tab visibility profiles", "The profiles chosen above also get object and field access"],
+                    ["permset", "New permission set", `Creates ${permissionSetNameFor(currentProposal.object.name).name} with object + field access and assigns it to you`]
+                  ].map(([v, label, tip]) => h("label", {key: v, className: "visibility-option", title: tip},
+                    h("input", {
+                      type: "radio",
+                      name: "flsTarget",
+                      checked: (this.state.flsTarget || "me") === v,
+                      onChange: () => this.setState({flsTarget: v})
+                    }),
+                    " " + label
+                  ))
+                ),
+                (this.state.flsTarget || "me") === "permset" && h("div", {className: "app-section-hint"},
+                  `Permission set "${permissionSetNameFor(currentProposal.object.name).label}" — assign it to other users in Setup.`)
               )
             ),
 
@@ -2468,13 +2712,18 @@ class App extends React.Component {
                 ),
                 h("tbody", null,
                   currentProposal.fields.map((field, i) => {
-                    const isChecked = !selectedFields || selectedFields.includes(field.name);
-                    const isPlan = (this.state.builderMode || "plan") === "plan";
-                    return h("tr", {key: i, className: isChecked ? "" : "field-deselected"},
+                    const inOrg = !!field.existing;
+                    const isChecked = !inOrg && (!selectedFields || selectedFields.includes(field.name));
+                    // Fields already in the org are shown read-only.
+                    const isPlan = (this.state.builderMode || "plan") === "plan" && !inOrg;
+                    const open = isPlan && this.state.expandedField === i;
+                    const row = h("tr", {key: i, className: (inOrg ? "plan-row-inorg" : isChecked ? "" : "field-deselected") + (open ? " plan-row-open" : "")},
                       h("td", {className: "field-checkbox-col"},
                         h("input", {
                           type: "checkbox",
                           checked: isChecked,
+                          disabled: inOrg,
+                          title: inOrg ? "Already in the org — not redeployed" : undefined,
                           onChange: () => this.toggleField(field.name),
                           className: "field-checkbox"
                         })
@@ -2486,7 +2735,7 @@ class App extends React.Component {
                               value: field.label || "",
                               onChange: e => this.updatePlanField(i, {label: e.target.value})
                             }))
-                        : h("td", null, field.label),
+                        : h("td", null, field.label, inOrg && h("span", {className: "plan-inorg"}, "in org")),
                       isPlan
                         ? h("td", {className: "api-name-cell"},
                             h("input", {
@@ -2501,7 +2750,7 @@ class App extends React.Component {
                             h("select", {
                               className: "plan-cell-input",
                               value: field.type,
-                              onChange: e => this.updatePlanField(i, {type: e.target.value})
+                              onChange: e => this.updatePlanField(i, {type: e.target.value, ...fieldDefaults(e.target.value, field)})
                             },
                               FIELD_TYPES.map(ft =>
                                 h("option", {key: ft.value, value: ft.value}, ft.label))
@@ -2524,14 +2773,26 @@ class App extends React.Component {
                               onChange: e => this.updatePlanField(i, {description: e.target.value})
                             }))
                         : h("td", {className: "desc-cell"}, field.description || ""),
-                      isPlan && h("td", {className: "field-checkbox-col"},
-                        h("button", {
+                      (this.state.builderMode || "plan") === "plan" && h("td", {className: "field-checkbox-col plan-row-actions"},
+                        isPlan && h("button", {
+                          className: "plan-del-btn plan-more-btn" + (open ? " active" : ""),
+                          title: open ? "Hide field details" : "Field details (length, values, formula\u2026)",
+                          onClick: () => this.setState({expandedField: open ? null : i})
+                        }, "\u2699"),
+                        isPlan && h("button", {
                           className: "plan-del-btn",
                           title: `Delete field "${field.label}" from the plan`,
                           onClick: () => this.deletePlanField(i)
                         }, "\u2715")
                       )
                     );
+                    if (!open) return row;
+                    return [row, h("tr", {key: i + "-d", className: "plan-details-row"},
+                      h("td", {colSpan: 7},
+                        h(FieldDetails, {
+                          field, fields: currentProposal.fields, objectHistory: currentProposal.object.enableHistory === true,
+                          onChange: patch => this.updatePlanField(i, patch)
+                        })))];
                   })
                 )
               ),
@@ -2769,6 +3030,8 @@ if (!sfHost) {
       }
     });
 
+    // Bring new success / error messages into view after user actions.
+    installMessageFocus(document.getElementById("root"));
     ReactDOM.render(
       h(App, {sfHost}),
       document.getElementById("root"),

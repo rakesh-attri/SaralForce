@@ -1,6 +1,6 @@
 // Pure Metadata API XML builders for the Object Builder. No DOM, no network,
 // no React — every function returns a string so it can be unit-tested in Node.
-import {normalizeFieldType, supportsRequired, resolveNameField} from "../core/object-builder-rules.js";
+import {normalizeFieldType, supportsRequired, resolveNameField, CALCULATED_TYPES, FORMULA_RETURN_TYPES} from "../core/object-builder-rules.js";
 
 export function escXml(str) {
   if (!str) return "";
@@ -111,6 +111,12 @@ export function buildObjectXml(objectDef) {
   if (objectDef.description) {
     parts.push(`  <met:description>${escXml(objectDef.description)}</met:description>`);
   }
+  // Optional object features (Plan → Object settings). Omitted = Salesforce default.
+  for (const [key, tag] of [["enableHistory", "enableHistory"], ["enableReports", "enableReports"],
+    ["enableActivities", "enableActivities"], ["enableSearch", "enableSearch"], ["enableFeeds", "enableFeeds"],
+    ["enableBulkApi", "enableBulkApi"], ["enableSharing", "enableSharing"], ["enableStreamingApi", "enableStreamingApi"]]) {
+    if (typeof objectDef[key] === "boolean") parts.push(`  <met:${tag}>${objectDef[key] ? "true" : "false"}</met:${tag}>`);
+  }
   parts.push(`  ${nameFieldXml}`);
   parts.push(`</met:metadata>`);
   return parts.join("\n");
@@ -120,6 +126,8 @@ export function buildFieldXml(objectName, fieldDef) {
   const fullName = `${objectName}.${fieldDef.name}`;
   const type = normalizeFieldType(fieldDef.type);
   if (!type) throw new Error(`Unsupported field type: ${fieldDef.type}`);
+  const special = buildSpecialFieldXml(objectName, fieldDef);
+  if (special) return special;
   const parts = [
     `<met:metadata xsi:type="met:CustomField">`,
     `  <met:fullName>${escXml(fullName)}</met:fullName>`,
@@ -133,6 +141,8 @@ export function buildFieldXml(objectName, fieldDef) {
 
   const required = !!fieldDef.required && fieldDef.required !== "false" && supportsRequired(type);
   if (required) parts.push(`  <met:required>true</met:required>`);
+  if (fieldDef.trackHistory && !CALCULATED_TYPES.has(type)) parts.push(`  <met:trackHistory>true</met:trackHistory>`);
+  if (fieldDef.inlineHelpText) parts.push(`  <met:inlineHelpText>${escXml(fieldDef.inlineHelpText)}</met:inlineHelpText>`);
 
   switch (type) {
     case "Text":
@@ -167,6 +177,15 @@ export function buildFieldXml(objectName, fieldDef) {
       break;
     case "Picklist":
     case "MultiselectPicklist": {
+      // Global value set: the values live in the org-wide set.
+      if (fieldDef.globalValueSet) {
+        parts.push(`  <met:valueSet>`);
+        parts.push(`    <met:restricted>true</met:restricted>`);
+        parts.push(`    <met:valueSetName>${escXml(fieldDef.globalValueSet)}</met:valueSetName>`);
+        parts.push(`  </met:valueSet>`);
+        if (type === "MultiselectPicklist") parts.push(`  <met:visibleLines>${parseInt(fieldDef.visibleLines) || 4}</met:visibleLines>`);
+        break;
+      }
       // Empty/null values or a defaultValue outside the set →
       // INVALID_OR_NULL_FOR_RESTRICTED_PICKLIST on create.
       const raw = Array.isArray(fieldDef.values) ? fieldDef.values : [];
@@ -191,6 +210,10 @@ export function buildFieldXml(objectName, fieldDef) {
       }
       if (!defVal) defVal = values[0];
       parts.push(`  <met:valueSet>`);
+      // Dependent picklist: which values show for each controlling value.
+      if (fieldDef.controllingField) {
+        parts.push(`    <met:controllingField>${escXml(fieldDef.controllingField)}</met:controllingField>`);
+      }
       parts.push(`    <met:valueSetDefinition>`);
       parts.push(`      <met:sorted>${fieldDef.sortValues ? "true" : "false"}</met:sorted>`);
       for (const v of values) {
@@ -202,6 +225,27 @@ export function buildFieldXml(objectName, fieldDef) {
         parts.push(`      </met:value>`);
       }
       parts.push(`    </met:valueSetDefinition>`);
+      if (fieldDef.controllingField && fieldDef.dependencies && typeof fieldDef.dependencies === "object") {
+        // valueSettings: one entry per dependent value, listing the
+        // controlling values it is available for.
+        const byValue = new Map();
+        for (const [ctrlValue, deps] of Object.entries(fieldDef.dependencies)) {
+          for (const d of Array.isArray(deps) ? deps : []) {
+            const match = values.find(v => v.toLowerCase() === String(d).trim().toLowerCase());
+            if (!match) continue;
+            if (!byValue.has(match)) byValue.set(match, []);
+            byValue.get(match).push(ctrlValue);
+          }
+        }
+        for (const [v, ctrls] of byValue) {
+          parts.push(`    <met:valueSettings>`);
+          // A checkbox controller's values are "checked" / "unchecked".
+          const ctrlName = c => ({true: "checked", false: "unchecked"})[String(c).toLowerCase()] || c;
+          for (const c of ctrls) parts.push(`      <met:controllingFieldValue>${escXml(ctrlName(c))}</met:controllingFieldValue>`);
+          parts.push(`      <met:valueName>${escXml(v)}</met:valueName>`);
+          parts.push(`    </met:valueSettings>`);
+        }
+      }
       parts.push(`  </met:valueSet>`);
       if (type === "MultiselectPicklist") {
         parts.push(`  <met:visibleLines>${parseInt(fieldDef.visibleLines) || 4}</met:visibleLines>`);
@@ -216,17 +260,141 @@ export function buildFieldXml(objectName, fieldDef) {
       parts.push(`  <met:referenceTo>${escXml(fieldDef.relatedTo)}</met:referenceTo>`);
       // A required lookup cannot keep the default SetNull delete
       // constraint, so pair it with Restrict.
-      if (type === "Lookup" && required) {
+      if (type === "Lookup" && (required || fieldDef.deleteConstraint === "Restrict")) {
         parts.push(`  <met:deleteConstraint>Restrict</met:deleteConstraint>`);
       }
       break;
     }
+    case "Formula":
+    case "Summary":
+    case "AutoNumber":
+    case "Location":
+    case "Time":
+    case "Html":
+    case "EncryptedText":
+      break;
     default:
       throw new Error(`Unsupported field type: ${fieldDef.type}`);
   }
 
   parts.push(`</met:metadata>`);
   return parts.join("\n");
+}
+
+// The types below are written by buildFieldXml's caller-facing wrapper: the
+// <met:type> they need differs from the plan type (a Formula field's type is
+// its return type), so they are assembled here.
+export function buildSpecialFieldXml(objectName, fieldDef) {
+  const type = normalizeFieldType(fieldDef.type);
+  const head = (xmlType) => [
+    `<met:metadata xsi:type="met:CustomField">`,
+    `  <met:fullName>${escXml(`${objectName}.${fieldDef.name}`)}</met:fullName>`,
+    `  <met:label>${escXml(fieldDef.label)}</met:label>`,
+    `  <met:type>${xmlType}</met:type>`,
+    ...(fieldDef.description ? [`  <met:description>${escXml(fieldDef.description)}</met:description>`] : []),
+    ...(fieldDef.inlineHelpText ? [`  <met:inlineHelpText>${escXml(fieldDef.inlineHelpText)}</met:inlineHelpText>`] : []),
+  ];
+  const required = !!fieldDef.required && fieldDef.required !== "false" && supportsRequired(type);
+  const track = fieldDef.trackHistory ? [`  <met:trackHistory>true</met:trackHistory>`] : [];
+  let parts;
+  switch (type) {
+    case "Formula": {
+      const rt = FORMULA_RETURN_TYPES.includes(fieldDef.returnType) ? fieldDef.returnType : "Text";
+      parts = head(rt);
+      parts.push(`  <met:formula>${escXml(fieldDef.formula)}</met:formula>`);
+      parts.push(`  <met:formulaTreatBlanksAs>${fieldDef.treatBlanksAs === "BlankAsBlank" ? "BlankAsBlank" : "BlankAsZero"}</met:formulaTreatBlanksAs>`);
+      if (["Number", "Currency", "Percent"].includes(rt)) {
+        parts.push(`  <met:precision>${parseInt(fieldDef.precision) || 18}</met:precision>`);
+        parts.push(`  <met:scale>${parseInt(fieldDef.scale) || (rt === "Number" ? 0 : 2)}</met:scale>`);
+      }
+      break;
+    }
+    case "Summary": {
+      parts = head("Summary");
+      const op = String(fieldDef.summaryOperation || "count").toLowerCase();
+      parts.push(`  <met:summaryForeignKey>${escXml(fieldDef.summaryForeignKey)}</met:summaryForeignKey>`);
+      parts.push(`  <met:summaryOperation>${op}</met:summaryOperation>`);
+      if (op !== "count") parts.push(`  <met:summarizedField>${escXml(fieldDef.summarizedField)}</met:summarizedField>`);
+      break;
+    }
+    case "AutoNumber":
+      parts = head("AutoNumber");
+      parts.push(`  <met:displayFormat>${escXml(fieldDef.displayFormat || "{0000}")}</met:displayFormat>`);
+      parts.push(`  <met:startingNumber>${parseInt(fieldDef.startingNumber) || 1}</met:startingNumber>`);
+      if (fieldDef.externalId) parts.push(`  <met:externalId>true</met:externalId>`);
+      break;
+    case "Location":
+      parts = head("Location");
+      parts.push(`  <met:displayLocationInDecimal>${fieldDef.displayLocationInDecimal === false ? "false" : "true"}</met:displayLocationInDecimal>`);
+      parts.push(`  <met:scale>${Number.isInteger(Number(fieldDef.scale)) ? Number(fieldDef.scale) : 5}</met:scale>`);
+      if (required) parts.push(`  <met:required>true</met:required>`);
+      parts.push(...track);
+      break;
+    case "Time":
+      parts = head("Time");
+      if (required) parts.push(`  <met:required>true</met:required>`);
+      parts.push(...track);
+      break;
+    case "Html":
+      parts = head("Html");
+      parts.push(`  <met:length>${parseInt(fieldDef.length) || 32768}</met:length>`);
+      parts.push(`  <met:visibleLines>${parseInt(fieldDef.visibleLines) || 25}</met:visibleLines>`);
+      parts.push(...track);
+      break;
+    case "EncryptedText":
+      parts = head("EncryptedText");
+      parts.push(`  <met:length>${Math.min(175, parseInt(fieldDef.length) || 175)}</met:length>`);
+      parts.push(`  <met:maskChar>${fieldDef.maskChar === "X" ? "X" : "asterisk"}</met:maskChar>`);
+      parts.push(`  <met:maskType>${fieldDef.maskType || "all"}</met:maskType>`);
+      if (required) parts.push(`  <met:required>true</met:required>`);
+      parts.push(...track);
+      break;
+    default:
+      return null;
+  }
+  parts.push(`</met:metadata>`);
+  return parts.join("\n");
+}
+
+// Any field: special types first, the classic types otherwise.
+export function buildAnyFieldXml(objectName, fieldDef) {
+  return buildSpecialFieldXml(objectName, fieldDef) || buildFieldXml(objectName, fieldDef);
+}
+
+export function buildValidationRuleXml(objectName, rule) {
+  return [
+    `<met:metadata xsi:type="met:ValidationRule">`,
+    `  <met:fullName>${escXml(`${objectName}.${rule.name}`)}</met:fullName>`,
+    `  <met:active>${rule.active === false ? "false" : "true"}</met:active>`,
+    ...(rule.description ? [`  <met:description>${escXml(rule.description)}</met:description>`] : []),
+    `  <met:errorConditionFormula>${escXml(rule.formula)}</met:errorConditionFormula>`,
+    ...(rule.field ? [`  <met:errorDisplayField>${escXml(rule.field)}</met:errorDisplayField>`] : []),
+    `  <met:errorMessage>${escXml(rule.message)}</met:errorMessage>`,
+    `</met:metadata>`,
+  ].join("\n");
+}
+
+export function buildListViewXml(objectName, view) {
+  const cols = (view.columns && view.columns.length ? view.columns : ["NAME"]);
+  return [
+    `<met:metadata xsi:type="met:ListView">`,
+    `  <met:fullName>${escXml(`${objectName}.${view.name}`)}</met:fullName>`,
+    ...cols.map(c => `  <met:columns>${escXml(c)}</met:columns>`),
+    `  <met:filterScope>${view.filterScope === "Mine" ? "Mine" : "Everything"}</met:filterScope>`,
+    `  <met:label>${escXml(view.label || view.name)}</met:label>`,
+    `</met:metadata>`,
+  ].join("\n");
+}
+
+export function buildCompactLayoutXml(objectName, layout) {
+  const fields = (layout.fields && layout.fields.length ? layout.fields : ["Name"]).slice(0, 10);
+  return [
+    `<met:metadata xsi:type="met:CompactLayout">`,
+    `  <met:fullName>${escXml(`${objectName}.${layout.name || "SaralForce_Compact"}`)}</met:fullName>`,
+    ...fields.map(f => `  <met:fields>${escXml(f)}</met:fields>`),
+    `  <met:label>${escXml(layout.label || "SaralForce Compact")}</met:label>`,
+    `</met:metadata>`,
+  ].join("\n");
 }
 
 export function buildRecordTypeXml(objectName, rt) {

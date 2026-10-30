@@ -13,6 +13,7 @@ import {LogsTab} from "./tabs/logs.js";
 import {CoverageTab} from "./tabs/coverage.js";
 import {AccessTab} from "./tabs/access.js";
 import {MetadataTab} from "./tabs/metadata.js";
+import {ApiTab} from "./tabs/api.js";
 import {metadataTargetFromUrl} from "./shared/inspector-tab.js";
 
 const h = React.createElement;
@@ -25,17 +26,18 @@ export const INSPECTOR_TABS = [
   {id: "apex", label: "Run-Apex", icon: "⚡", component: ApexTab},
   {id: "export", label: "Export", icon: "📤", component: ExportTab},
   {id: "import", label: "Import", icon: "📥", component: ImportTab},
+  {id: "api", label: "API Explorer", icon: "🔌", component: ApiTab},
+  {id: "logs", label: "Logs", icon: "📝", component: LogsTab},
   {id: "users", label: "Users", icon: "👥", component: UsersTab},
   {id: "access", label: "Access", icon: "🛡️", component: AccessTab},
   {id: "metadata", label: "Metadata", icon: "🧩", component: MetadataTab},
-  {id: "logs", label: "Logs", icon: "📝", component: LogsTab},
   {id: "org", label: "Org Info", icon: "🏢", component: OrgTab},
   {id: "apptabs", label: "App Tab Manager", icon: "📑", component: AppTabManager},
   {id: "coverage", label: "Code Coverage", icon: "</>", component: CoverageTab}
 ];
 
-// Admin tools sit on the second row of the tab bar.
-const TAB_ROW2 = new Set(["users", "access", "metadata", "org", "apptabs"]);
+// Second row of the tab bar: admin tools, then Code Coverage last.
+const TAB_ROW2 = new Set(["access", "metadata", "org", "apptabs", "coverage"]);
 
 export function InspectorPanel() {
   useSfTimeZoneTick();
