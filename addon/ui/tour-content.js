@@ -30,16 +30,17 @@ export const BUILDER_TOUR = {
 const TAB_TOURS = {
   records: ["Records", "Open any record or list view in Salesforce and it loads here. Use View, Read-only or Edit mode, and export the fields to CSV."],
   soql: ["SOQL", "Type a query and suggestions appear (Tab or Enter accepts), or add fields from the explorer, then press Ctrl+Enter to run. Turn on Tooling API for setup objects, or Recycle Bin for deleted rows. Click an Id in the results to see the whole record."],
-  apex: ["Run Apex", "Run anonymous Apex and read the debug log right below. Select a few lines and use Execute Highlighted to run only those. With Use AI on, code is checked for compile errors first."],
+  apex: ["Run Apex", "Run anonymous Apex and read the debug log right below. Select a few lines and use Execute Highlighted to run only those. Limits shows the CPU, queries and DML the run used. With Use AI on, code is checked for compile errors first."],
   export: ["Export", "Build a query or pick an object, preview the rows, then download CSV, Excel or JSON. Bulk API handles very large exports."],
   import: ["Import", "Drop in a CSV, map columns to fields, and validate before you run. Deletes always ask for confirmation, and result files show every success and failure."],
   users: ["Users", "Type to search users as you go. Inspect and assign permission sets, check why a user can see an object or field, log in as a user, or clone one with the same access. Reset, freeze and removals ask before they run."],
   access: ["Access", "Compare up to five profiles or permission sets side by side, audit who holds powerful permissions such as Modify All Data, and work your approval inbox: approve, reject or submit records."],
-  metadata: ["Metadata", "Browse Apex, triggers, pages, components, flows, validation rules and custom metadata, read their source, and ask AI to explain them. Schema shows an object's fields, relationships and field access. Use New to start an Apex class, trigger, page, LWC, Aura component, flow or validation rule from a working template (or describe it and let AI write it), edit it, ask AI for changes, then deploy. Edit opens an existing component the same way and saves it back (Apex classes and triggers: sandboxes and developer orgs only). Add items to a package.xml."],
+  metadata: ["Metadata", "Browse Apex, triggers, pages, components, flows, validation rules and custom metadata, read their source, and ask AI to explain them. Schema shows an object's fields, relationships, field access and data quality. Use New to start an Apex class, trigger, page, LWC, Aura component, flow or validation rule from a working template (or describe it and let AI write it), edit it, ask AI for changes, then deploy. Edit opens an existing component the same way and saves it back (Apex classes and triggers: sandboxes and developer orgs only). Add items to a package.xml."],
+  api: ["API Explorer", "Send REST, Composite or SOAP requests to this org with your session. Pick a quick request on the left, click any API path in a response to open it, and find past requests in History."],
   logs: ["Debug logs", "Turn on logging for a user, load recent logs, and use AI Quick Analysis for a plain-English summary. Ask AI lets you ask questions about one log."],
   org: ["Org info", "Storage, API limits, recent setup changes and login history at a glance, plus an optional AI hygiene check."],
   apptabs: ["App tabs", "Add, reorder or remove tabs in a Lightning app, and control which profiles can see them."],
-  coverage: ["Code coverage", "Coverage per Apex class, with a filter for test classes. Run tests and watch coverage refresh."]
+  coverage: ["Code coverage", "Coverage per Apex class, with a filter for test classes. Lines shows which lines are covered. Run tests to see live progress and each failure, and ask AI to explain a failing test."]
 };
 
 export function tabTour(tabId) {
@@ -67,6 +68,18 @@ export const SETTINGS_TOUR = {
 
 // Highlights per release, shown once after an update (newest first).
 export const RELEASE_NOTES = [
+  {
+    version: "2.1.0",
+    title: "What's new in SaralForce 2.1",
+    items: [
+      "Object Builder 2.0: formula, roll-up, auto number, geolocation, time, rich text and encrypted fields; dependent picklists; validation rules, list views and compact layouts; edit existing objects; field access for profiles or a new permission set.",
+      "Run Apex returns the exact debug log of each run, with a Limits view and Go to line for errors.",
+      "Test runner: live progress, failures with stack traces, AI explanations, and covered / uncovered lines.",
+      "New API Explorer for REST, Composite, Tooling and SOAP calls.",
+      "Show All Data: related records and field history. Records follows the Salesforce page with Reload page.",
+      "Metadata → Schema → Data quality: fill rates, outliers and duplicates, with an AI review. Messages now scroll into view."
+    ]
+  },
   {
     version: "2.0.0",
     title: "SaralForce 2.0",

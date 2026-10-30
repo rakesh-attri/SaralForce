@@ -18,8 +18,21 @@ export const FIELD_TYPES = [
   {value: "Phone", label: "Phone"},
   {value: "Url", label: "URL"},
   {value: "Lookup", label: "Lookup"},
-  {value: "MasterDetail", label: "Master-Detail"}
+  {value: "MasterDetail", label: "Master-Detail"},
+  {value: "Formula", label: "Formula"},
+  {value: "Summary", label: "Roll-Up Summary"},
+  {value: "AutoNumber", label: "Auto Number"},
+  {value: "Location", label: "Geolocation"},
+  {value: "Time", label: "Time"},
+  {value: "Html", label: "Text Area (Rich)"},
+  {value: "EncryptedText", label: "Text (Encrypted)"}
 ];
+
+// Return types a Formula field can have.
+export const FORMULA_RETURN_TYPES = ["Text", "Number", "Currency", "Percent", "Date", "DateTime", "Time", "Checkbox"];
+export const SUMMARY_OPERATIONS = ["count", "sum", "min", "max"];
+// Field types whose values Salesforce calculates (read-only for users).
+export const CALCULATED_TYPES = new Set(["Formula", "Summary", "AutoNumber"]);
 
 export const FIELD_TYPE_VALUES = FIELD_TYPES.map(ft => ft.value);
 
@@ -51,7 +64,22 @@ const FIELD_TYPE_ALIASES = {
   lookup: "Lookup",
   lookuprelationship: "Lookup",
   masterdetail: "MasterDetail",
-  masterdetailrelationship: "MasterDetail"
+  masterdetailrelationship: "MasterDetail",
+  formula: "Formula",
+  summary: "Summary",
+  rollupsummary: "Summary",
+  rollup: "Summary",
+  autonumber: "AutoNumber",
+  location: "Location",
+  geolocation: "Location",
+  time: "Time",
+  html: "Html",
+  richtext: "Html",
+  richtextarea: "Html",
+  textarearich: "Html",
+  encrypted: "EncryptedText",
+  encryptedtext: "EncryptedText",
+  textencrypted: "EncryptedText"
 };
 
 // Map AI/user spellings ("Master-Detail", "Date/Time", "Text Area (Long)",
@@ -74,7 +102,7 @@ export function isMasterDetail(field) {
 // rule) and MultiselectPicklist (not confirmed via Metadata API, so left out).
 const REQUIRED_TYPES = new Set([
   "Text", "TextArea", "Number", "Currency", "Percent", "Date", "DateTime",
-  "Picklist", "Email", "Phone", "Url", "Lookup"
+  "Picklist", "Email", "Phone", "Url", "Lookup", "Time", "EncryptedText", "Location"
 ]);
 
 export function supportsRequired(type) {
@@ -313,6 +341,12 @@ export function validateProposal(proposal) {
           seen.set(key, i);
         }
       }
+      // Fields already in the org (editing an existing object) are not
+      // redeployed, so only their names matter here.
+      if (f.existing) {
+        if (normalizeFieldType(f.type) === "MasterDetail") mdCount++;
+        return;
+      }
       const type = normalizeFieldType(f.type);
       if (!f.type) {
         errors.push(`Field ${i + 1} missing 'type'`);
@@ -321,8 +355,28 @@ export function validateProposal(proposal) {
       }
       if (type === "Picklist" || type === "MultiselectPicklist") {
         const vals = Array.isArray(f.values) ? f.values.filter(v => String(v == null ? "" : v).trim()) : [];
-        if (vals.length < 1) {
-          errors.push(`Field ${i + 1} (${f.name}) ${type} requires a non-empty 'values' array`);
+        if (vals.length < 1 && !f.globalValueSet) {
+          errors.push(`Field ${i + 1} (${f.name}) ${type} requires a non-empty 'values' array or a 'globalValueSet'`);
+        }
+        if (f.globalValueSet && !/^[A-Za-z][A-Za-z0-9_]*$/.test(String(f.globalValueSet))) {
+          errors.push(`Field ${i + 1} (${f.name}) globalValueSet "${f.globalValueSet}" is not a valid value set name`);
+        }
+        if (f.controllingField) {
+          const ctrl = proposal.fields.find(x => x && x.name === f.controllingField);
+          const ctrlType = ctrl ? normalizeFieldType(ctrl.type) : null;
+          if (ctrl && ctrlType !== "Picklist" && ctrlType !== "Checkbox") {
+            errors.push(`Field ${i + 1} (${f.name}) controlling field ${f.controllingField} must be a Picklist or Checkbox`);
+          }
+          if (f.globalValueSet) errors.push(`Field ${i + 1} (${f.name}) a dependent picklist can't use a global value set here`);
+          if (ctrl && f.dependencies && typeof f.dependencies === "object") {
+            const ctrlVals = ctrlType === "Checkbox" ? ["true", "false", "checked", "unchecked"]
+              : (Array.isArray(ctrl.values) ? ctrl.values.map(v => String(v).toLowerCase()) : []);
+            for (const k of Object.keys(f.dependencies)) {
+              if (!ctrlVals.includes(String(k).toLowerCase())) {
+                errors.push(`Field ${i + 1} (${f.name}) depends on "${k}", which is not a value of ${f.controllingField}`);
+              }
+            }
+          }
         }
         if (f.defaultValue != null && String(f.defaultValue).trim() &&
             !vals.some(v => String(v).trim().toLowerCase() === String(f.defaultValue).trim().toLowerCase())) {
@@ -337,10 +391,71 @@ export function validateProposal(proposal) {
         }
       }
       if (type === "MasterDetail") mdCount++;
+      if (type === "Formula") {
+        if (!String(f.formula || "").trim()) errors.push(`Field ${i + 1} (${f.name}) Formula requires 'formula'`);
+        if (!FORMULA_RETURN_TYPES.includes(f.returnType)) {
+          errors.push(`Field ${i + 1} (${f.name}) Formula 'returnType' must be one of ${FORMULA_RETURN_TYPES.join(", ")}`);
+        }
+      }
+      if (type === "Summary") {
+        const op = String(f.summaryOperation || "").toLowerCase();
+        if (!SUMMARY_OPERATIONS.includes(op)) errors.push(`Field ${i + 1} (${f.name}) Roll-Up Summary 'summaryOperation' must be count, sum, min or max`);
+        if (!/^\w+\.\w+$/.test(String(f.summaryForeignKey || ""))) {
+          errors.push(`Field ${i + 1} (${f.name}) Roll-Up Summary needs 'summaryForeignKey' as ChildObject__c.MasterDetailField__c`);
+        }
+        if (op !== "count" && !/^\w+\.\w+$/.test(String(f.summarizedField || ""))) {
+          errors.push(`Field ${i + 1} (${f.name}) Roll-Up Summary ${op || ""} needs 'summarizedField' as ChildObject__c.Field__c`.replace("  ", " "));
+        }
+      }
+      if (type === "AutoNumber" && f.displayFormat && !AUTONUMBER_PLACEHOLDER.test(f.displayFormat)) {
+        errors.push(`Field ${i + 1} (${f.name}) Auto Number format "${f.displayFormat}" must contain {0000}`);
+      }
+      if (type === "EncryptedText" && f.length && (Number(f.length) < 1 || Number(f.length) > 175)) {
+        errors.push(`Field ${i + 1} (${f.name}) Encrypted text length must be 1-175`);
+      }
     });
+    const fieldNames = new Set(proposal.fields.map(f => f && f.name).filter(Boolean));
+    const nameOk = n => /^[A-Za-z][A-Za-z0-9_]*$/.test(String(n || "")) && !/__/.test(String(n)) && !/_$/.test(String(n));
+    (Array.isArray(proposal.validationRules) ? proposal.validationRules : []).forEach((r, i) => {
+      if (!nameOk(r && r.name)) errors.push(`Validation rule ${i + 1} needs a 'name' (letters, digits, single underscores)`);
+      if (!String(r && r.formula || "").trim()) errors.push(`Validation rule ${i + 1} needs a 'formula'`);
+      if (!String(r && r.message || "").trim()) errors.push(`Validation rule ${i + 1} needs an error 'message'`);
+    });
+    (Array.isArray(proposal.listViews) ? proposal.listViews : []).forEach((v, i) => {
+      if (!nameOk(v && v.name)) errors.push(`List view ${i + 1} needs a 'name' (letters, digits, single underscores)`);
+      for (const c of (v && v.columns) || []) {
+        if (c !== "NAME" && !fieldNames.has(c)) errors.push(`List view ${i + 1} column ${c} is not a field of this object`);
+      }
+    });
+    const cl = proposal.compactLayout;
+    if (cl && Array.isArray(cl.fields)) {
+      for (const c of cl.fields) {
+        if (c !== "Name" && !fieldNames.has(c)) errors.push(`Compact layout field ${c} is not a field of this object`);
+      }
+    }
     if (mdCount > 2) errors.push(`An object can have at most 2 Master-Detail fields (found ${mdCount})`);
   }
   return errors;
+}
+
+// Create order: controlling fields before the picklists that depend on
+// them, everything else in plan order, roll-up summaries last (they need
+// the child relationship to exist).
+export function sortFieldsForDeploy(fields) {
+  const list = (fields || []).slice();
+  const byName = new Map(list.map(f => [f.name, f]));
+  const out = [];
+  const placed = new Set();
+  const place = (f, chain = new Set()) => {
+    if (!f || placed.has(f.name) || chain.has(f.name)) return;
+    chain.add(f.name);
+    if (f.controllingField && byName.has(f.controllingField)) place(byName.get(f.controllingField), chain);
+    placed.add(f.name);
+    out.push(f);
+  };
+  list.filter(f => normalizeFieldType(f.type) !== "Summary").forEach(f => place(f));
+  list.filter(f => normalizeFieldType(f.type) === "Summary").forEach(f => place(f));
+  return out;
 }
 
 // Index of the "}" closing the object that opens at `start`, or -1.

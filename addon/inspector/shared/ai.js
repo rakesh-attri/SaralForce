@@ -327,6 +327,31 @@ function explainMetadata(kind, name, source, {signal} = {}) {
   return askAi({system: METADATA_EXPLAIN_SYSTEM, user: `${kind}: ${name}\n\n${text}`, signal});
 }
 
+const DATA_QUALITY_SYSTEM =
+  "You are a Salesforce admin reviewing data quality for a teammate. From the field profile of a record sample, write " +
+  "these sections in CAPITALS: OVERALL (one or two sentences), TOP PROBLEMS (most impactful first), QUICK WINS " +
+  "(validation rules, required fields, picklist cleanup, duplicate rules, fields to retire — name the fields). Plain " +
+  "words, short bullet lines. It is a sample, so say \"in this sample\" and do not overstate.";
+
+// Plain-words review of a Data quality profile. Never changes anything.
+function explainDataQuality(profileText, {signal} = {}) {
+  return askAi({system: DATA_QUALITY_SYSTEM, user: String(profileText || "").slice(0, 14000), signal});
+}
+
+const TEST_FAILURE_SYSTEM =
+  "You are a senior Salesforce developer triaging a failing Apex test for a teammate. From the failure message, " +
+  "stack trace and test source, write these sections in CAPITALS: WHY IT FAILED, WHERE (class, method and line), " +
+  "HOW TO FIX. Say whether the bug is most likely in the test or in the code under test. Plain words, short bullet " +
+  "lines, at most one short code snippet. Say so when the cause is unclear.";
+
+// Plain-words triage of one failing test method. Never changes anything.
+function explainTestFailure({className, method, message, stackTrace, testSource, codeSource}, {signal} = {}) {
+  const parts = [`Test: ${className}.${method}`, `Failure: ${message || "(no message)"}`, `Stack trace:\n${stackTrace || "(none)"}`];
+  if (testSource) parts.push(`Test method source:\n${String(testSource).slice(0, 6000)}`);
+  if (codeSource) parts.push(`Code under test (where it failed):\n${String(codeSource).slice(0, 6000)}`);
+  return askAi({system: TEST_FAILURE_SYSTEM, user: parts.join("\n\n"), signal});
+}
+
 // Ask the Options-configured LLM to review Apex for compile errors BEFORE a run
 // (or after Salesforce rejects it). Never executes anything itself.
 // Returns {ok, error, line, explanation, fixedCode}.
@@ -355,4 +380,4 @@ function logsAskLlm(systemPrompt, userText, {signal} = {}) {
   return askAi({system: systemPrompt, user: userText, signal});
 }
 
-export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, apexAiCheck, logsAskLlm};
+export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm};

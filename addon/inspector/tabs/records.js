@@ -7,6 +7,17 @@ import {kickSfTzFetch, useSfTimeZoneTick, ffFmtRelative, fmtSfCell} from "../sha
 import {sadTypeGlyph, sadInfoCell} from "../shared/ui.js";
 import {useFfSession} from "../shared/session-state.js";
 import {ffApiPath, ffAutoApi, ffApiModeOf, ffDescribeObject} from "../shared/describe.js";
+import {RelatedPanel, HistoryPanel} from "../shared/record-nav-ui.js";
+import {isInspectorTab} from "../shared/inspector-tab.js";
+
+// The inspector opened in its own browser tab has no Salesforce page to follow.
+const inTab = isInspectorTab();
+
+// Same Salesforce page context ({obj, id}, or none)?
+function samePageRec(a, b) {
+  const key = r => (r ? `${String(r.obj || "").toLowerCase()}|${String(r.id || "").slice(0, 15)}` : "");
+  return key(a) === key(b);
+}
 
 const h = React.createElement;
 
@@ -183,7 +194,8 @@ function coerceDetailValue(row, draftVal) {
   return String(draftVal);
 }
 
-function RecordDetailPanel({detail, loading, onBack, onSave}) {
+function RecordDetailCore({detail, loading, onBack, onSave, nav}) {
+  const view = (nav && nav.view) || "fields";
   useSfTimeZoneTick();
   const [editingApi, setEditingApi] = React.useState(null);
   const [drafts, setDrafts] = React.useState({});
@@ -336,7 +348,8 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
             fill: "none", stroke: "currentColor", strokeWidth: 1.8,
             strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true"},
             h("path", {d: "M7 18a4 4 0 1 1 .6-7.96A5.5 5.5 0 0 1 18.3 12H18a3 3 0 0 1 0 6H7z"})),
-          h("span", {className: "sad-title-tx"}, "Show all data",
+          nav && nav.canBack && h("button", {className: "btn btn-secondary btn-sm rn-back", title: "Back to the previous record", onClick: nav.onNavBack}, "‹ Back"),
+          h("span", {className: "sad-title-tx"}, nav && nav.trail ? nav.trail : "Show all data",
             detail && h("span", {className: "sad-title-sub"}, `  -  ${detail.obj} / ${detail.id}`),
             detail && h("span", {className: "sad-pill"},
               rf ? `${shownRows.length} of ${detail.rows.length} fields`
@@ -393,7 +406,15 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
         sadInfoCell("Last Updated",
           detail.meta && detail.meta.updated ? ffFmtRelative(detail.meta.updated) : "—"))
     ),
-    detail && h("div", {className: "ff-modal-body"},
+    detail && nav && h("div", {className: "sq3-pills md-views rn-tabs", role: "tablist"},
+      [["fields", "Fields"], ["related", "Related"], ["history", "History"]].map(([id, label]) => h("button", {
+        key: id, role: "tab", "aria-selected": view === id, className: "sq3-pill" + (view === id ? " active" : ""),
+        onClick: () => nav.setView(id)
+      }, label))),
+    nav && nav.error && h("div", {className: "insp-error"}, nav.error),
+    detail && view === "related" && h("div", {className: "ff-modal-body"}, nav.related),
+    detail && view === "history" && h("div", {className: "ff-modal-body"}, nav.history),
+    detail && view === "fields" && h("div", {className: "ff-modal-body"},
       h("div", {className: "insp-table-wrap"},
       h("table", {className: "insp-table sad-table"},
         h("thead", null,
@@ -444,7 +465,7 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
       )
     ),
     ),
-    detail && rf && shownRows.length === 0 &&
+    detail && view === "fields" && rf && shownRows.length === 0 &&
       h("div", {className: "insp-empty"}, "No matching fields."),
     (changed.length > 0 || saveMsg || saveErr) && h("div", {className: "insp-edit-bar"},
       changed.length > 0 && h("span", {className: "insp-meta"},
@@ -466,6 +487,65 @@ function RecordDetailPanel({detail, loading, onBack, onSave}) {
     ),
     ),
   );
+}
+
+// Show All Data with Related / History and in-place navigation: opening a
+// parent or child record pushes it on a stack; "‹ Back" pops it.
+async function loadDetailFor(obj, id) {
+  let object = obj;
+  if (!object) {
+    const r = await ffResolveObjectById(id);
+    object = r && (r.obj || r.name || r);
+  }
+  if (!object || typeof object !== "string") throw new Error("Could not tell which object this record belongs to.");
+  const d = await ffDescribeObject(object);
+  const full = await fetchFullRecord(object, id);
+  return {id, obj: object, rows: buildDetailRows(full, d.fields || []),
+    meta: {label: d.label || object, custom: !!d.custom, viaTooling: ffApiModeOf(object) === "tooling",
+      total: null, updated: full && full.LastModifiedDate ? Date.parse(full.LastModifiedDate) || null : null}};
+}
+
+function RecordDetailPanel({detail, loading, onBack, onSave}) {
+  const [stack, setStack] = React.useState([]);
+  const [view, setView] = React.useState("fields");
+  const [navLoading, setNavLoading] = React.useState(false);
+  const [navErr, setNavErr] = React.useState(null);
+  const rootKey = detail ? `${detail.obj}/${detail.id}` : "";
+  React.useEffect(() => { setStack([]); setView("fields"); setNavErr(null); }, [rootKey]);
+  const current = stack.length ? stack[stack.length - 1] : detail;
+  const navigate = async (obj, id) => {
+    setNavLoading(true);
+    setNavErr(null);
+    try {
+      const d = await loadDetailFor(obj, id);
+      setStack(st => [...st, d]);
+      setView("fields");
+    } catch (e) {
+      setNavErr("Could not open that record: " + e.message);
+    } finally {
+      setNavLoading(false);
+    }
+  };
+  const saveNavigated = async (obj, id, changes) => {
+    await sfConn.rest(`/services/data/v${apiVersion}/sobjects/${encodeURIComponent(obj)}/${encodeURIComponent(id)}`,
+      {method: "PATCH", body: changes});
+    const fresh = await loadDetailFor(obj, id);
+    setStack(st => st.map((x, i) => (i === st.length - 1 ? fresh : x)));
+  };
+  const values = current ? Object.fromEntries(current.rows.map(r => [r.api, r.value])) : {};
+  const trail = stack.length && detail ? [detail, ...stack].map(d => d.obj).join(" › ") : null;
+  return h(RecordDetailCore, {
+    detail: current,
+    loading: loading || navLoading,
+    onBack,
+    onSave: stack.length ? saveNavigated : onSave,
+    nav: {
+      view, setView, canBack: stack.length > 0, onNavBack: () => { setStack(st => st.slice(0, -1)); setView("fields"); },
+      trail, error: navErr,
+      related: current && h(RelatedPanel, {key: "r" + current.obj + current.id, obj: current.obj, id: current.id, values, onOpen: navigate}),
+      history: current && h(HistoryPanel, {key: "h" + current.obj + current.id, obj: current.obj, id: current.id}),
+    },
+  });
 }
 
 // ─── Records: screenshot-driven summary UI ────────────────────────────────
@@ -496,6 +576,10 @@ function RecordsTab() {
   const [ctxLoading, setCtxLoading] = React.useState(false);
   // True while a bare record Id (setup/classic page) is being looked up.
   const [resolvingId, setResolvingId] = React.useState(false);
+  // The Salesforce page now shows another record than the one loaded here.
+  const [pageChanged, setPageChanged] = React.useState(false);
+  const pageRecRef = React.useRef(null);
+  pageRecRef.current = pageRec;
 
   const fmtCount = (n) => (typeof n === "number" ? n.toLocaleString("en-US") : "—");
   const countRecords = async (obj) => {
@@ -596,26 +680,20 @@ function RecordsTab() {
     setRecDetail(null);
   };
 
-  React.useEffect(() => {
-    let cancelled = false;
-    const boot = async () => {
-      setCtxLoading(true);
-      setError(null);
-      try {
-        // New-tab inspector boots (VIEW R/O) carry the opener page's record
-        // in the URL — that tab has no content-script parent to ask.
-        let rec = urlPageRec();
-        if (!rec) rec = await queryPageRec();
-        if (cancelled) return;
-        if (rec && rec.obj && rec.id) { await loadRecordContext(rec); return; }
+  // Load whatever the Salesforce page shows (record, list or nothing).
+  // isCancelled() stops it when the tab unmounts or a newer sync starts.
+  const applyPageRec = async (rec, isCancelled) => {
+    const cancelled = isCancelled();
+    if (cancelled) return;
+    if (rec && rec.obj && rec.id) { await loadRecordContext(rec); return; }
         if (rec && rec.id) {
           // Setup / classic pages hand over a bare record Id — look the
           // object up from its Id prefix before loading the record.
-          if (!cancelled) setResolvingId(true);
+          setResolvingId(true);
           const obj = await ffResolveObjectById(rec.id);
-          if (cancelled) return;
+          if (isCancelled()) return;
           if (obj) { await loadRecordContext({obj, id: rec.id}); return; }
-          if (!cancelled) {
+          {
             setError(`Could not resolve record Id ${rec.id} to an object: ` +
               `no object in this org lists its Id prefix.`);
           }
@@ -634,20 +712,57 @@ function RecordsTab() {
         setRecDetail(null);
         setDetail(null);
         setPageRec(null);
-      } catch (e) {
-        if (!cancelled) setError(e.message);
-      } finally {
-        if (!cancelled) {
-          setCtxLoading(false);
-          setResolvingId(false);
-        }
+  };
+
+  const syncSeq = React.useRef(0);
+  // Re-read the page open in Salesforce (the panel stays open while you
+  // navigate) and load it. fromUrl: the first load of an inspector tab.
+  const syncWithPage = async ({fromUrl = false} = {}) => {
+    const seq = ++syncSeq.current;
+    const isCancelled = () => seq !== syncSeq.current;
+    setCtxLoading(true);
+    setError(null);
+    setPageChanged(false);
+    try {
+      // New-tab inspector boots (VIEW R/O) carry the opener page's record
+      // in the URL — that tab has no content-script parent to ask.
+      let rec = fromUrl || inTab ? urlPageRec() : null;
+      if (!rec && !inTab) rec = await queryPageRec();
+      const prev = pageRecRef.current;
+      // A different page: close the record popup left from the old one.
+      if (!fromUrl && !samePageRec(prev, rec)) setDetail(null);
+      await applyPageRec(rec, isCancelled);
+    } catch (e) {
+      if (!isCancelled()) setError(e.message);
+    } finally {
+      if (!isCancelled()) {
+        setCtxLoading(false);
+        setResolvingId(false);
       }
-    };
-    boot();
-    return () => { cancelled = true; };
+    }
+  };
+
+  React.useEffect(() => {
+    syncWithPage({fromUrl: true});
+    return () => { syncSeq.current++; };
+  }, []);
+
+  // While the panel is open, notice when the Salesforce page moves to
+  // another record so the reload button can say so.
+  React.useEffect(() => {
+    if (inTab) return undefined;
+    let stop = false;
+    const id = setInterval(async () => {
+      if (document.hidden || stop) return;
+      const rec = await queryPageRec();
+      if (!stop && rec !== undefined) setPageChanged(!samePageRec(pageRecRef.current, rec));
+    }, 3000);
+    return () => { stop = true; clearInterval(id); };
   }, []);
 
   const refreshContext = async () => {
+    // Outside the inspector tab, Refresh also follows the Salesforce page.
+    if (!inTab) return syncWithPage();
     setCtxLoading(true);
     setError(null);
     try {
@@ -835,7 +950,19 @@ function RecordsTab() {
         h("path", {d: "M5 20h14"})]),
       h("span", null, "Export Records"));
 
+  const syncBtn = !inTab && h("div", {className: "rec-sync-row"},
+    pageChanged && h("span", {className: "rec-sync-note"}, "The Salesforce page changed"),
+    h("button", {
+      className: "rec-sync-btn" + (pageChanged ? " changed" : ""),
+      disabled: ctxLoading,
+      title: "Reload for the page open in Salesforce now",
+      "aria-label": "Reload for the current Salesforce page",
+      onClick: () => syncWithPage()
+    }, svgW([h("path", {key: "a", d: "M20 12a8 8 0 1 1-2.34-5.66"}), h("path", {key: "b", d: "M20 4v5h-5"})]),
+    h("span", null, ctxLoading ? "Loading…" : "Reload page")));
+
   return h("div", {className: "insp-panel"},
+    syncBtn,
     (isRecord && h("div", {className: "rec-sum-card"},
       h("div", {className: "rec-sum-top"},
         h("div", {className: "rec-sum-id"},

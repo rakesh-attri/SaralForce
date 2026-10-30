@@ -34,8 +34,9 @@ test("normalizeFieldType maps common variants onto FIELD_TYPES values", () => {
 });
 
 test("normalizeFieldType rejects unknown types", () => {
-  assert.equal(normalizeFieldType("Formula"), null);
-  assert.equal(normalizeFieldType("Geolocation"), null);
+  assert.equal(normalizeFieldType("Hologram"), null);
+  assert.equal(normalizeFieldType("Geolocation"), "Location");
+  assert.equal(normalizeFieldType("richtext"), "Html");
   assert.equal(normalizeFieldType(""), null);
   assert.equal(normalizeFieldType(null), null);
 });
@@ -131,10 +132,10 @@ test("validateProposal accepts a good proposal", () => {
 test("validateProposal reports unknown types and duplicate names", () => {
   const p = baseProposal();
   p.fields.push({label: "Total", name: "amount__c", type: "Currency"});
-  p.fields.push({label: "Calc", name: "Calc__c", type: "Formula"});
+  p.fields.push({label: "Calc", name: "Calc__c", type: "Hologram"});
   const errs = validateProposal(p);
   assert.ok(errs.some(e => /duplicates field 1/.test(e)), errs.join("|"));
-  assert.ok(errs.some(e => /unsupported type "Formula"/.test(e)), errs.join("|"));
+  assert.ok(errs.some(e => /unsupported type "Hologram"/.test(e)), errs.join("|"));
 });
 
 test("validateProposal enforces relatedTo for Master-Detail variants", () => {
