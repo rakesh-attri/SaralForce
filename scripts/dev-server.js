@@ -147,9 +147,36 @@ for (const t of ["lightningcomponentresource", "auradefinition"]) {
   (tables[t] || []).forEach((r, i) => { if (!r.Id) r.Id = `0Rd${t === "auradefinition" ? "A" : "L"}N${String(i).padStart(10, "0")}AAA`; });
 }
 
-function soqlResult(q) {
+// Tab settings written through PermissionSetTabSetting (the profile metadata
+// write deliberately does not touch these, like the org that prompted it).
+const mockTabSettings = [];
+// Like the real org: a tab created through the API only becomes available to
+// users (normal-API TabDefinition, App Launcher) once it has been saved again.
+const appliedTabs = new Set(["Invoice__c", "Support_Ticket__c", "Feature_Request__c"]);
+const mockTabDesc = new Map();
+function dynamicTable(obj, q, tooling) {
+  if (obj === "tabdefinition") {
+    return mockCustomTabs.filter(t => tooling || appliedTabs.has(t.fullName))
+      .map(t => ({Name: t.fullName, SobjectName: t.fullName, Label: t.fullName.replace(/__c$/, "").replace(/_/g, " ")}));
+  }
+  if (obj === "permissionsettabsetting") return mockTabSettings;
+  if (obj === "layout") {
+    // Two layouts per object, like an org with a profile-specific layout.
+    const base = (/DeveloperName\s*=\s*'([^']+)'/i.exec(q) || [])[1];
+    if (!base) return null;
+    return [{Id: "00h000000000001AAA", Name: base.replace(/_/g, " ") + " Layout"}, {Id: "00h000000000002AAA", Name: "Rakesh Layout"}];
+  }
+  return null;
+}
+
+function soqlResult(q, tooling = false) {
   const from = /\bfrom\s+([A-Za-z0-9_]+)/i.exec(q);
   const obj = from ? from[1].toLowerCase() : "";
+  const dyn = dynamicTable(obj, q, tooling);
+  if (dyn) {
+    const rows = obj === "layout" ? dyn : applyWhere(q, dyn);
+    return soqlPage(q, rows, 0, from[1]);
+  }
   if (/^\s*select\s+count\(\)/i.test(q)) {
     return {totalSize: applyWhere(q, tables[obj] || []).length, done: true, records: []};
   }
@@ -237,7 +264,7 @@ function mockMetadataSoap(req, res) {
         : type === "CustomTab" ? mockCustomTabs
         : type === "Profile" ? [{fullName: "Admin"}, {fullName: "Standard"}]
         : type === "PermissionSet" ? [{fullName: "Sales_Ops"}] : [];
-      return res.end(env("<listMetadataResponse>" + rows.map(r => `<result><fullName>${r.fullName}</fullName><type>${type}</type>` +
+      return res.end(env("<listMetadataResponse>" + rows.map((r, i) => `<result><fullName>${r.fullName}</fullName><id>01r00000000000${i}AAA</id><type>${type}</type>` +
         `<createdDate>${r.createdDate || iso(500 * 86400e3)}</createdDate></result>`).join("") + "</listMetadataResponse>"));
     }
     if (/readMetadata/.test(raw) && type === "CustomApplication") {
@@ -251,6 +278,28 @@ function mockMetadataSoap(req, res) {
       const names = [...raw.matchAll(/<(?:met:)?fullNames>([^<]+)</g)].map(m => m[1]);
       return res.end(env("<readMetadataResponse><result>" + names.map(n =>
         `<records xsi:type="${type}"><fullName>${n}</fullName><custom>false</custom></records>`).join("") + "</result></readMetadataResponse>"));
+    }
+    if (/readMetadata/.test(raw) && type === "CustomTab") {
+      const name = (/<(?:met:)?fullNames>([^<]+)</.exec(raw) || [])[1];
+      const known = mockCustomTabs.some(t => t.fullName === name);
+      return res.end(env("<readMetadataResponse><result>" + (known ? `<records xsi:type="CustomTab"><fullName>${name}</fullName>` +
+        "<customObject>true</customObject>" + (mockTabDesc.get(name) ? `<description>${mockTabDesc.get(name)}</description>` : "") + "<motif>Custom20: Airplane</motif></records>" : "") + "</result></readMetadataResponse>"));
+    }
+    if (/updateMetadata/.test(raw) && /met:CustomTab/.test(raw)) {
+      const name = (/<(?:met:)?fullName>([^<]+)</.exec(raw) || [])[1];
+      // Like the real org: an unchanged save does nothing; a real change
+      // makes Salesforce apply the tab visibility.
+      const desc = (/<(?:met:)?description>([^<]*)</.exec(raw) || [])[1] || "";
+      if (mockTabDesc.has(name) && mockTabDesc.get(name) !== desc) appliedTabs.add(name);
+      mockTabDesc.set(name, desc);
+      return res.end(env(`<updateMetadataResponse><result><fullName>${name}</fullName><success>true</success></result></updateMetadataResponse>`));
+    }
+    if (/readMetadata/.test(raw) && type === "Layout") {
+      const name = (/<(?:met:)?fullNames>([^<]+)</.exec(raw) || [])[1];
+      return res.end(env("<readMetadataResponse><result><records xsi:type=\"Layout\"><fullName>" + name + "</fullName>" +
+        "<layoutSections><customLabel>false</customLabel><detailHeading>false</detailHeading><editHeading>true</editHeading><label>Information</label>" +
+        "<layoutColumns><layoutItems><behavior>Required</behavior><field>Name</field></layoutItems></layoutColumns>" +
+        "<layoutColumns></layoutColumns><style>TwoColumnsTopToBottom</style></layoutSections></records></result></readMetadataResponse>"));
     }
     if (/readMetadata/.test(raw)) return res.end(env("<readMetadataResponse><result></result></readMetadataResponse>"));
     if (/updateMetadata/.test(raw) && !/CustomApplication/.test(raw)) {
@@ -266,6 +315,7 @@ function mockMetadataSoap(req, res) {
     if (/met:CustomTab/.test(raw)) {
       const tab = (/<(?:met:)?fullName>([^<]+)</.exec(raw) || [])[1];
       if (tab && !mockCustomTabs.some(t => t.fullName === tab)) mockCustomTabs.push({fullName: tab, createdDate: iso(0)});
+      if (tab) mockTabDesc.set(tab, (/<(?:met:)?description>([^<]*)</.exec(raw) || [])[1] || "");
     }
     return res.end(env("<createMetadataResponse><result><fullName>Mock__mdt</fullName><success>true</success></result></createMetadataResponse>"));
   });
@@ -299,7 +349,7 @@ function api(req, res, url) {
     if (limit) records = records.slice(0, Number(limit[1]));
     return json(res, 200, soqlPage(q, records, Number(cursor[1]), from ? from[1] : "SObject"));
   }
-  if (/\/(query|queryAll)\/?$/.test(p)) return json(res, 200, soqlResult(url.searchParams.get("q") || ""));
+  if (/\/(query|queryAll)\/?$/.test(p)) return json(res, 200, soqlResult(url.searchParams.get("q") || "", p.includes("/tooling/")));
   if (/\/limits\/?$/.test(p)) return json(res, 200, limitsBody());
   if (/\/sobjects\/?$/.test(p)) return json(res, 200, {encoding: "UTF-8", maxBatchSize: 200, sobjects: sobjectList});
   const describe = /\/sobjects\/([A-Za-z0-9_]+)\/describe\/?$/.exec(p);
@@ -332,6 +382,26 @@ function api(req, res, url) {
   }
   // Object Builder field access: permission set, object/field permissions,
   // assignment. Counted per type at /mock-perm.
+  const tabSet = /\/data\/v[\d.]+\/sobjects\/PermissionSetTabSetting\/?([A-Za-z0-9]{15,18})?\/?$/.exec(p);
+  if (tabSet && (req.method === "POST" || req.method === "PATCH")) {
+    let raw = "";
+    req.on("data", c => { raw += c; });
+    req.on("end", () => {
+      let body = {};
+      try { body = JSON.parse(raw || "{}"); } catch { body = {}; }
+      if (req.method === "PATCH") {
+        const row = mockTabSettings.find(t => t.Id === tabSet[1]);
+        if (row) Object.assign(row, body);
+        res.writeHead(204, {"Access-Control-Allow-Origin": "*"});
+        return res.end();
+      }
+      const row = {Id: "01P" + String(mockTabSettings.length + 1).padStart(12, "0") + "AAA", ...body};
+      mockTabSettings.push(row);
+      permPosts.PermissionSetTabSetting = (permPosts.PermissionSetTabSetting || 0) + 1;
+      return json(res, 201, {id: row.Id, success: true, errors: []});
+    });
+    return undefined;
+  }
   const perm = /\/data\/v[\d.]+\/sobjects\/(PermissionSet|ObjectPermissions|FieldPermissions|PermissionSetAssignment)\/?$/.exec(p);
   if (perm && req.method === "POST") {
     permPosts[perm[1]] = (permPosts[perm[1]] || 0) + 1;

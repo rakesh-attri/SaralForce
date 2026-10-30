@@ -24,6 +24,10 @@ import {
 } from "./builder/metadata-xml.js";
 import {domLocal, domChildren, domFind, domFindAll, domToMetXml} from "./builder/metadata-dom.js";
 import {FieldDetails, ObjectSettings, planFieldOptions} from "./builder/plan-editor-ui.js";
+import {readTabAccess, ensureTabVisibleForUser, setPermissionSetTab} from "./inspector/shared/tab-access.js";
+import {explainTabAccess, tabAccessReport} from "./core/tab-access.js";
+import {appTabsLoadApps, appTabsForApp, addTabToApp, appTabsResaveTab, appTabsTabEditUrl} from "./inspector/tabs/app-tabs.js";
+import {SearchSelect} from "./inspector/shared/combo.js";
 import {fieldDefaults, describeToProposal, permissionSetNameFor, fieldDetailSummary, NEEDS_DETAILS} from "./core/plan-fields.js";
 import {
   ensureLayoutCustomLinks, removeEmptyLayoutColumns, fixCustomLinksWithFields, layoutNeedsRepair,
@@ -68,6 +72,14 @@ class App extends React.Component {
       messages: saved?.messages || [],
       currentProposal: saved?.currentProposal || null,
       isGenerating: false,
+      ...(() => {
+        try {
+          const t = JSON.parse(localStorage.getItem("sfoc_target_app") || "null");
+          return {targetApp: (t && t.fullName) || "", targetAppLabel: (t && t.label) || ""};
+        } catch (e) { return {targetApp: "", targetAppLabel: ""}; }
+      })(),
+      accessCheck: null,
+      accessFixing: false,
       streamingText: "",
       isEnhancing: false,
       enhancedPreview: null,
@@ -369,6 +381,7 @@ class App extends React.Component {
     // longer loads apps or auto-assigns.
     if (this.state.currentProposal && prevState.currentProposal !== this.state.currentProposal) {
       this.loadProfiles().catch(e => console.warn("[SaralForce] proposal loadProfiles:", e.message));
+      this.loadTargetApps();
     }
   }
 
@@ -402,7 +415,8 @@ class App extends React.Component {
       recordTypesDone: false,
       builderMode: "plan",
       isEnhancing: false,
-      enhancedPreview: null
+      enhancedPreview: null,
+      accessCheck: null
     }, () => {
       if (!hasValidConfig()) {
         this.addSystemMessage("Welcome! Before we begin, please open Settings (top-right) and configure your LLM provider.");
@@ -974,13 +988,12 @@ class App extends React.Component {
           deploymentResults: [...prev.deploymentResults, {
             type: "layout",
             name: currentProposal.object.name + "_layout",
-            label: layoutOk.ok && layoutOk.layoutName
-              ? `Page Layout (new: ${layoutOk.layoutName} — assign in Setup)`
-              : layoutOk.ok && layoutOk.method === "noop"
-                ? "Page Layout (already up to date)"
-                : "Page Layout",
+            label: (layoutOk.summary || "Page Layout") +
+              (layoutOk.ok && layoutOk.layoutName ? ` (new: ${layoutOk.layoutName} — assign in Setup)`
+                : layoutOk.ok && layoutOk.method === "noop" ? " — already up to date" : ""),
             status: layoutOk.ok ? "success" : "error",
-            error: layoutOk.ok ? undefined : layoutOk.error,
+            // A layout that could not be updated is still worth knowing about.
+            error: layoutOk.ok ? layoutOk.warning : layoutOk.error,
             debug: layoutOk.ok ? undefined : layoutOk.debug
           }],
           deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
@@ -1106,19 +1119,42 @@ class App extends React.Component {
       }
 
       if (!this._deployAborted && tabResult.ok) {
+        const objName = currentProposal.object.name;
+        const addRow = row => this.setState(prev => ({deploymentResults: [...prev.deploymentResults, row]}));
+        // The permission-set option also needs the tab setting (the tab exists now).
+        if ((this.state.flsTarget || "me") === "permset" && this._accessPermissionSetId) {
+          try { await setPermissionSetTab(this._accessPermissionSetId, objName); } catch (e) {
+            console.warn("[SaralForce] Permission set tab setting failed:", e.message);
+          }
+        }
+        // Your own access, read back from Salesforce and repaired when the
+        // profile write did not stick (tab setting / object access).
+        this.setState({deploymentStep: "Checking your access to the tab..."});
+        try {
+          const acc = await ensureTabVisibleForUser(objName, {resaveTab: () => appTabsResaveTab(objName)});
+          addRow({
+            type: "access", name: objName + "_access",
+            label: acc.ok ? `Your access — confirmed via ${acc.how}${acc.steps.includes("tab saved again") ? "; tab saved so the App Launcher picks it up" : ""}` : "Your access — could not confirm",
+            status: acc.ok ? "success" : "error",
+            error: acc.ok ? undefined : acc.steps.join("; ")
+          });
+        } catch (e) {
+          addRow({type: "access", name: objName + "_access", label: "Your access", status: "error", error: e.message});
+        }
+        // Show in app (Plan → Deployment Targets).
+        const app = this.state.targetApp;
+        if (app && !this._deployAborted) {
+          this.setState({deploymentStep: "Adding the tab to the app..."});
+          const appLabel = this.state.targetAppLabel || app;
+          try {
+            const r = await addTabToApp(app, objName);
+            addRow({type: "app", name: objName + "_app", label: r.already ? `Already in ${appLabel}` : `Added to ${appLabel}`, status: "success"});
+          } catch (e) {
+            addRow({type: "app", name: objName + "_app", label: `Add to ${appLabel}`, status: "error", error: e.message});
+          }
+        }
         this.setState({deploymentStep: "Checking the App Launcher..."});
-        const seen = await this.checkTabInLauncher(currentProposal.object.name);
-        this.setState(prev => ({
-          deploymentResults: [...prev.deploymentResults, {
-            type: "launcher",
-            name: currentProposal.object.name + "_launcher",
-            label: seen.ok
-              ? `In your App Launcher — search "${currentProposal.object.label}" (refresh Salesforce once if it's not there yet)`
-              : "Not in your App Launcher yet",
-            status: seen.ok ? "success" : "error",
-            error: seen.ok ? undefined : seen.reason
-          }]
-        }));
+        await this.runAccessCheck(objName, {label: currentProposal.object.label});
       }
 
       this.setState({
@@ -1250,33 +1286,68 @@ class App extends React.Component {
     throw new Error("Could not get user identity (tried userinfo and /id, last status " + lastStatus + ")");
   }
 
-  // Does the running user's App Launcher list the new tab? /tabs returns the
-  // tabs the user can see (the App Launcher's own list). Metadata changes can
-  // take a few seconds to show, so retry briefly before explaining why not.
-  async checkTabInLauncher(objectName) {
-    const want = String(objectName).toLowerCase();
-    for (let attempt = 0; attempt < 3; attempt++) {
+  // Facts → checklist, kept in state for the result panel. Retries briefly:
+  // metadata changes can take a few seconds to reach the App Launcher.
+  async runAccessCheck(objectName, {label, retries = 3} = {}) {
+    const app = this.state.targetApp;
+    const opts = app ? {appLabel: this.state.targetAppLabel || app, appTabs: () => appTabsForApp(app)} : {};
+    let facts = null;
+    let result = null;
+    for (let i = 0; i < retries; i++) {
       try {
-        const tabs = await sfConn.rest(`/services/data/v${apiVersion}/tabs`, {useCache: false});
-        if ((Array.isArray(tabs) ? tabs : []).some(t => String(t.sobjectName || t.name || "").toLowerCase() === want)) return {ok: true};
+        facts = await readTabAccess(objectName, opts);
+        result = explainTabAccess(facts);
       } catch (e) {
-        console.warn("[SaralForce] /tabs check failed:", e.message);
+        facts = {notes: [e.message]};
+        result = {ok: false, items: [{key: "error", ok: false, label: "Could not check", detail: e.message}]};
       }
-      if (attempt < 2) await this.delay(2500);
+      if (result.ok || i === retries - 1) break;
+      await this.delay(2500);
     }
-    let reason;
+    this.setState({accessCheck: {objectName, label, facts, result, at: Date.now()}});
+    return result;
+  }
+
+  // "Fix it": make the tab visible + the object readable for you, add it to
+  // the chosen app, then check again.
+  async fixAccess() {
+    const chk = this.state.accessCheck;
+    if (!chk) return;
+    this.setState({accessFixing: true});
     try {
-      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/${encodeURIComponent(objectName)}/describe`, {useCache: false});
-      reason = "Your profile can open the object but the tab is hidden for it. Open Inspector → App Tab Manager → Who can see a tab → " +
-        "Just make it visible to me, then refresh Salesforce.";
+      await ensureTabVisibleForUser(chk.objectName, {
+        profileWrite: () => this.ensureCurrentUserVisibility(chk.objectName),
+        resaveTab: () => appTabsResaveTab(chk.objectName)
+      });
+      if (this.state.targetApp) {
+        try { await addTabToApp(this.state.targetApp, chk.objectName); } catch (e) {
+          console.warn("[SaralForce] Fix it: add to app failed:", e.message);
+        }
+      }
+      await this.runAccessCheck(chk.objectName, {label: chk.label, retries: 2});
+    } finally {
+      this.setState({accessFixing: false});
+    }
+  }
+
+  // Lightning apps for "Show in app" (loaded once).
+  async loadTargetApps() {
+    if (this._appsLoading || (this.state.targetApps && this.state.targetApps.length)) return;
+    this._appsLoading = true;
+    try {
+      const apps = await appTabsLoadApps();
+      this.setState({targetApps: apps});
     } catch (e) {
-      reason = "Your profile has no access to this object yet, so Salesforce hides its tab. Redeploy with Field access → " +
-        "New permission set, or give your profile Read access on the object in Setup, then refresh Salesforce.";
+      console.warn("[SaralForce] App list failed:", e.message);
+    } finally {
+      this._appsLoading = false;
     }
-    if (this.state.visibilityMode === "selected") {
-      reason += " Also check that your own profile is one of the selected profiles.";
-    }
-    return {ok: false, reason};
+  }
+
+  setTargetApp(fullName) {
+    const app = (this.state.targetApps || []).find(a => a.fullName === fullName);
+    this.setState({targetApp: fullName || "", targetAppLabel: app ? app.label : ""});
+    try { localStorage.setItem("sfoc_target_app", JSON.stringify({fullName: fullName || "", label: app ? app.label : ""})); } catch (e) { /* ignore */ }
   }
 
   // Validation rules, list views and a compact layout from the plan, in the
@@ -1359,6 +1430,7 @@ class App extends React.Component {
       } catch (e) {
         if (!/duplicate|already/i.test(e.message || "")) console.warn("[SaralForce] Permission set assignment failed:", e.message);
       }
+      this._accessPermissionSetId = id;
       return {parents: [{id, objectAccess: true}], label: `permission set ${label} (assigned to you)`};
     }
     if (target === "profiles") {
@@ -1443,32 +1515,53 @@ class App extends React.Component {
     return summary;
   }
 
+  // Every page layout of the object gets the new fields — same as Setup's
+  // "Add Field" step, where all layouts are ticked. A layout that fails is
+  // reported; the others still get the fields. Never throws.
   async addFieldsToDefaultLayout(objectName, fieldNames) {
-    // Best-effort: put newly created fields on the default page layout.
-    // Read-merge-write via sync updateMetadata: read the FULL layout with
-    // readMetadata, append <layoutItems> to the last column, write back.
-    // (Tooling PATCH of Layout metadata is rejected with
-    // FIELD_INTEGRITY_EXCEPTION: Required field is missing: customLink, so
-    // it is deliberately not used here.) Never throws — returns {ok, error}.
+    const baseName = objectName.replace(/__c$/, "");
+    let layouts = [];
     try {
-      const baseName = objectName.replace(/__c$/, "");
-      const q = encodeURIComponent(
-        `SELECT Id, FullName FROM Layout WHERE EntityDefinition.DeveloperName = '${escapeSoqlString(baseName)}' LIMIT 5`);
-      let fullName = null;
-      try {
-        const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=${q}`);
-        fullName = res.records?.[0]?.FullName || null;
-        if (!fullName && res.records?.[0]?.Id) {
-          const detail = await sfConn.rest(
-            `/services/data/v${apiVersion}/tooling/sobjects/Layout/${res.records[0].Id}`);
-          fullName = detail.FullName || null;
-        }
-      } catch (e) {
-        console.warn("[SaralForce] Layout lookup failed:", e.message);
+      const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` + encodeURIComponent(
+        `SELECT Id, Name FROM Layout WHERE EntityDefinition.DeveloperName = '${escapeSoqlString(baseName)}' LIMIT 50`));
+      // Layout metadata fullName is "Object__c-Layout Name".
+      layouts = (res.records || []).filter(r => r.Name).map(r => ({name: r.Name, fullName: `${objectName}-${r.Name}`}));
+    } catch (e) {
+      console.warn("[SaralForce] Layout lookup failed:", e.message);
+    }
+    if (!layouts.length) {
+      return {ok: false, error: "No page layout found (open Setup to add fields manually)"};
+    }
+    const done = [];
+    const failed = [];
+    let added = 0;
+    let lastFallback = null;
+    for (const l of layouts) {
+      if (this._deployAborted) throw new Error("Deployment cancelled");
+      const r = await this.addFieldsToLayout(objectName, l.fullName, fieldNames);
+      if (r.ok) {
+        done.push(l.name);
+        added += r.added || 0;
+        if (r.layoutName) lastFallback = r.layoutName;
+      } else {
+        failed.push(`${l.name}: ${r.error}`);
       }
-      if (!fullName) {
-        return {ok: false, error: "No default layout found (open Setup to add fields manually)"};
-      }
+    }
+    const summary = `Page Layout${layouts.length > 1 ? "s" : ""} (${done.length}/${layouts.length}): ${done.join(", ") || "none"}`;
+    if (!done.length) return {ok: false, error: failed.join("; "), debug: this.lastSoapDebugText(), summary};
+    return {
+      ok: true, method: added ? "metadata" : "noop", added, summary, layoutName: lastFallback,
+      warning: failed.length ? `Not updated: ${failed.join("; ")}` : undefined
+    };
+  }
+
+  // Put fields on one layout. Read-merge-write via sync updateMetadata: read
+  // the FULL layout with readMetadata, append <layoutItems> to the last column,
+  // write back. (Tooling PATCH of Layout metadata is rejected with
+  // FIELD_INTEGRITY_EXCEPTION: Required field is missing: customLink, so it is
+  // deliberately not used here.) Never throws — returns {ok, error}.
+  async addFieldsToLayout(objectName, fullName, fieldNames) {
+    try {
       let records;
       try {
         records = await this.metadataReadRecords("Layout", fullName);
@@ -2759,6 +2852,20 @@ class App extends React.Component {
                 ),
                 (this.state.flsTarget || "me") === "permset" && h("div", {className: "app-section-hint"},
                   `Permission set "${permissionSetNameFor(currentProposal.object.name).label}" — assign it to other users in Setup.`)
+              ),
+              h("div", {className: "targets-block"},
+                h("div", {className: "targets-label"}, "Show in app (navigation bar)"),
+                h("div", {className: "targets-app"},
+                  h(SearchSelect, {
+                    value: this.state.targetApp || "",
+                    options: [{value: "", label: "None — only the App Launcher"},
+                      ...(this.state.targetApps || []).map(a => ({value: a.fullName, label: a.label, sub: a.fullName !== a.label ? a.fullName : null}))],
+                    onChange: v => this.setTargetApp(v),
+                    placeholder: (this.state.targetApps || []).length ? "Search apps…" : "Loading apps…",
+                    ariaLabel: "Lightning app to add the tab to"
+                  })),
+                h("p", {className: "app-section-hint"},
+                  "Like Setup's \"Add to Custom Apps\" step: the new tab is added to this app's navigation bar. Your choice is remembered.")
               )
             ),
 
@@ -3007,8 +3114,9 @@ class App extends React.Component {
               deploymentResults.map((result, i) =>
                 h("div", {key: i, className: `deploy-result deploy-${result.status}`},
                   h("span", {className: "deploy-icon"}, result.status === "success" ? "\u2713" : result.status === "error" ? "\u2717" : "\u25cb"),
-                  h("span", {className: "deploy-type"}, result.type === "object" ? "Object" : result.type === "fls" ? "Security" : result.type === "tab" ? "Tab" : result.type === "visibility" ? "Visibility" : result.type === "layout" ? "Layout" : result.type === "recordtype" ? "RecType" : result.type === "app" ? "App" : result.type === "launcher" ? "Launcher" : result.type === "validation" ? "Rule" : result.type === "listview" ? "List view" : result.type === "compact" ? "Compact" : "Field"),
+                  h("span", {className: "deploy-type"}, result.type === "object" ? "Object" : result.type === "fls" ? "Security" : result.type === "tab" ? "Tab" : result.type === "visibility" ? "Visibility" : result.type === "layout" ? "Layout" : result.type === "recordtype" ? "RecType" : result.type === "app" ? "App" : result.type === "launcher" ? "Launcher" : result.type === "access" ? "Access" : result.type === "validation" ? "Rule" : result.type === "listview" ? "List view" : result.type === "compact" ? "Compact" : "Field"),
                   h("span", {className: "deploy-name"}, result.label || result.name),
+                    result.status === "success" && result.error && h("span", {className: "deploy-warn-note"}, result.error),
                     result.status === "error" && h("div", {className: "deploy-error-detail"},
                       h("span", {className: "deploy-error-msg"}, result.error),
                       h("button", {
@@ -3034,6 +3142,42 @@ class App extends React.Component {
                     )
                 )
               ),
+
+              (() => {
+                const chk = this.state.accessCheck;
+                if (!chk || !currentProposal || chk.objectName !== currentProposal.object.name || deploymentStatus === "deploying") return null;
+                return h("div", {className: "access-check" + (chk.result.ok ? " ok" : "")},
+                  h("div", {className: "access-check-h"},
+                    h("span", null, chk.result.ok ? `✓ "${chk.label || chk.objectName}" is ready in your App Launcher` : "Can you see the new tab?"),
+                    h("div", {className: "access-check-actions"},
+                      !chk.result.ok && h("button", {
+                        className: "btn btn-primary btn-sm",
+                        disabled: this.state.accessFixing,
+                        onClick: () => this.fixAccess()
+                      }, this.state.accessFixing ? "Fixing…" : "Fix it"),
+                      chk.result.items.some(i => i.key === "launcher" && !i.ok) && h("button", {
+                        className: "btn btn-secondary btn-sm",
+                        title: "Opens this tab's edit page in Setup — click Save there, then Check again",
+                        onClick: async () => window.open(await appTabsTabEditUrl(chk.objectName), "_blank")
+                      }, "Save in Setup ↗"),
+                      h("button", {
+                        className: "btn btn-secondary btn-sm",
+                        disabled: this.state.accessFixing,
+                        onClick: () => this.runAccessCheck(chk.objectName, {label: chk.label, retries: 1})
+                      }, "Check again"),
+                      h("button", {
+                        className: "field-action-btn",
+                        title: "Copy the facts read from Salesforce",
+                        onClick: () => safeCopyText(tabAccessReport(chk.objectName, chk.facts, chk.result))
+                      }, "Copy details"))),
+                  h("ul", {className: "access-check-list"},
+                    chk.result.items.map(i => h("li", {key: i.key, className: i.ok ? "ok" : "no"},
+                      h("span", {className: "access-check-ico", "aria-hidden": "true"}, i.ok ? "✓" : "✕"),
+                      h("span", {className: "access-check-l"}, i.label),
+                      h("span", {className: "access-check-d"}, i.detail)))),
+                  h("div", {className: "access-check-note"},
+                    "Salesforce caches the App Launcher — after a change, refresh the Salesforce page (or log out and in) before searching."));
+              })(),
 
               deploymentStatus === "complete" && deploymentResults.some(r => r.type === "tab" && r.status === "success") && h("div", {className: "deploy-hint"},
                 visibilityMode === "selected"

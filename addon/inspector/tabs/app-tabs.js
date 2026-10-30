@@ -4,6 +4,8 @@ import {escapeSoqlString} from "../../core/soql.js";
 import {useFfSession} from "../shared/session-state.js";
 import {appTabsResolveCurrentUserId} from "../shared/apex-debug.js";
 import {SearchSelect} from "../shared/combo.js";
+import {readTabAccess, ensureTabVisibleForUser} from "../shared/tab-access.js";
+import {explainTabAccess, tabAccessReport} from "../../core/tab-access.js";
 
 const h = React.createElement;
 
@@ -161,13 +163,18 @@ async function appTabsListMetadata(type) {
   const body = `<met:listMetadata><met:queries><met:type>${appTabsEscXml(type)}</met:type></met:queries></met:listMetadata>`;
   const {doc} = await appTabsSoapPost(body);
   const entries = [];
-  for (const fp of appTabsDomFindAll(doc.documentElement, "fileProperties")) {
+  // listMetadata returns FileProperties as <result> elements.
+  let props = appTabsDomFindAll(doc.documentElement, "fileProperties");
+  if (!props.length) props = appTabsDomFindAll(doc.documentElement, "result");
+  for (const fp of props) {
     const fn = appTabsDomFind(fp, "fullName");
     if (fn && fn.textContent) {
       const cd = appTabsDomFind(fp, "createdDate");
+      const idEl = appTabsDomFind(fp, "id");
       entries.push({
         fullName: fn.textContent.trim(),
-        createdDate: cd && cd.textContent ? cd.textContent.trim() : null
+        createdDate: cd && cd.textContent ? cd.textContent.trim() : null,
+        id: idEl && idEl.textContent ? idEl.textContent.trim() : null
       });
     }
   }
@@ -712,6 +719,8 @@ function AppTabManager() {
   const [debug, setDebug] = React.useState("");
   // App Tab Manager: search filters, table, visibility, prefill.
   const [alsoVisible, setAlsoVisible] = React.useState(true);
+  const [accessChk, setAccessChk] = React.useState(null);   // {tab, facts, result}
+  const [accessBusy, setAccessBusy] = React.useState(false);
   const [listQuery, setListQuery] = React.useState("");
   const [moveBusy, setMoveBusy] = React.useState(null);
   const [confirmRm, setConfirmRm] = React.useState(null);
@@ -1007,14 +1016,36 @@ function AppTabManager() {
         throw new Error(
           `Tab "${tab}" was not found in this org. If you just deployed it, wait a minute and retry.`);
       }
-      const profileFn = await appTabsEnsureTabVisibleForMe(tab);
-      setVisMsg(`Tab "${tab}" set to DefaultOn for your profile (${profileFn}). Open App Launcher search in ~30s — if it still doesn't appear, hard-refresh Lightning.`);
-      // Refresh the visibility column.
-      setProfileVis(prev => ({...(prev || {}), [tab]: "DefaultOn"}));
+      // Profile write, then read back what Salesforce applies and repair
+      // (tab setting / object access / access permission set) if needed.
+      const acc = await ensureTabVisibleForUser(tab, {profileWrite: () => appTabsEnsureTabVisibleForMe(tab), resaveTab: () => appTabsResaveTab(tab)});
+      setAccessChk({tab, facts: acc.facts, result: explainTabAccess(acc.facts)});
+      if (acc.ok) {
+        setVisMsg(`"${tab}" is visible to you (confirmed via ${acc.how}). Refresh the Salesforce page, then search the App Launcher.`);
+        setProfileVis(prev => ({...(prev || {}), [tab]: "DefaultOn"}));
+      } else {
+        setVisErr(`Could not confirm "${tab}" is visible to you: ${acc.steps.join("; ")}`);
+      }
     } catch (e) {
       setVisErr(e.message);
     } finally {
       setVisWorking(false);
+    }
+  };
+
+  // Read the facts for one tab and show the checklist.
+  const checkAccess = async (tabOverride) => {
+    const tab = String(tabOverride || visTab || "").trim();
+    if (!tab) { setVisErr("Pick a tab first."); return; }
+    setAccessBusy(true);
+    setVisErr(null);
+    try {
+      const facts = await readTabAccess(tab);
+      setAccessChk({tab, facts, result: explainTabAccess(facts)});
+    } catch (e) {
+      setVisErr(e.message);
+    } finally {
+      setAccessBusy(false);
     }
   };
 
@@ -1513,7 +1544,43 @@ function AppTabManager() {
           disabled: visWorking || working || !visTabValue.trim(),
           title: "Set this tab to Default On for your own profile",
           onClick: () => makeVisible(visTabValue)
-        }, visWorking ? "Setting…" : "Just make it visible to me")),
+        }, visWorking ? "Setting…" : "Just make it visible to me"),
+        h("button", {
+          className: "btn btn-secondary",
+          disabled: accessBusy || visWorking || !visTabValue.trim(),
+          title: "Check what Salesforce applies for you: tab exists, tab setting, object access, App Launcher",
+          onClick: () => checkAccess(visTabValue)
+        }, accessBusy ? "Checking…" : "Check access")),
+      accessChk && accessChk.tab === visTabValue && h("div", {className: "access-check" + (accessChk.result.ok ? " ok" : "")},
+        h("div", {className: "access-check-h"},
+          h("span", null, accessChk.result.ok ? `✓ "${accessChk.tab}" is ready in your App Launcher` : `Can you see "${accessChk.tab}"?`),
+          h("div", {className: "access-check-actions"},
+            !accessChk.result.ok && h("button", {
+              className: "btn btn-primary btn-sm",
+              disabled: visWorking,
+              onClick: () => makeVisible(accessChk.tab)
+            }, visWorking ? "Fixing…" : "Fix it"),
+            accessChk.result.items.some(i => i.key === "launcher" && !i.ok) && h("button", {
+              className: "btn btn-secondary btn-sm",
+              title: "Opens this tab's edit page in Setup — click Save there, then Check access",
+              onClick: async () => window.open(await appTabsTabEditUrl(accessChk.tab), "_blank")
+            }, "Save in Setup ↗"),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: accessBusy,
+              onClick: () => checkAccess(accessChk.tab)
+            }, "Check again"),
+            h("button", {
+              className: "field-action-btn",
+              onClick: () => safeCopyText(tabAccessReport(accessChk.tab, accessChk.facts, accessChk.result))
+            }, "Copy details"))),
+        h("ul", {className: "access-check-list"},
+          accessChk.result.items.map(i => h("li", {key: i.key, className: i.ok ? "ok" : "no"},
+            h("span", {className: "access-check-ico", "aria-hidden": "true"}, i.ok ? "✓" : "✕"),
+            h("span", {className: "access-check-l"}, i.label),
+            h("span", {className: "access-check-d"}, i.detail)))),
+        h("div", {className: "access-check-note"},
+          "Salesforce caches the App Launcher — after a change, refresh the Salesforce page (or log out and in) before searching.")),
       h("div", {className: "apptm-vis-hint"},
         "Users also need Read access to the tab's object — Salesforce hides a tab whose object they can't open."),
       visMsg && h("div", {className: "insp-ok"}, visMsg),
@@ -1578,4 +1645,60 @@ function MultiCheckDropdown({label, items, selected, onChange, emptyText}) {
   );
 }
 
-export {ffHasAppTabPrefill, AppTabManager};
+// Save an object tab again, unchanged — what Setup → Tabs → Edit → Save does.
+// Tab visibility written through the API is stored but Salesforce only
+// recomputes who can see the tab (App Launcher) when the tab itself is saved.
+async function appTabsResaveTab(tab) {
+  const name = String(tab || "").trim();
+  if (!name || /^standard-/i.test(name)) return false;   // standard tabs can't be re-saved
+  const body = `<met:readMetadata><met:type>CustomTab</met:type><met:fullNames>${appTabsEscXml(name)}</met:fullNames></met:readMetadata>`;
+  const {doc} = await appTabsSoapPost(body);
+  const records = appTabsDomFind(doc.documentElement, "records");
+  if (!records || !appTabsDomFind(records, "fullName")) throw new Error(`Tab "${name}" was not found`);
+  // An unchanged save may be skipped, so change the description, save, then
+  // put it back — two real saves, like editing the tab in Setup.
+  const kids = appTabsDomChildren(records).filter(c => appTabsDomLocal(c) !== "fullName");
+  const descEl = kids.find(c => appTabsDomLocal(c) === "description");
+  const original = descEl ? descEl.textContent : null;
+  const write = (desc) => {
+    const parts = kids.filter(c => appTabsDomLocal(c) !== "description").map(appTabsDomToMetXml);
+    if (desc !== null) parts.push(`<met:description>${appTabsEscXml(desc)}</met:description>`);
+    return appTabsUpdateMetadataRaw(`<met:metadata xsi:type="met:CustomTab"><met:fullName>${appTabsEscXml(name)}</met:fullName>${parts.join("")}</met:metadata>`);
+  };
+  const base = original || `Tab for ${name.replace(/__c$/, "").replace(/_/g, " ")}`;
+  await write(base + " (refresh)");
+  await write(base);
+  return true;
+}
+
+// Setup page that edits this tab — the one-click manual fallback
+// (Edit → Save there always makes Salesforce apply the tab visibility).
+async function appTabsTabEditUrl(tab) {
+  const home = "https://" + sfConn.instanceHostname + "/lightning/setup/CustomTabs/home";
+  try {
+    const entry = (await appTabsListMetadata("CustomTab")).find(e => e.fullName.toLowerCase() === String(tab).toLowerCase());
+    if (entry && entry.id) {
+      return "https://" + sfConn.instanceHostname + "/lightning/setup/CustomTabs/page?address=" + encodeURIComponent(`/${entry.id}/e`);
+    }
+  } catch (e) { /* fall back to the Tabs list */ }
+  return home;
+}
+
+// For the Object Builder: tabs on an app, and add one tab (verified re-read).
+async function appTabsForApp(fullName) {
+  const records = await appTabsReadRecords(fullName);
+  if (!records) throw new Error(`Could not read app "${fullName}"`);
+  return appTabsOfRecords(records);
+}
+
+async function addTabToApp(fullName, tab) {
+  const records = await appTabsReadRecords(fullName);
+  if (!records) throw new Error(`Could not read app "${fullName}"`);
+  const existing = appTabsOfRecords(records);
+  if (existing.some(t => t.toLowerCase() === String(tab).toLowerCase())) return {already: true, tabs: existing};
+  const desired = existing.length ? [...existing, tab] : ["standard-home", tab];
+  const {writeName, tabs} = await appTabsWriteTabList(fullName, desired, {verifyTab: tab, action: "add", recordsEl: records});
+  return {already: false, writeName, tabs};
+}
+
+export {ffHasAppTabPrefill, AppTabManager, appTabsLoadApps, appTabsForApp, addTabToApp, appTabsResaveTab, appTabsTabEditUrl};
