@@ -39,7 +39,7 @@ const TAB_TOURS = {
   api: ["API Explorer", "Send REST, Composite or SOAP requests to this org with your session. Pick a quick request on the left, click any API path in a response to open it, and find past requests in History."],
   logs: ["Debug logs", "Turn on logging for a user, load recent logs, and use AI Quick Analysis for a plain-English summary. Ask AI lets you ask questions about one log."],
   org: ["Org info", "Storage, API limits, recent setup changes and login history at a glance, plus an optional AI hygiene check."],
-  apptabs: ["App tabs", "Add, reorder or remove tabs in a Lightning app, and control which profiles can see them."],
+  apptabs: ["App tabs", "Pick an app, add a tab from one search box, reorder or remove tabs, and choose which profiles or permission sets can see each tab."],
   coverage: ["Code coverage", "Coverage per Apex class, with a filter for test classes. Lines shows which lines are covered. Run tests to see live progress and each failure, and ask AI to explain a failing test."]
 };
 

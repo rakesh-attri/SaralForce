@@ -437,10 +437,9 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 | You can | Details |
 |---|---|
-| Find an app | Pick a Lightning app. |
-| Current App Tabs | See, **reorder (↑ ↓)** and remove tabs. |
-| Add tabs | Add custom tabs to the app (**Add Tab to App**, **Add & Make Visible**). |
-| Visibility | Set tab visibility (Default On / Default Off / Hidden) for chosen **profiles** or **permission sets**; **Visible to me**. |
+| 1 · Choose an app | One searchable picker (type the app name or developer name); shows Standard/Custom, the developer name and the tab count. Two apps with the same name? Pin the exact one by its App Manager URL or Id. **Open app ↗** previews it. |
+| 2 · Tabs on the app | Search the org's tabs (or type any API name, e.g. `standard-Account`) and **+ Add tab**; tick **Make visible to me** to also set Default On on your profile. Newly created tabs are suggested. The table lists every tab with type and your visibility: **↑ ↓** reorder, **Access**, **✕** remove (asks first). |
+| 3 · Who can see a tab | Pick a tab, choose **Default On / Default Off / Hidden**, then the **profiles** and **permission sets** — or **Just make it visible to me**. |
 | From the Object Builder | A newly created object's tab arrives ready to add. |
 
 ---

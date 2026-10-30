@@ -213,6 +213,51 @@ function mockExecuteAnonymous(req, res) {
   });
 }
 
+// Metadata API: Lightning apps and their tabs (App Tab Manager), custom
+// tabs, profiles; anything else answers like a successful create.
+const mockApps = {
+  standard__Sales: {label: "Sales", tabs: ["standard-home", "standard-Account", "standard-Contact", "standard-Opportunity", "Invoice__c"]},
+  Service_Console: {label: "Service Console", tabs: ["standard-home", "standard-Case", "standard-Account"]}
+};
+const mockCustomTabs = [
+  {fullName: "Invoice__c", createdDate: iso(400 * 86400e3)},
+  {fullName: "Support_Ticket__c", createdDate: iso(3 * 86400e3)},
+  {fullName: "Feature_Request__c", createdDate: iso(10 * 86400e3)}
+];
+function mockMetadataSoap(req, res) {
+  let raw = "";
+  req.on("data", c => { raw += c; });
+  req.on("end", () => {
+    const env = inner => '<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" ' +
+      'xmlns="http://soap.sforce.com/2006/04/metadata" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><soapenv:Body>' + inner + "</soapenv:Body></soapenv:Envelope>";
+    res.writeHead(200, {"Content-Type": "text/xml; charset=utf-8", "Access-Control-Allow-Origin": "*"});
+    const type = (/<(?:met:)?type>([^<]+)</.exec(raw) || [])[1];
+    if (/listMetadata/.test(raw)) {
+      const rows = type === "CustomApplication" ? Object.keys(mockApps).map(fullName => ({fullName}))
+        : type === "CustomTab" ? mockCustomTabs
+        : type === "Profile" ? [{fullName: "Admin"}, {fullName: "Standard"}]
+        : type === "PermissionSet" ? [{fullName: "Sales_Ops"}] : [];
+      return res.end(env("<listMetadataResponse>" + rows.map(r => `<result><fullName>${r.fullName}</fullName><type>${type}</type>` +
+        `<createdDate>${r.createdDate || iso(500 * 86400e3)}</createdDate></result>`).join("") + "</listMetadataResponse>"));
+    }
+    if (/readMetadata/.test(raw) && type === "CustomApplication") {
+      const name = (/<(?:met:)?fullNames>([^<]+)</.exec(raw) || [])[1];
+      const app = mockApps[name];
+      return res.end(env("<readMetadataResponse><result>" + (app ? `<records xsi:type="CustomApplication"><fullName>${name}</fullName>` +
+        `<label>${app.label}</label><navType>Standard</navType>${app.tabs.map(t => `<tabs>${t}</tabs>`).join("")}<uiType>Lightning</uiType></records>` : "") +
+        "</result></readMetadataResponse>"));
+    }
+    if (/readMetadata/.test(raw)) return res.end(env("<readMetadataResponse><result></result></readMetadataResponse>"));
+    if (/updateMetadata/.test(raw) && /CustomApplication/.test(raw)) {
+      const name = (/<(?:met:)?fullName>([^<]+)</.exec(raw) || [])[1];
+      if (mockApps[name]) mockApps[name].tabs = [...raw.matchAll(/<(?:met:)?tabs>([^<]+)</g)].map(m => m[1]);
+      return res.end(env(`<updateMetadataResponse><result><fullName>${name}</fullName><success>true</success></result></updateMetadataResponse>`));
+    }
+    return res.end(env("<createMetadataResponse><result><fullName>Mock__mdt</fullName><success>true</success></result></createMetadataResponse>"));
+  });
+  return undefined;
+}
+
 function api(req, res, url) {
   const p = url.pathname;
   if (req.method === "OPTIONS") {
@@ -221,10 +266,7 @@ function api(req, res, url) {
   }
   if (/\/tooling\/runTestsAsynchronous\/?$/.test(p) && req.method === "POST") return json(res, 200, TEST_JOB);
   if (p.startsWith("/services/Soap/s/") && req.method === "POST") return mockExecuteAnonymous(req, res);
-  if (p.startsWith("/services/Soap/m/") && req.method === "POST") {
-    res.writeHead(200, {"Content-Type": "text/xml; charset=utf-8", "Access-Control-Allow-Origin": "*"});
-    return res.end('<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns="http://soap.sforce.com/2006/04/metadata"><soapenv:Body><createMetadataResponse><result><fullName>Mock__mdt</fullName><success>true</success></result></createMetadataResponse></soapenv:Body></soapenv:Envelope>');
-  }
+  if (p.startsWith("/services/Soap/m/") && req.method === "POST") return mockMetadataSoap(req, res);
   if (p.startsWith("/services/Soap/")) return soapUserInfo(res);
   if (/^\/services\/data\/?$/.test(p)) return json(res, 200, ["66.0", "67.0", "68.0"].map(version => ({version, url: `/services/data/v${version}`})));
   if (p === "/services/oauth2/userinfo") {
