@@ -60,8 +60,9 @@ Design a custom object by describing it in plain English, then deploy it.
 | ✨ **Ask AI** (in Plan) | "add a resolution notes field", "make Priority required", "add a rule that Due Date can't be in the past" — the plan updates; nothing is deployed. |
 | **Plan mode** | Edit object label, API name, sharing model and every field inline. **⚙** on a field opens its details: length, decimals, picklist values and default, global value set, controlling field with a **dependency matrix**, related object and delete behaviour, formula and return type, roll-up operation, auto-number format, help text and **track history**. |
 | **Object settings** | Track field history, reports, activities, search, Chatter feed; **validation rules**, **list views** and a **compact layout** — all created with the object. |
-| **Field access** | Who gets read/edit on the new fields: **My profile**, the **tab visibility profiles**, or a **new permission set** (object + field access, assigned to you). Formula, roll-up and auto-number fields get read-only access. |
+| **Field access** | Who gets read/edit on the new fields: **My profile** (also gets Read/Create/Edit on the object, so its tab shows in your App Launcher), the **tab visibility profiles**, or a **new permission set** (object + field access, assigned to you). Formula, roll-up and auto-number fields get read-only access. |
 | ✎ **Edit an existing object** | Load a custom object from the org; its fields are shown read-only and new fields, rules and list views are added beside them. |
+| **App Launcher check** | After deploy, SaralForce asks Salesforce whether the new tab is in your App Launcher and, if not, says why (no object access, tab hidden for your profile, or your profile not among the chosen ones). |
 | **Build mode** ✏️ | Locks the plan and deploys: creates the object, the fields (controlling picklists before dependents, roll-ups last), field access, page layout, validation rules, list views, compact layout and the tab. |
 | Chat history | Earlier designs are saved; reopen or start new. |
 | Hand-off | After deploy, jump to **App Tab Manager** to put the new tab into an app. |
@@ -449,8 +450,10 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 | Setting | Details |
 |---|---|
 | Providers | **OpenAI**, **Anthropic Claude**, **Google Gemini**, **OpenRouter**, any **OpenAI-compatible** endpoint. |
-| Key & model | Paste your API key (stays in your browser); the model list loads from your key. |
+| AI is optional | The Settings page opens with a note: every core tool works with just your Salesforce login; AI only adds the ✨ helpers. The AI assistant card shows **Ready** or **Not set up**. |
+| Key & model | Pick a provider tile, paste your API key (**Get a key ↗** links to the provider), pick a model; **Refresh list** loads the models your key can use. **Save settings**, **Test connection**, **Remove key**. |
 | Without a key | Everything except ✨ features works. |
+| Preferences | Success celebration animation; open the Inspector in a new tab (switch). |
 | Tours | Each tour shows automatically only once; replay any of them from **?**. |
 
 ---

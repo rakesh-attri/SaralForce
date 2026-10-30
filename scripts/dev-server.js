@@ -247,11 +247,25 @@ function mockMetadataSoap(req, res) {
         `<label>${app.label}</label><navType>Standard</navType>${app.tabs.map(t => `<tabs>${t}</tabs>`).join("")}<uiType>Lightning</uiType></records>` : "") +
         "</result></readMetadataResponse>"));
     }
+    if (/readMetadata/.test(raw) && (type === "Profile" || type === "PermissionSet")) {
+      const names = [...raw.matchAll(/<(?:met:)?fullNames>([^<]+)</g)].map(m => m[1]);
+      return res.end(env("<readMetadataResponse><result>" + names.map(n =>
+        `<records xsi:type="${type}"><fullName>${n}</fullName><custom>false</custom></records>`).join("") + "</result></readMetadataResponse>"));
+    }
     if (/readMetadata/.test(raw)) return res.end(env("<readMetadataResponse><result></result></readMetadataResponse>"));
+    if (/updateMetadata/.test(raw) && !/CustomApplication/.test(raw)) {
+      const name = (/<(?:met:)?fullName>([^<]+)</.exec(raw) || [])[1] || "Mock";
+      return res.end(env(`<updateMetadataResponse><result><fullName>${name}</fullName><success>true</success></result></updateMetadataResponse>`));
+    }
     if (/updateMetadata/.test(raw) && /CustomApplication/.test(raw)) {
       const name = (/<(?:met:)?fullName>([^<]+)</.exec(raw) || [])[1];
       if (mockApps[name]) mockApps[name].tabs = [...raw.matchAll(/<(?:met:)?tabs>([^<]+)</g)].map(m => m[1]);
       return res.end(env(`<updateMetadataResponse><result><fullName>${name}</fullName><success>true</success></result></updateMetadataResponse>`));
+    }
+    // Remember object tabs so /tabs (the App Launcher list) includes them.
+    if (/met:CustomTab/.test(raw)) {
+      const tab = (/<(?:met:)?fullName>([^<]+)</.exec(raw) || [])[1];
+      if (tab && !mockCustomTabs.some(t => t.fullName === tab)) mockCustomTabs.push({fullName: tab, createdDate: iso(0)});
     }
     return res.end(env("<createMetadataResponse><result><fullName>Mock__mdt</fullName><success>true</success></result></createMetadataResponse>"));
   });
@@ -267,6 +281,10 @@ function api(req, res, url) {
   if (/\/tooling\/runTestsAsynchronous\/?$/.test(p) && req.method === "POST") return json(res, 200, TEST_JOB);
   if (p.startsWith("/services/Soap/s/") && req.method === "POST") return mockExecuteAnonymous(req, res);
   if (p.startsWith("/services/Soap/m/") && req.method === "POST") return mockMetadataSoap(req, res);
+  if (/\/services\/data\/v[\d.]+\/tabs\/?$/.test(p)) {
+    return json(res, 200, [{name: "standard-Account", sobjectName: "Account", label: "Accounts"},
+      ...mockCustomTabs.map(t => ({name: t.fullName, sobjectName: t.fullName, label: t.fullName.replace(/__c$/, "").replace(/_/g, " "), custom: true}))]);
+  }
   if (p.startsWith("/services/Soap/")) return soapUserInfo(res);
   if (/^\/services\/data\/?$/.test(p)) return json(res, 200, ["66.0", "67.0", "68.0"].map(version => ({version, url: `/services/data/v${version}`})));
   if (p === "/services/oauth2/userinfo") {

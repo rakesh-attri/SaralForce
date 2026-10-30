@@ -50,3 +50,13 @@ test("permissionSetNameFor builds a valid DeveloperName", () => {
   assert.equal(permissionSetNameFor("ns__Thing__c").name, "ns_Thing_Access");
   assert.ok(permissionSetNameFor("A".repeat(90) + "__c").name.length <= 80);
 });
+
+test("fieldDetailSummary describes the settings that matter", async () => {
+  const {fieldDetailSummary} = await import("../../addon/core/plan-fields.js");
+  assert.equal(fieldDetailSummary({type: "Picklist", values: ["Low", "Medium", "High"]}), "3 values: Low, Medium, High");
+  assert.equal(fieldDetailSummary({type: "Picklist", values: []}), "No values yet — add them");
+  assert.equal(fieldDetailSummary({type: "Picklist", globalValueSet: "Countries"}), "Global value set: Countries");
+  assert.equal(fieldDetailSummary({type: "Formula", returnType: "Currency", formula: "A__c * 2"}), "Currency = A__c * 2");
+  assert.equal(fieldDetailSummary({type: "Lookup", relatedTo: "Account"}), "→ Account");
+  assert.equal(fieldDetailSummary({type: "Text"}), null);
+});

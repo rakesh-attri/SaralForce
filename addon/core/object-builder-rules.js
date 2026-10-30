@@ -414,12 +414,29 @@ export function validateProposal(proposal) {
         errors.push(`Field ${i + 1} (${f.name}) Encrypted text length must be 1-175`);
       }
     });
-    const fieldNames = new Set(proposal.fields.map(f => f && f.name).filter(Boolean));
+    const known = knownFieldNames(proposal);
+    const fieldNames = {has: n => known.has(String(n || "").toLowerCase())};
+    const checkRefs = (formula, where) => {
+      for (const ref of formulaUnknownFields(formula, known)) {
+        const hint = suggestFieldName(ref, proposal);
+        errors.push(`${where} uses "${ref}", which is not a field of this object${hint ? ` — did you mean ${hint}?` : ""}`);
+      }
+    };
+    proposal.fields.forEach((f, i) => {
+      if (f && !f.existing && normalizeFieldType(f.type) === "Formula" && String(f.formula || "").trim()) {
+        checkRefs(f.formula, `Field ${i + 1} (${f.name}) formula`);
+      }
+    });
     const nameOk = n => /^[A-Za-z][A-Za-z0-9_]*$/.test(String(n || "")) && !/__/.test(String(n)) && !/_$/.test(String(n));
     (Array.isArray(proposal.validationRules) ? proposal.validationRules : []).forEach((r, i) => {
       if (!nameOk(r && r.name)) errors.push(`Validation rule ${i + 1} needs a 'name' (letters, digits, single underscores)`);
       if (!String(r && r.formula || "").trim()) errors.push(`Validation rule ${i + 1} needs a 'formula'`);
       if (!String(r && r.message || "").trim()) errors.push(`Validation rule ${i + 1} needs an error 'message'`);
+      if (r && String(r.formula || "").trim()) checkRefs(r.formula, `Validation rule ${r.name || i + 1}`);
+      if (r && r.field && !fieldNames.has(r.field)) {
+        const hint = suggestFieldName(r.field, proposal);
+        errors.push(`Validation rule ${r.name || i + 1} shows its error on "${r.field}", which is not a field of this object${hint ? ` — did you mean ${hint}?` : ""}`);
+      }
     });
     (Array.isArray(proposal.listViews) ? proposal.listViews : []).forEach((v, i) => {
       if (!nameOk(v && v.name)) errors.push(`List view ${i + 1} needs a 'name' (letters, digits, single underscores)`);
@@ -441,6 +458,54 @@ export function validateProposal(proposal) {
 // Create order: controlling fields before the picklists that depend on
 // them, everything else in plan order, roll-up summaries last (they need
 // the child relationship to exist).
+// Standard fields every custom object has (formulas and list views may use them).
+export const STANDARD_OBJECT_FIELDS = ["Id", "Name", "OwnerId", "CreatedDate", "CreatedById", "LastModifiedDate",
+  "LastModifiedById", "SystemModstamp", "RecordTypeId", "IsDeleted", "CurrencyIsoCode", "LastActivityDate"];
+const FORMULA_WORDS = new Set(["true", "false", "null", "and", "or", "not"]);
+
+// Every field name the plan can reference, lower-cased: its fields, the
+// org's other fields (Edit existing object) and the standard ones.
+export function knownFieldNames(proposal) {
+  const out = new Set(STANDARD_OBJECT_FIELDS.map(n => n.toLowerCase()));
+  for (const f of (proposal && proposal.fields) || []) if (f && f.name) out.add(String(f.name).toLowerCase());
+  for (const f of (proposal && proposal.orgFields) || []) if (f && f.name) out.add(String(f.name).toLowerCase());
+  return out;
+}
+
+// Field-like words in a formula that are not fields of the object. Skips
+// quoted text, comments, function names (followed by "("), $globals,
+// relationship paths (a.b) and TRUE / FALSE / NULL / AND / OR / NOT.
+export function formulaUnknownFields(formula, known) {
+  const text = String(formula || "")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, " ");
+  const out = [];
+  const re = /[A-Za-z_$][A-Za-z0-9_.$]*/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const word = m[0];
+    const prev = text[m.index - 1];
+    if (prev && /[0-9.]/.test(prev)) continue;
+    if (word.startsWith("$") || word.includes(".")) continue;
+    if (FORMULA_WORDS.has(word.toLowerCase())) continue;
+    if (/^\s*\(/.test(text.slice(m.index + word.length))) continue;
+    if (!known.has(word.toLowerCase()) && !out.includes(word)) out.push(word);
+  }
+  return out;
+}
+
+// Closest plan field for a mistyped reference: "Amount" → "Amount__c",
+// or a field whose label matches.
+export function suggestFieldName(ref, proposal) {
+  const want = String(ref || "").toLowerCase().replace(/__c$/, "").replace(/[\s_]/g, "");
+  if (!want) return null;
+  const all = [...((proposal && proposal.fields) || []), ...((proposal && proposal.orgFields) || [])].filter(f => f && f.name);
+  const norm = v => String(v || "").toLowerCase().replace(/__c$/, "").replace(/[\s_]/g, "");
+  const hit = all.find(f => norm(f.name) === want) || all.find(f => norm(f.label) === want) ||
+    all.find(f => norm(f.name).includes(want) || want.includes(norm(f.name)));
+  return hit ? hit.name : null;
+}
+
 export function sortFieldsForDeploy(fields) {
   const list = (fields || []).slice();
   const byName = new Map(list.map(f => [f.name, f]));

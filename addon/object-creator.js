@@ -23,8 +23,8 @@ import {
   buildValidationRuleXml, buildListViewXml, buildCompactLayoutXml
 } from "./builder/metadata-xml.js";
 import {domLocal, domChildren, domFind, domFindAll, domToMetXml} from "./builder/metadata-dom.js";
-import {FieldDetails, ObjectSettings} from "./builder/plan-editor-ui.js";
-import {fieldDefaults, describeToProposal, permissionSetNameFor} from "./core/plan-fields.js";
+import {FieldDetails, ObjectSettings, planFieldOptions} from "./builder/plan-editor-ui.js";
+import {fieldDefaults, describeToProposal, permissionSetNameFor, fieldDetailSummary, NEEDS_DETAILS} from "./core/plan-fields.js";
 import {
   ensureLayoutCustomLinks, removeEmptyLayoutColumns, fixCustomLinksWithFields, layoutNeedsRepair,
   pickLayoutFieldColumn, findLayoutItemTemplate, buildLayoutItem
@@ -348,7 +348,19 @@ class App extends React.Component {
       this.messagesEndRef.current.scrollIntoView({behavior: "smooth"});
     }
     // Auto-save on state changes
-    if (prevState.messages !== this.state.messages || prevState.currentProposal !== this.state.currentProposal) {
+    // Deploy started: bring the progress section into view.
+    if (this.state.deploymentStatus === "deploying" && prevState.deploymentStatus !== "deploying") {
+      requestAnimationFrame(() => {
+        const el = document.getElementById("sfoc-deploy-progress");
+        if (el) el.scrollIntoView({behavior: "smooth", block: "start"});
+      });
+    }
+    // A finished (or failed / cancelled) deploy is saved too, so reopening
+    // the chat from history shows the latest outcome, not an older error.
+    const deployEnded = prevState.deploymentStatus !== this.state.deploymentStatus &&
+      this.state.deploymentStatus !== "deploying";
+    if (prevState.messages !== this.state.messages || prevState.currentProposal !== this.state.currentProposal ||
+        deployEnded || prevState.deployError !== this.state.deployError) {
       this._saveState();
       this._autoSaveChat();
     }
@@ -362,6 +374,8 @@ class App extends React.Component {
 
   _autoSaveChat() {
     if (this.state.messages.length <= 1) return;
+    // Nothing worth reopening: no request typed and no plan yet.
+    if (!this.state.currentProposal && !this.state.messages.some(m => m.role === "user")) return;
     const chatEntry = buildChatEntry(this.state);
     // Keeps the last 20 chats.
     const trimmed = upsertChat(this.state.chatHistory, chatEntry);
@@ -560,6 +574,7 @@ class App extends React.Component {
         // they are, whatever the AI returned for them.
         const inOrg = new Map(currentProposal.fields.filter(f => f.existing).map(f => [f.name, f]));
         proposal.existing = true;
+        proposal.orgFields = currentProposal.orgFields;
         proposal.object = {...proposal.object, name: currentProposal.object.name};
         proposal.fields = (proposal.fields || []).map(f => (f && inOrg.has(f.name) ? inOrg.get(f.name) : f));
         for (const [name, f] of inOrg) if (!proposal.fields.some(x => x && x.name === name)) proposal.fields.unshift(f);
@@ -1090,6 +1105,22 @@ class App extends React.Component {
         }
       }
 
+      if (!this._deployAborted && tabResult.ok) {
+        this.setState({deploymentStep: "Checking the App Launcher..."});
+        const seen = await this.checkTabInLauncher(currentProposal.object.name);
+        this.setState(prev => ({
+          deploymentResults: [...prev.deploymentResults, {
+            type: "launcher",
+            name: currentProposal.object.name + "_launcher",
+            label: seen.ok
+              ? `In your App Launcher — search "${currentProposal.object.label}" (refresh Salesforce once if it's not there yet)`
+              : "Not in your App Launcher yet",
+            status: seen.ok ? "success" : "error",
+            error: seen.ok ? undefined : seen.reason
+          }]
+        }));
+      }
+
       this.setState({
         deploymentStatus: "complete",
         deploymentStep: "Deployment complete!",
@@ -1219,6 +1250,35 @@ class App extends React.Component {
     throw new Error("Could not get user identity (tried userinfo and /id, last status " + lastStatus + ")");
   }
 
+  // Does the running user's App Launcher list the new tab? /tabs returns the
+  // tabs the user can see (the App Launcher's own list). Metadata changes can
+  // take a few seconds to show, so retry briefly before explaining why not.
+  async checkTabInLauncher(objectName) {
+    const want = String(objectName).toLowerCase();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const tabs = await sfConn.rest(`/services/data/v${apiVersion}/tabs`, {useCache: false});
+        if ((Array.isArray(tabs) ? tabs : []).some(t => String(t.sobjectName || t.name || "").toLowerCase() === want)) return {ok: true};
+      } catch (e) {
+        console.warn("[SaralForce] /tabs check failed:", e.message);
+      }
+      if (attempt < 2) await this.delay(2500);
+    }
+    let reason;
+    try {
+      await sfConn.rest(`/services/data/v${apiVersion}/sobjects/${encodeURIComponent(objectName)}/describe`, {useCache: false});
+      reason = "Your profile can open the object but the tab is hidden for it. Open Inspector → App Tab Manager → Who can see a tab → " +
+        "Just make it visible to me, then refresh Salesforce.";
+    } catch (e) {
+      reason = "Your profile has no access to this object yet, so Salesforce hides its tab. Redeploy with Field access → " +
+        "New permission set, or give your profile Read access on the object in Setup, then refresh Salesforce.";
+    }
+    if (this.state.visibilityMode === "selected") {
+      reason += " Also check that your own profile is one of the selected profiles.";
+    }
+    return {ok: false, reason};
+  }
+
   // Validation rules, list views and a compact layout from the plan, in the
   // order they deploy (after the fields they reference).
   planExtras(proposal) {
@@ -1318,7 +1378,9 @@ class App extends React.Component {
       return {parents, label: `${parents.length} profile(s)`};
     }
     const id = await this.myProfilePermissionSetId();
-    return {parents: id ? [{id, objectAccess: false}] : [], label: "your profile"};
+    // Object Read/Create/Edit too: without it the tab never shows in the App
+    // Launcher (profiles with View All Data hide this gap).
+    return {parents: id ? [{id, objectAccess: true}] : [], label: "your profile"};
   }
 
   async grantFieldPermissions(objectName, fieldNames, readOnly = new Set(), target = "me") {
@@ -1982,7 +2044,10 @@ class App extends React.Component {
     this.updatePlan(draft => {
       draft.fields.push(field);
     });
+    const newIndex = (this.state.currentProposal.fields || []).length;
     this.setState(prev => ({
+      // Open the details straight away for types that need them (picklist values…).
+      expandedField: NEEDS_DETAILS.has(normalizeFieldType(type)) ? newIndex : prev.expandedField,
       newFieldLabel: "",
       selectedFields: prev.selectedFields ? [...prev.selectedFields, field.name] : null
     }));
@@ -2255,7 +2320,9 @@ class App extends React.Component {
         this.state.chatHistory.length === 0 && h("div", {className: "history-empty"}, "No previous chats"),
         this.state.chatHistory.map(chat => {
           const firstUserMsg = chat.messages?.find(m => m.role === "user");
-          const preview = firstUserMsg?.text?.substring(0, 60) || "Empty chat";
+          const obj = chat.currentProposal && chat.currentProposal.object;
+          const preview = firstUserMsg?.text?.substring(0, 60) ||
+            (obj ? `${chat.currentProposal.existing ? "Edit" : "New"} ${obj.label || obj.name} (${obj.name})` : "Empty chat");
           const date = new Date(chat.timestamp);
           const timeStr = date.toLocaleDateString() + " " + date.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
           return h("div", {
@@ -2542,9 +2609,20 @@ class App extends React.Component {
                         // validation error above makes sense.
                         (SHARING_MODELS.includes(currentProposal.object.sharingModel || "ReadWrite")
                           ? SHARING_MODELS
-                          : [...SHARING_MODELS, currentProposal.object.sharingModel]).map(s =>
-                          h("option", {key: s, value: s}, SHARING_MODELS.includes(s) ? s : `${s} (invalid)`))
-                      )
+                          : [...SHARING_MODELS, currentProposal.object.sharingModel]).map(s => {
+                          // Salesforce rule: ControlledByParent exists only with a
+                          // Master-Detail field, and is then the only choice.
+                          const hasMd = (currentProposal.fields || []).some(f => normalizeFieldType(f.type) === "MasterDetail");
+                          const blocked = SHARING_MODELS.includes(s) && (hasMd ? s !== "ControlledByParent" : s === "ControlledByParent");
+                          const note = !SHARING_MODELS.includes(s) ? " (invalid)"
+                            : blocked ? (hasMd ? " — not allowed with a Master-Detail field" : " — needs a Master-Detail field") : "";
+                          return h("option", {key: s, value: s, disabled: blocked}, s + note);
+                        })
+                      ),
+                      h("span", {className: "plan-field-note"},
+                        (currentProposal.fields || []).some(f => normalizeFieldType(f.type) === "MasterDetail")
+                          ? "Controlled by Parent: records follow the sharing of their Master-Detail parent."
+                          : "Controlled by Parent is available once the object has a Master-Detail field.")
                     ),
                     h("label", {className: "insp-field"},
                       h("span", null, "Name Field Label"),
@@ -2750,12 +2828,24 @@ class App extends React.Component {
                             h("select", {
                               className: "plan-cell-input",
                               value: field.type,
-                              onChange: e => this.updatePlanField(i, {type: e.target.value, ...fieldDefaults(e.target.value, field)})
+                              onChange: e => {
+                                const t = e.target.value;
+                                this.updatePlanField(i, {type: t, ...fieldDefaults(t, field)});
+                                // Picklist values, formula, related object…: open the details.
+                                if (NEEDS_DETAILS.has(normalizeFieldType(t))) this.setState({expandedField: i});
+                              }
                             },
                               FIELD_TYPES.map(ft =>
                                 h("option", {key: ft.value, value: ft.value}, ft.label))
-                            ))
-                        : h("td", null, this.getFieldTypeLabel(field.type)),
+                            ),
+                            fieldDetailSummary(field) && h("button", {
+                              type: "button",
+                              className: "plan-type-sum" + (/^No |^Choose/.test(fieldDetailSummary(field)) ? " todo" : ""),
+                              title: "Edit values and settings",
+                              onClick: () => this.setState({expandedField: open ? null : i})
+                            }, fieldDetailSummary(field), " ✎"))
+                        : h("td", null, this.getFieldTypeLabel(field.type),
+                            fieldDetailSummary(field) && h("div", {className: "plan-type-sum static"}, fieldDetailSummary(field))),
                       isPlan
                         ? h("td", {className: "req-cell"},
                             h("input", {
@@ -2791,6 +2881,7 @@ class App extends React.Component {
                       h("td", {colSpan: 7},
                         h(FieldDetails, {
                           field, fields: currentProposal.fields, objectHistory: currentProposal.object.enableHistory === true,
+                          suggest: planFieldOptions(currentProposal),
                           onChange: patch => this.updatePlanField(i, patch)
                         })))];
                   })
@@ -2868,7 +2959,7 @@ class App extends React.Component {
               )
             ),
 
-            deploymentStatus && h("div", {className: "deployment-section"},
+            deploymentStatus && h("div", {className: "deployment-section", id: "sfoc-deploy-progress"},
               h("h4", null, "Deployment Progress"),
 
               deploymentStatus === "deploying" && h("div", {className: "deploy-progress-bar-container"},
@@ -2916,7 +3007,7 @@ class App extends React.Component {
               deploymentResults.map((result, i) =>
                 h("div", {key: i, className: `deploy-result deploy-${result.status}`},
                   h("span", {className: "deploy-icon"}, result.status === "success" ? "\u2713" : result.status === "error" ? "\u2717" : "\u25cb"),
-                  h("span", {className: "deploy-type"}, result.type === "object" ? "Object" : result.type === "fls" ? "Security" : result.type === "tab" ? "Tab" : result.type === "visibility" ? "Visibility" : result.type === "layout" ? "Layout" : result.type === "recordtype" ? "RecType" : result.type === "app" ? "App" : "Field"),
+                  h("span", {className: "deploy-type"}, result.type === "object" ? "Object" : result.type === "fls" ? "Security" : result.type === "tab" ? "Tab" : result.type === "visibility" ? "Visibility" : result.type === "layout" ? "Layout" : result.type === "recordtype" ? "RecType" : result.type === "app" ? "App" : result.type === "launcher" ? "Launcher" : result.type === "validation" ? "Rule" : result.type === "listview" ? "List view" : result.type === "compact" ? "Compact" : "Field"),
                   h("span", {className: "deploy-name"}, result.label || result.name),
                     result.status === "error" && h("div", {className: "deploy-error-detail"},
                       h("span", {className: "deploy-error-msg"}, result.error),

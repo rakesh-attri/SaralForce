@@ -91,7 +91,11 @@ export function describeToProposal(describe) {
       description: "",
       nameField: {label: nameField ? nameField.label : "Name", type: nameField && nameField.autoNumber ? "AutoNumber" : "Text"}
     },
-    fields
+    fields,
+    // Every other field the object has (standard, compound, unsupported
+    // types): formulas, rules and list views may reference them.
+    orgFields: (describe.fields || []).filter(f => f.name && !fields.some(x => x.name === f.name))
+      .map(f => ({name: f.name, label: f.label || f.name}))
   };
 }
 
@@ -101,4 +105,37 @@ export function permissionSetNameFor(objectName) {
   const base = String(objectName || "Object").replace(/__c$/i, "").replace(/[^A-Za-z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "") || "Object";
   const name = (/^[A-Za-z]/.test(base) ? base : "X" + base).slice(0, 73) + "_Access";
   return {name, label: `${base.replace(/_/g, " ")} Access`.slice(0, 80)};
+}
+
+// Types whose details must be filled in before they are useful.
+export const NEEDS_DETAILS = new Set(["Picklist", "MultiselectPicklist", "Formula", "Summary", "Lookup", "MasterDetail", "AutoNumber"]);
+
+// One-line summary of a field's settings for the plan table ("3 values: A, B, C").
+export function fieldDetailSummary(field) {
+  if (!field) return null;
+  const type = normalizeFieldType(field.type);
+  const cut = (s, n = 40) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  switch (type) {
+    case "Picklist":
+    case "MultiselectPicklist": {
+      if (field.globalValueSet) return `Global value set: ${field.globalValueSet}`;
+      const vals = (Array.isArray(field.values) ? field.values : []).filter(v => String(v).trim());
+      if (!vals.length) return "No values yet — add them";
+      return cut(`${vals.length} value${vals.length === 1 ? "" : "s"}: ${vals.join(", ")}`) +
+        (field.controllingField ? ` · depends on ${field.controllingField}` : "");
+    }
+    case "Formula":
+      return field.formula ? cut(`${field.returnType || "Text"} = ${field.formula}`) : "No formula yet — add it";
+    case "Summary": {
+      const op = String(field.summaryOperation || "count").toUpperCase();
+      return field.summaryForeignKey ? cut(`${op} of ${op === "COUNT" ? field.summaryForeignKey.split(".")[0] : field.summarizedField || "?"}`) : "Choose the child relationship";
+    }
+    case "Lookup":
+    case "MasterDetail":
+      return field.relatedTo ? `→ ${field.relatedTo}` : "Choose the related object";
+    case "AutoNumber":
+      return field.displayFormat || null;
+    default:
+      return null;
+  }
 }

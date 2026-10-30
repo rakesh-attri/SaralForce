@@ -4,7 +4,8 @@ import {
   FIELD_TYPE_VALUES, normalizeFieldType, supportsRequired, validateApiName,
   suggestApiName, uniqueApiName, nextRetryName, resolveNameField,
   normalizeProposal, validateProposal, resolveSharingModel, validateSharingModel,
-  parseJSONFromText, stripTrailingCommas, escapeSoqlString, isNonTransientDeployError
+  parseJSONFromText, stripTrailingCommas, escapeSoqlString, isNonTransientDeployError,
+  formulaUnknownFields, suggestFieldName, knownFieldNames
 } from "../../addon/core/object-builder-rules.js";
 
 const baseProposal = () => ({
@@ -241,4 +242,26 @@ test("isNonTransientDeployError classifies errors", () => {
   assert.equal(isNonTransientDeployError(Object.assign(new Error("x"), {nonTransient: true})), true);
   assert.equal(isNonTransientDeployError(new Error("Request timed out after 60s (createMetadata)")), false);
   assert.equal(isNonTransientDeployError(new Error("no CustomObject named Foo__c found")), false);
+});
+
+test("formulaUnknownFields skips functions, globals, quoted text and paths", () => {
+  const known = new Set(["amount__c", "status__c", "name"]);
+  assert.deepEqual(formulaUnknownFields('AND(Amount < 0, ISPICKVAL(Status__c, "Open"), $User.Id <> null, Account__r.Name = "x", LEN(Name) > 3, 1.5e3 > 0)', known), ["Amount"]);
+  assert.deepEqual(formulaUnknownFields("Amount__c < 0 && NOT(ISBLANK(Name)) /* Foo */", known), []);
+});
+
+test("validateProposal flags rules that use missing fields and suggests the right one", () => {
+  const p = baseProposal();
+  p.validationRules = [{name: "Positive", formula: "Amount < 0", message: "Must be positive", field: "Amount"}];
+  const errs = validateProposal(p);
+  assert.ok(errs.some(e => /Positive uses "Amount".*did you mean Amount__c/.test(e)), errs.join("|"));
+  assert.ok(errs.some(e => /shows its error on "Amount".*Amount__c/.test(e)), errs.join("|"));
+  p.validationRules = [{name: "Positive", formula: "Amount__c < 0 && CreatedDate > NOW()", message: "Must be positive", field: "Amount__c"}];
+  assert.deepEqual(validateProposal(p), []);
+  // Existing objects: other org fields count as known.
+  p.orgFields = [{name: "Legacy_Code__c", label: "Legacy Code"}];
+  p.listViews = [{name: "All", columns: ["NAME", "Legacy_Code__c"]}];
+  assert.deepEqual(validateProposal(p), []);
+  assert.equal(suggestFieldName("legacy code", p), "Legacy_Code__c");
+  assert.ok(knownFieldNames(p).has("ownerid"));
 });

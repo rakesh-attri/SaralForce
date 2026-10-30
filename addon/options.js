@@ -1,4 +1,4 @@
-import {LLM_PROVIDERS, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant, getLLMProvider, providerPermissionOrigin, checkProviderNetworkAccess, validateBaseUrl, getModelOptions, setCachedModels} from "./llm/llm-service.js";
+import {LLM_PROVIDERS, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant, getLLMProvider, providerPermissionOrigin, checkProviderNetworkAccess, validateBaseUrl, getModelOptions, setCachedModels, hasValidConfig} from "./llm/llm-service.js";
 
 import {initSettings} from "./core/storage.js";
 import {openInspectorInNewTab, setOpenInspectorInNewTab} from "./core/preferences.js";
@@ -41,6 +41,22 @@ const MODEL_DESCRIPTIONS = {
   "gemini-3.1-flash-lite": "Budget Flash - Most cost-efficient Gemini model"
 };
 
+// Provider tiles: short name, one line, where to get a key.
+const PROVIDER_SHORT = {openai: "OpenAI", claude: "Anthropic Claude", gemini: "Google Gemini", openrouter: "OpenRouter", openai_compatible: "OpenAI-compatible"};
+const PROVIDER_BLURB = {
+  openai: "GPT models",
+  claude: "Claude models",
+  gemini: "Gemini models",
+  openrouter: "Many models, one key",
+  openai_compatible: "Any compatible endpoint"
+};
+const PROVIDER_KEY_LINKS = {
+  openai: "https://platform.openai.com/api-keys",
+  claude: "https://console.anthropic.com/settings/keys",
+  gemini: "https://aistudio.google.com/apikey",
+  openrouter: "https://openrouter.ai/keys"
+};
+
 class OptionsApp extends React.Component {
   constructor(props) {
     super(props);
@@ -63,7 +79,8 @@ class OptionsApp extends React.Component {
       saveError: "",
       modelOptions: getModelOptions(saved.provider || "openai"),
       modelsStatus: null,
-      modelsMessage: ""
+      modelsMessage: "",
+      keyCleared: false
     };
   }
 
@@ -250,187 +267,231 @@ class OptionsApp extends React.Component {
     }
   }
 
+  // Remove the saved key: AI features switch off, everything else keeps working.
+  clearKey() {
+    const {provider, model, baseUrl} = this.state;
+    saveConfig({provider, apiKey: "", model, baseUrl});
+    this.setState({apiKey: "", saved: false, testStatus: null, keyCleared: true});
+    setTimeout(() => this.setState({keyCleared: false}), 2500);
+  }
+
   render() {
     const {provider, apiKey, model, baseUrl, celebrate, showApiKey, saved, testStatus, testMessage, modelOptions, modelsStatus, modelsMessage} = this.state;
     const providerDef = this.getProviderDef();
+    const aiReady = hasValidConfig();
+    const keyLink = PROVIDER_KEY_LINKS[provider];
 
-    return h("div", {className: "options-container"},
-      h("div", {className: "options-header"},
-        h("a", {href: "https://rakesh-attri.github.io/SaralForce/", target: "_blank", rel: "noopener noreferrer", title: "SaralForce home"},
-          h("img", {className: "options-logo", src: "logo-full.png", alt: "SaralForce"})),
-        h("h1", null, "Settings"),
-        h("p", {className: "subtitle"}, "Configure your AI provider for generating Salesforce objects and fields")
-      ),
+    return h("div", {className: "opt"},
+      // ── Header ──
+      h("header", {className: "opt-hero"},
+        h("div", {className: "opt-hero-in"},
+          h("a", {className: "opt-brand", href: "https://rakesh-attri.github.io/SaralForce/", target: "_blank", rel: "noopener noreferrer", title: "SaralForce website"},
+            h("img", {className: "opt-logo", src: "logo-full.png", alt: "SaralForce"})),
+          h("div", {className: "opt-hero-text"},
+            h("h1", null, "Settings"),
+            h("p", null, "Set up the optional AI assistant and a few preferences.")),
+          this.state.appVersion && h("span", {className: "opt-version"}, `v${this.state.appVersion}`))),
 
-      h("div", {className: "options-section"},
-        h("h2", null, "LLM Provider"),
-        h("div", {className: "form-group"},
-          h("label", {htmlFor: "provider"}, "Provider"),
-          h("select", {
-            id: "provider",
-            className: "form-control",
-            value: provider,
-            onChange: (e) => this.onProviderChange(e)
-          },
-            Object.entries(LLM_PROVIDERS).map(([id, def]) =>
-              h("option", {key: id, value: id}, def.name)
-            )
-          )
-        ),
+      h("main", {className: "opt-main"},
+        // ── AI is optional ──
+        h("section", {className: "opt-note", "aria-labelledby": "opt-note-h"},
+          h("div", {className: "opt-note-ico", "aria-hidden": "true"}, "💡"),
+          h("div", null,
+            h("h2", {id: "opt-note-h"}, "AI is optional — SaralForce works fully without it"),
+            h("p", null,
+              "Every core tool is ready the moment you open a Salesforce page: Records, SOQL, Run Apex, Export, Import, " +
+              "API Explorer, Logs, Users, Access, Metadata, Org Info, App Tab Manager and Code Coverage. They use only your " +
+              "Salesforce login — no API key, no extra cost, and nothing is sent anywhere else."),
+            h("p", null,
+              "AI simply adds helpers on top, marked with ✨: design a custom object from one sentence, write or fix SOQL, " +
+              "explain debug logs, flows and failing tests, and draft validation rules, Apex or Lightning components. " +
+              "If you want them, add your own key below; if not, you can skip this page."),
+            h("ul", {className: "opt-note-points"},
+              h("li", null, "Bring your own key — you choose the provider and pay it directly"),
+              h("li", null, "Your key stays in this browser and goes only to that provider"),
+              h("li", null, "Turn it off any time with Remove key")))),
 
-        h("div", {className: "form-group"},
-          h("label", {htmlFor: "apiKey"}, "API Key"),
-          h("div", {className: "input-with-toggle"},
-            h("input", {
-              id: "apiKey",
-              type: showApiKey ? "text" : "password",
-              className: "form-control",
-              value: apiKey,
-              onChange: (e) => this.onApiKeyChange(e),
-              placeholder: providerDef.apiKeyPlaceholder
-            }),
+        // ── AI assistant ──
+        h("section", {className: "opt-card"},
+          h("div", {className: "opt-card-h"},
+            h("div", null,
+              h("h2", null, "AI assistant ", h("span", {className: "opt-optional"}, "optional")),
+              h("p", null, "Used only by the ✨ features.")),
+            h("span", {className: "opt-status " + (aiReady ? "on" : "off")},
+              h("span", {className: "opt-dot", "aria-hidden": "true"}),
+              aiReady ? "Ready" : "Not set up")),
+
+          h("div", {className: "opt-step"},
+            h("div", {className: "opt-step-h"}, h("span", {className: "opt-num"}, "1"), "Choose a provider"),
+            h("div", {id: "provider", className: "opt-providers", role: "radiogroup", "aria-label": "AI provider"},
+              Object.entries(LLM_PROVIDERS).map(([id, def]) => h("button", {
+                key: id,
+                type: "button",
+                role: "radio",
+                "aria-checked": provider === id,
+                className: "opt-provider" + (provider === id ? " active" : ""),
+                onClick: () => provider !== id && this.onProviderChange({target: {value: id}})
+              },
+                h("span", {className: "opt-provider-n"}, PROVIDER_SHORT[id] || def.name),
+                h("span", {className: "opt-provider-d"}, PROVIDER_BLURB[id] || ""))))),
+
+          h("div", {className: "opt-step"},
+            h("div", {className: "opt-step-h"}, h("span", {className: "opt-num"}, "2"), "Add your API key",
+              keyLink && h("a", {className: "opt-link", href: keyLink, target: "_blank", rel: "noopener noreferrer"}, "Get a key ↗")),
+            h("div", {className: "opt-inline"},
+              h("input", {
+                id: "apiKey",
+                type: showApiKey ? "text" : "password",
+                className: "opt-input",
+                value: apiKey,
+                autoComplete: "off",
+                spellCheck: false,
+                onChange: (e) => this.onApiKeyChange(e),
+                placeholder: providerDef.apiKeyPlaceholder,
+                "aria-label": "API key"
+              }),
+              h("button", {
+                className: "opt-btn opt-btn-ghost",
+                onClick: () => this.toggleShowApiKey(),
+                type: "button",
+                "aria-pressed": showApiKey,
+                "aria-label": showApiKey ? "Hide API key" : "Show API key"
+              }, showApiKey ? "Hide" : "Show")),
+            providerDef.requiresBaseUrl && h("div", {className: "opt-field"},
+              h("label", {htmlFor: "baseUrl"}, "Base URL"),
+              h("input", {
+                id: "baseUrl",
+                type: "text",
+                className: "opt-input",
+                value: baseUrl,
+                spellCheck: false,
+                onChange: (e) => this.onBaseUrlChange(e),
+                placeholder: providerDef.baseUrlPlaceholder
+              }),
+              h("p", {className: "opt-help"}, "The full base URL, e.g. https://api.example.com/v1"))),
+
+          h("div", {className: "opt-step"},
+            h("div", {className: "opt-step-h"}, h("span", {className: "opt-num"}, "3"), "Pick a model"),
+            h("div", {className: "opt-inline"},
+              h("input", {
+                id: "model",
+                type: "text",
+                className: "opt-input",
+                list: "model-options",
+                autoComplete: "off",
+                spellCheck: false,
+                value: model,
+                onChange: (e) => this.onModelChange(e),
+                placeholder: providerDef.defaultModel || "Model ID",
+                "aria-label": "Model"
+              }),
+              h("button", {
+                className: "opt-btn opt-btn-ghost",
+                type: "button",
+                onClick: () => this.refreshModels(),
+                disabled: modelsStatus === "loading",
+                title: "Load the models your API key can use"
+              }, modelsStatus === "loading" ? "Loading…" : "↻ Refresh list")),
+            h("datalist", {id: "model-options"},
+              modelOptions.map(m => h("option", {key: m, value: m}, MODEL_DESCRIPTIONS[m] || ""))),
+            MODEL_DESCRIPTIONS[model] && h("p", {className: "opt-help opt-model-d"}, MODEL_DESCRIPTIONS[model]),
+            modelsStatus && modelsStatus !== "loading" && h("p", {
+              className: "opt-help " + (modelsStatus === "error" ? "opt-help-err" : "opt-help-ok"),
+              role: modelsStatus === "error" ? "alert" : "status"
+            }, modelsMessage),
+            h("p", {className: "opt-help"},
+              provider === "openrouter"
+                ? "Use an OpenRouter model ID (vendor/model), e.g. openai/gpt-4o-mini or anthropic/claude-sonnet-5-5."
+                : "Pick a suggestion or type any model ID. Refresh list shows the models your key can use.")),
+
+          h("div", {className: "opt-actions", "data-tour": "settings-actions"},
+            h("button", {className: "opt-btn opt-btn-primary", onClick: () => this.saveConfig()},
+              saved ? "✓ Saved" : "Save settings"),
             h("button", {
-              className: "toggle-btn",
-              onClick: () => this.toggleShowApiKey(),
+              className: "opt-btn opt-btn-secondary",
+              onClick: () => this.testConnection(),
+              disabled: testStatus === "testing" || !apiKey
+            }, testStatus === "testing" ? "Testing…" : "Test connection"),
+            (apiKey || aiReady) && h("button", {
+              className: "opt-btn opt-btn-text",
               type: "button",
-              "aria-pressed": showApiKey,
-              "aria-label": showApiKey ? "Hide API key" : "Show API key"
-            }, showApiKey ? "Hide" : "Show")
-          )
-        ),
+              title: "Delete the saved key — AI features switch off, everything else keeps working",
+              onClick: () => this.clearKey()
+            }, "Remove key")),
 
-        providerDef.requiresBaseUrl && h("div", {className: "form-group"},
-          h("label", {htmlFor: "baseUrl"}, "Base URL"),
-          h("input", {
-            id: "baseUrl",
-            type: "text",
-            className: "form-control",
-            value: baseUrl,
-            onChange: (e) => this.onBaseUrlChange(e),
-            placeholder: providerDef.baseUrlPlaceholder
-          }),
-          h("p", {className: "help-text"}, "Include the full base URL (e.g., https://api.example.com/v1)")
-        ),
+          this.state.keyCleared && h("div", {className: "opt-alert ok", role: "status"},
+            "Key removed. AI features are off; every other tool works as before."),
+          this.state.saveError && h("div", {className: "opt-alert err", role: "alert"}, this.state.saveError),
+          testStatus && h("div", {
+            className: "opt-alert " + (testStatus === "success" ? "ok" : testStatus === "error" ? "err" : "info"),
+            role: testStatus === "error" ? "alert" : "status"
+          }, testStatus === "success" ? "✓ Connected — the AI features are ready to use." : testMessage),
+          this.state.permDenied && h("div", {className: "opt-alert warn"},
+            h("span", null, `Network access to ${this.state.permHost} was not granted, so AI requests will fail until you allow it.`),
+            h("button", {className: "opt-btn opt-btn-small", onClick: () => this.grantPermission()}, "Allow access")),
+          this.state.permMissing && !this.state.permDenied && h("div", {className: "opt-alert warn"},
+            h("span", null, `To use this provider, SaralForce needs permission to reach ${this.state.permHost}. Chrome asks when you save — or allow it now.`),
+            h("button", {className: "opt-btn opt-btn-small", onClick: () => this.grantPermission()}, "Allow access"))),
 
-        h("div", {className: "form-group"},
-          h("label", {htmlFor: "model"}, "Model"),
-          h("div", {className: "input-with-toggle"},
-            h("input", {
-              id: "model",
-              type: "text",
-              className: "form-control",
-              list: "model-options",
-              autoComplete: "off",
-              spellCheck: false,
-              value: model,
-              onChange: (e) => this.onModelChange(e),
-              placeholder: providerDef.defaultModel || "Model ID"
-            }),
-            h("button", {
-              className: "toggle-btn",
-              type: "button",
-              onClick: () => this.refreshModels(),
-              disabled: modelsStatus === "loading",
-              title: "Load the models your API key can use"
-            }, modelsStatus === "loading" ? "Loading..." : "Refresh list")
-          ),
-          h("datalist", {id: "model-options"},
-            modelOptions.map(m =>
-              h("option", {key: m, value: m}, MODEL_DESCRIPTIONS[m] || "")
-            )
-          ),
-          modelsStatus && modelsStatus !== "loading" && h("p", {
-            className: `help-text ${modelsStatus === "error" ? "help-error" : ""}`,
-            role: modelsStatus === "error" ? "alert" : "status"
-          }, modelsMessage),
-          h("p", {className: "help-text"},
-            provider === "openrouter"
-              ? "Use an OpenRouter model ID (vendor/model), e.g. openai/gpt-4o-mini or anthropic/claude-sonnet-5-5. Pick from the list or type any model ID."
-              : "Pick a suggested model or type any model ID. Refresh list loads the models your API key can use.")
-        ),
+        // ── Preferences ──
+        h("section", {className: "opt-card"},
+          h("div", {className: "opt-card-h"},
+            h("div", null,
+              h("h2", null, "Preferences"),
+              h("p", null, "Small touches that apply everywhere."))),
+          h("div", {className: "opt-pref"},
+            h("div", {className: "opt-pref-t"},
+              h("label", {htmlFor: "celebrateVariant"}, "Success celebration"),
+              h("p", {className: "opt-help"}, "A short animation after a successful SOQL run or Apex execution.")),
+            h("select", {
+              id: "celebrateVariant",
+              className: "opt-input opt-select",
+              value: celebrate,
+              onChange: (e) => this.onCelebrateChange(e)
+            },
+              h("option", {value: "plane"}, "Paper Plane"),
+              h("option", {value: "confetti"}, "Confetti"),
+              h("option", {value: "thor"}, "Thor Storm"),
+              h("option", {value: "spidey"}, "Spider Web"))),
+          h("div", {className: "opt-pref"},
+            h("div", {className: "opt-pref-t"},
+              h("label", {htmlFor: "openInspectorTab"}, "Open the Inspector in a new tab"),
+              h("p", {className: "opt-help"}, "A full browser tab instead of the side panel, for more room. ← AI Object Builder brings you back.")),
+            h("label", {className: "opt-switch"},
+              h("input", {
+                id: "openInspectorTab",
+                type: "checkbox",
+                role: "switch",
+                checked: this.state.openInspectorTab,
+                onChange: (e) => this.onInspectorTabChange(e)
+              }),
+              h("span", {className: "opt-switch-track", "aria-hidden": "true"})))),
 
-        h("div", {className: "button-group", "data-tour": "settings-actions"},
-          h("button", {
-            className: "btn btn-primary",
-            onClick: () => this.saveConfig()
-          }, saved ? "Saved!" : "Save Settings"),
-          h("button", {
-            className: "btn btn-secondary",
-            onClick: () => this.testConnection(),
-            disabled: testStatus === "testing"
-          }, testStatus === "testing" ? "Testing..." : "Test Connection")
-        ),
-
-        this.state.saveError && h("div", {className: "test-result test-error", role: "alert"}, this.state.saveError),
-
-        testStatus && h("div", {
-          className: `test-result test-${testStatus}`,
-          role: testStatus === "error" ? "alert" : "status"
-        }, testMessage),
-
-        this.state.permDenied && h("div", {className: "test-result test-error"},
-          `Network access to ${this.state.permHost} was not granted — AI calls to this provider will fail until access is granted. `,
-          h("button", {className: "btn btn-secondary btn-grant", onClick: () => this.grantPermission()}, "Grant access")),
-
-        this.state.permMissing && !this.state.permDenied && h("div", {className: "test-result test-error"},
-          `SaralForce needs your permission to reach ${this.state.permHost}. It is requested when you click Save Settings. `,
-          h("button", {className: "btn btn-secondary btn-grant", onClick: () => this.grantPermission()}, "Grant access"))
-      ),
-
-      h("div", {className: "options-section"},
-        h("h2", null, "Preferences"),
-        h("div", {className: "form-group"},
-          h("label", {htmlFor: "celebrateVariant"}, "Success celebration"),
-          h("select", {
-            id: "celebrateVariant",
-            className: "form-control",
-            value: celebrate,
-            onChange: (e) => this.onCelebrateChange(e)
-          },
-            h("option", {value: "plane"}, "Paper Plane"),
-            h("option", {value: "confetti"}, "Confetti"),
-            h("option", {value: "thor"}, "Thor Storm"),
-            h("option", {value: "spidey"}, "Spider Web")
-          ),
-          h("p", {className: "help-text"},
-            "Celebrate successful SOQL runs and Apex executions with an animation. Applies to both editors and takes effect on the next run.")
-        ),
-        h("div", {className: "form-group"},
-          h("label", {className: "form-check", htmlFor: "openInspectorTab"},
-            h("input", {
-              id: "openInspectorTab",
-              type: "checkbox",
-              checked: this.state.openInspectorTab,
-              onChange: (e) => this.onInspectorTabChange(e)
-            }),
-            h("span", null, "Open Inspector in new tab")),
-          h("p", {className: "help-text"},
-            "Open the Inspector panel in a full-page browser tab for better visibility. The ← AI Object Builder button jumps back to your Salesforce tab.")
-        )
-      ),
-
-      h("div", {className: "options-section"},
-        h("h2", null, "About"),
-        h("p", null, "SaralForce is an AI Object Builder & Org Toolkit for Salesforce. Describe the data you want to capture in plain language and it drafts a complete custom object with fields — refine it in chat, improve prompts with one click, then deploy straight to your org."),
-        h("p", null, "The built-in Inspector adds a SOQL runner with AI error fixes, Apex execution, record browser, CSV export and import, user management, debug-log viewer with AI analysis, org info, and app-tab assignment. Works with OpenAI, Anthropic Claude, Google Gemini, OpenRouter, or any OpenAI-compatible endpoint using your own API key."),
-        h("p", null, "Your API key is stored locally in your browser and is sent only to the AI provider you choose. Org data stays between your browser and Salesforce — only the text you type (plus the minimal schema context a task needs) reaches your chosen AI provider."),
-        h("p", {style: {fontSize: "12px", color: "#706e6b"}},
-          "Developed by Er.Bhajan Mandali © · Independent project, not affiliated with Salesforce. ",
-          h("svg", {className: "ff-flag", width: 16, height: 11, viewBox: "0 0 18 12", "aria-label": "India"},
-            h("rect", {width: 18, height: 4, fill: "#FF9933"}),
-            h("rect", {y: 4, width: 18, height: 4, fill: "#FFFFFF"}),
-            h("rect", {y: 8, width: 18, height: 4, fill: "#138808"}),
-            h("circle", {cx: 9, cy: 6, r: 1.7, fill: "none", stroke: "#000080", strokeWidth: 0.6})
-          )
-        ),
-        h("p", {style: {fontSize: "12px"}},
-          h("a", {
-            href: "https://rakesh-attri.github.io/SaralForce/privacy.html",
-            target: "_blank",
-            rel: "noopener noreferrer"
-          }, "Privacy Policy"),
-          this.state.appVersion ? ` · v${this.state.appVersion}` : "")
-      )
+        // ── About ──
+        h("section", {className: "opt-card opt-about"},
+          h("div", {className: "opt-card-h"},
+            h("div", null,
+              h("h2", null, "About SaralForce"),
+              h("p", null, "A free Salesforce inspector and admin toolkit."))),
+          h("div", {className: "opt-chips"},
+            ["Records", "SOQL", "Run Apex", "Export & Import", "API Explorer", "Debug logs", "Users & Access",
+              "Metadata", "Org Info", "App tabs", "Code coverage", "✨ AI Object Builder"].map(t =>
+              h("span", {key: t, className: "opt-chip" + (t.startsWith("✨") ? " ai" : "")}, t))),
+          h("p", null,
+            "Privacy: org data travels only between your browser and Salesforce. When you use an ✨ feature, only the " +
+            "text you type and the minimal schema it needs go to the AI provider you chose."),
+          h("p", {className: "opt-foot"},
+            h("a", {href: "https://rakesh-attri.github.io/SaralForce/privacy.html", target: "_blank", rel: "noopener noreferrer"}, "Privacy Policy"),
+            " · ",
+            h("a", {href: "https://rakesh-attri.github.io/SaralForce/", target: "_blank", rel: "noopener noreferrer"}, "Website"),
+            this.state.appVersion ? ` · v${this.state.appVersion}` : "",
+            h("br"),
+            "Developed by Er.Bhajan Mandali © · Independent project, not affiliated with Salesforce. ",
+            h("svg", {className: "ff-flag", width: 16, height: 11, viewBox: "0 0 18 12", "aria-label": "India"},
+              h("rect", {width: 18, height: 4, fill: "#FF9933"}),
+              h("rect", {y: 4, width: 18, height: 4, fill: "#FFFFFF"}),
+              h("rect", {y: 8, width: 18, height: 4, fill: "#138808"}),
+              h("circle", {cx: 9, cy: 6, r: 1.7, fill: "none", stroke: "#000080", strokeWidth: 0.6})))))
     );
   }
 }

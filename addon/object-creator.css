@@ -11475,3 +11475,125 @@ html.dark .ff-combo-opt.active,
 html[data-theme="dark"] .ff-combo-opt.active {
   background: rgba(11, 92, 245, 0.18);
 }
+
+/* Object Builder: field-name suggestions */
+.plan-suggest {
+  position: relative;
+}
+
+.plan-suggest-list {
+  position: absolute;
+  z-index: 40;
+  top: 100%;
+  left: 0;
+  min-width: 260px;
+  max-width: 420px;
+  margin-top: 2px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  box-shadow: 0 10px 24px rgba(2, 16, 44, 0.16);
+}
+
+.plan-suggest-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1e2a3d;
+  cursor: pointer;
+}
+
+.plan-suggest-opt.active {
+  background: #eef4ff;
+}
+
+.plan-suggest-n {
+  font-family: var(--font-code);
+  font-weight: 600;
+}
+
+.plan-suggest-l {
+  color: #54698d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-suggest-k {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+html.dark .plan-suggest-list,
+html[data-theme="dark"] .plan-suggest-list {
+  background: #1b2433;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+html.dark .plan-suggest-opt,
+html[data-theme="dark"] .plan-suggest-opt {
+  color: inherit;
+}
+
+html.dark .plan-suggest-opt.active,
+html[data-theme="dark"] .plan-suggest-opt.active {
+  background: rgba(11, 92, 245, 0.18);
+}
+
+/* Object Builder: field settings summary under the type */
+.plan-type-sum {
+  display: block;
+  max-width: 100%;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border: 1px dashed #c7d6ee;
+  border-radius: 6px;
+  background: #f6f9fe;
+  color: #0b5cf5;
+  font: 11.5px var(--font-ui);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.plan-type-sum:hover {
+  border-style: solid;
+  border-color: #0b5cf5;
+}
+
+.plan-type-sum.todo {
+  border-color: #f5c27a;
+  background: #fffaeb;
+  color: #b45309;
+}
+
+.plan-type-sum.static {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: #54698d;
+  cursor: default;
+}
+
+.plan-field-note {
+  font-size: 11px;
+  color: #64748b;
+}
+
+html.dark .plan-type-sum:not(.static),
+html[data-theme="dark"] .plan-type-sum:not(.static) {
+  background: rgba(11, 92, 245, 0.1);
+  border-color: rgba(11, 92, 245, 0.4);
+  color: #8ab4ff;
+}
