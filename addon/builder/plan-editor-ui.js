@@ -1,6 +1,6 @@
 // Object Builder → Plan: per-type field details and object settings
 // (features, validation rules, list views, compact layout).
-import {normalizeFieldType, FORMULA_RETURN_TYPES, SUMMARY_OPERATIONS, CALCULATED_TYPES} from "../core/object-builder-rules.js";
+import {normalizeFieldType, FORMULA_RETURN_TYPES, SUMMARY_OPERATIONS, CALCULATED_TYPES, STANDARD_OBJECT_FIELDS} from "../core/object-builder-rules.js";
 
 const h = React.createElement;
 
@@ -29,10 +29,97 @@ function LazyText({value, onCommit, multiline, className, placeholder}) {
   });
 }
 
-function CsvInput({label, value, onCommit, placeholder}) {
-  return h("label", {className: "insp-field insp-field-grow"},
+// Fields a formula / rule / list view of this plan can use, for suggestions.
+export function planFieldOptions(proposal) {
+  const seen = new Set();
+  const out = [];
+  const add = (name, label, note) => {
+    const k = String(name || "").toLowerCase();
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    out.push({name, label: label || name, note});
+  };
+  for (const f of (proposal && proposal.fields) || []) if (f) add(f.name, f.label, f.existing ? "in org" : "new");
+  for (const f of (proposal && proposal.orgFields) || []) add(f.name, f.label, "in org");
+  for (const n of STANDARD_OBJECT_FIELDS) add(n, n, "standard");
+  return out;
+}
+
+// Text box that suggests field API names while you type.
+//   mode "formula": completes the word at the cursor
+//   mode "list":    comma-separated names, saved when you leave the box
+//   mode "single":  one field name
+function FieldSuggest({label, value, onChange, fields, mode = "formula", placeholder, multiline, grow, extra = []}) {
+  const [text, setText] = React.useState(value || "");
+  const [open, setOpen] = React.useState(false);
+  const [active, setActive] = React.useState(0);
+  const [caret, setCaret] = React.useState(0);
+  const ref = React.useRef(null);
+  React.useEffect(() => { if (document.activeElement !== ref.current) setText(value || ""); }, [value]);
+
+  const before = text.slice(0, caret);
+  const listPart = before.split(",").pop();
+  const token = mode === "formula" ? (/[A-Za-z0-9_]*$/.exec(before) || [""])[0]
+    : mode === "list" ? listPart.trim() : text.trim();
+  const tokenStart = mode === "formula" ? caret - token.length
+    : mode === "list" ? caret - listPart.replace(/^\s+/, "").length : 0;
+  const q = token.toLowerCase();
+  const all = [...extra.map(n => ({name: n, label: n, note: ""})), ...(fields || [])];
+  const matches = (mode === "formula" && !q) ? [] : all
+    .filter(f => !q || f.name.toLowerCase().includes(q) || String(f.label).toLowerCase().includes(q))
+    .sort((a, b) => Number(b.name.toLowerCase().startsWith(q)) - Number(a.name.toLowerCase().startsWith(q)))
+    .slice(0, 8);
+  const show = open && matches.length > 0 && !(matches.length === 1 && matches[0].name === token);
+
+  const pick = f => {
+    const end = mode === "single" ? text.length : caret;
+    const tail = mode === "list" && !/^\s*,/.test(text.slice(end)) ? ", " : "";
+    const next = text.slice(0, tokenStart) + f.name + tail + text.slice(end);
+    const pos = tokenStart + f.name.length + tail.length;
+    setText(next);
+    if (mode !== "list") onChange(next);
+    setOpen(mode === "list");
+    setActive(0);
+    setCaret(pos);
+    requestAnimationFrame(() => {
+      if (ref.current) { ref.current.focus(); ref.current.selectionStart = ref.current.selectionEnd = pos; }
+    });
+  };
+  const onKey = e => {
+    if (!show) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive(a => Math.min(a + 1, matches.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive(a => Math.max(a - 1, 0)); }
+    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick(matches[active]); }
+    else if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
+  };
+  const sync = e => setCaret(e.target.selectionStart || 0);
+  return h("label", {className: "insp-field plan-suggest" + (grow ? " insp-field-grow" : "")},
     h("span", null, label),
-    h(LazyText, {value: (value || []).join(", "), placeholder, className: "plan-cell-mono", onCommit: t => onCommit(csv(t))}));
+    h(multiline ? "textarea" : "input", {
+      ref, value: text, placeholder, spellCheck: false, rows: multiline ? 3 : undefined, autoComplete: "off",
+      className: "plan-cell-mono" + (multiline ? " plan-cell-input plan-formula" : ""),
+      onChange: e => {
+        setText(e.target.value);
+        setCaret(e.target.selectionStart || 0);
+        setOpen(true);
+        setActive(0);
+        if (mode !== "list") onChange(e.target.value);
+      },
+      onKeyDown: onKey,
+      onKeyUp: e => { if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) sync(e); },
+      onClick: e => { sync(e); setOpen(true); },
+      onFocus: e => { sync(e); setOpen(true); },
+      onBlur: () => { setTimeout(() => setOpen(false), 120); if (mode === "list" && text !== value) onChange(text); }
+    }),
+    show && h("div", {className: "plan-suggest-list", role: "listbox"},
+      matches.map((f, i) => h("div", {
+        key: f.name, role: "option", "aria-selected": i === active,
+        className: "plan-suggest-opt" + (i === active ? " active" : ""),
+        onMouseDown: e => { e.preventDefault(); pick(f); }
+      },
+        h("span", {className: "plan-suggest-n"}, f.name),
+        f.label !== f.name && h("span", {className: "plan-suggest-l"}, f.label),
+        f.note && h("span", {className: "plan-suggest-k"}, f.note)))));
 }
 
 function Select({label, value, options, onChange}) {
@@ -72,7 +159,7 @@ function Dependencies({field, controller, onChange}) {
           h("input", {type: "checkbox", className: "field-checkbox", checked: (deps[cv] || []).includes(v), onChange: () => toggle(cv, v)}))))))));
 }
 
-export function FieldDetails({field, fields, objectHistory, onChange}) {
+export function FieldDetails({field, fields, objectHistory, onChange, suggest}) {
   const type = normalizeFieldType(field.type);
   const set = (k) => (v) => onChange({[k]: v});
   const rows = [];
@@ -153,10 +240,10 @@ export function FieldDetails({field, fields, objectHistory, onChange}) {
       }
       rows.push(h(Select, {key: "blank", label: "Blank fields", value: field.treatBlanksAs || "BlankAsZero", onChange: set("treatBlanksAs"),
         options: [{value: "BlankAsZero", label: "Treat as zero"}, {value: "BlankAsBlank", label: "Treat as blank"}]}));
-      rows.push(h("label", {key: "f", className: "insp-field plan-detail-wide"},
-        h("span", null, "Formula"),
-        h("textarea", {className: "plan-cell-input plan-cell-mono plan-formula", rows: 3, spellCheck: false,
-          value: field.formula || "", placeholder: "e.g. Quantity__c * Unit_Price__c", onChange: e => onChange({formula: e.target.value})})));
+      rows.push(h("div", {key: "f", className: "plan-detail-wide"},
+        h(FieldSuggest, {label: "Formula (type a field name for suggestions)", multiline: true, value: field.formula || "",
+          fields: (suggest || []).filter(x => x.name !== field.name),
+          placeholder: "e.g. Quantity__c * Unit_Price__c", onChange: v => onChange({formula: v})})));
       break;
     }
     case "Summary":
@@ -209,6 +296,7 @@ export function ObjectSettings({proposal, existing, onObject, onPlan}) {
   const compact = proposal.compactLayout && proposal.compactLayout.fields ? proposal.compactLayout.fields : [];
   const edit = (key, i, patch) => onPlan(d => { d[key][i] = {...d[key][i], ...patch}; });
   const remove = (key, i) => onPlan(d => { d[key].splice(i, 1); if (!d[key].length) delete d[key]; });
+  const fieldOpts = planFieldOptions(proposal);
   const del = (key, i, label) => h("button", {className: "plan-del-btn", title: `Remove ${label}`, onClick: () => remove(key, i)}, "✕");
   return h("div", {className: "fields-section plan-settings"},
     h("div", {className: "fields-header"}, h("h4", null, "Object settings")),
@@ -221,8 +309,11 @@ export function ObjectSettings({proposal, existing, onObject, onPlan}) {
       onAdd: () => onPlan(d => { d.validationRules = [...(d.validationRules || []), {name: `Rule_${rules.length + 1}`, formula: "", message: ""}]; }),
       render: (r, i) => h("div", {key: i, className: "plan-item"},
         h(Input, {label: "Name", mono: true, value: r.name, onChange: v => edit("validationRules", i, {name: v})}),
-        h(Input, {label: "Error when (formula is true)", mono: true, grow: true, value: r.formula, placeholder: "Amount__c < 0", onChange: v => edit("validationRules", i, {formula: v})}),
+        h(FieldSuggest, {label: "Error when (formula is true)", grow: true, value: r.formula, fields: fieldOpts,
+          placeholder: "e.g. Amount__c < 0 — type a field name for suggestions", onChange: v => edit("validationRules", i, {formula: v})}),
         h(Input, {label: "Error message", grow: true, value: r.message, onChange: v => edit("validationRules", i, {message: v})}),
+        h(FieldSuggest, {label: "Show error on field (optional)", mode: "single", value: r.field || "", fields: fieldOpts,
+          placeholder: "top of page", onChange: v => edit("validationRules", i, {field: v.trim() || undefined})}),
         del("validationRules", i, "rule"))
     }),
     h(ListEditor, {
@@ -231,14 +322,15 @@ export function ObjectSettings({proposal, existing, onObject, onPlan}) {
       render: (v, i) => h("div", {key: i, className: "plan-item"},
         h(Input, {label: "Label", value: v.label, onChange: x => edit("listViews", i, {label: x})}),
         h(Input, {label: "Name", mono: true, value: v.name, onChange: x => edit("listViews", i, {name: x})}),
-        h(CsvInput, {label: "Columns (comma separated, NAME = record name)", value: v.columns,
-          onCommit: cols => edit("listViews", i, {columns: cols})}),
+        h(FieldSuggest, {label: "Columns (comma separated, NAME = record name)", mode: "list", grow: true, extra: ["NAME"],
+          value: (v.columns || []).join(", "), fields: fieldOpts,
+          onChange: t => edit("listViews", i, {columns: csv(t)})}),
         del("listViews", i, "list view"))
     }),
     h("div", {className: "plan-sub"},
       h("div", {className: "plan-sub-h"}, h("span", null, "Compact layout (record highlights)")),
-      h(CsvInput, {label: "Fields (comma separated, up to 10; empty = none)", value: compact,
-        placeholder: "Name, Status__c, Amount__c",
-        onCommit: list => onPlan(d => { if (list.length) d.compactLayout = {...(d.compactLayout || {}), fields: list}; else delete d.compactLayout; })}))
+      h(FieldSuggest, {label: "Fields (comma separated, up to 10; empty = none)", mode: "list", grow: true,
+        value: compact.join(", "), fields: fieldOpts, placeholder: "Name, Status__c, Amount__c",
+        onChange: t => { const list = csv(t); onPlan(d => { if (list.length) d.compactLayout = {...(d.compactLayout || {}), fields: list}; else delete d.compactLayout; }); }}))
   );
 }

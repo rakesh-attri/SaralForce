@@ -60,9 +60,11 @@ Design a custom object by describing it in plain English, then deploy it.
 | ✨ **Ask AI** (in Plan) | "add a resolution notes field", "make Priority required", "add a rule that Due Date can't be in the past" — the plan updates; nothing is deployed. |
 | **Plan mode** | Edit object label, API name, sharing model and every field inline. **⚙** on a field opens its details: length, decimals, picklist values and default, global value set, controlling field with a **dependency matrix**, related object and delete behaviour, formula and return type, roll-up operation, auto-number format, help text and **track history**. |
 | **Object settings** | Track field history, reports, activities, search, Chatter feed; **validation rules**, **list views** and a **compact layout** — all created with the object. |
-| **Field access** | Who gets read/edit on the new fields: **My profile**, the **tab visibility profiles**, or a **new permission set** (object + field access, assigned to you). Formula, roll-up and auto-number fields get read-only access. |
+| **Field access** | Who gets read/edit on the new fields: **My profile** (also gets Read/Create/Edit on the object, so its tab shows in your App Launcher), the **tab visibility profiles**, or a **new permission set** (object + field access, assigned to you). Formula, roll-up and auto-number fields get read-only access. |
 | ✎ **Edit an existing object** | Load a custom object from the org; its fields are shown read-only and new fields, rules and list views are added beside them. |
-| **Build mode** ✏️ | Locks the plan and deploys: creates the object, the fields (controlling picklists before dependents, roll-ups last), field access, page layout, validation rules, list views, compact layout and the tab. |
+| **Show in app** | Deployment Targets → pick a Lightning app; the new tab is added to its navigation bar (like Setup's "Add to Custom Apps"). Remembered for next time. |
+| **Your access & App Launcher check** | After deploy, SaralForce reads what Salesforce actually applies for you (tab exists, tab setting on your profile / permission sets, object access, the App Launcher list, the app) and repairs it — adding the tab setting on your profile, or an "<Object> Access" permission set — and saves the tab again with a real change (like Setup → Tabs → Edit → Save), because Salesforce only applies API-written tab visibility to the App Launcher when the tab is saved. If it still is not there, **Save in Setup ↗** opens that tab's edit page — click Save, then **Check again**; then shows a ✓/✕ checklist with **Fix it**, **Check again** and **Copy details**. |
+| **Build mode** ✏️ | Locks the plan and deploys: creates the object, the fields (controlling picklists before dependents, roll-ups last), field access, every page layout of the object, validation rules, list views, compact layout and the tab. |
 | Chat history | Earlier designs are saved; reopen or start new. |
 | Hand-off | After deploy, jump to **App Tab Manager** to put the new tab into an app. |
 
@@ -437,10 +439,9 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 | You can | Details |
 |---|---|
-| Find an app | Pick a Lightning app. |
-| Current App Tabs | See, **reorder (↑ ↓)** and remove tabs. |
-| Add tabs | Add custom tabs to the app (**Add Tab to App**, **Add & Make Visible**). |
-| Visibility | Set tab visibility (Default On / Default Off / Hidden) for chosen **profiles** or **permission sets**; **Visible to me**. |
+| 1 · Choose an app | One searchable picker (type the app name or developer name); shows Standard/Custom, the developer name and the tab count. Two apps with the same name? Pin the exact one by its App Manager URL or Id. **Open app ↗** previews it. |
+| 2 · Tabs on the app | Search the org's tabs (or type any API name, e.g. `standard-Account`) and **+ Add tab**; tick **Make visible to me** to also set Default On on your profile. Newly created tabs are suggested. The table lists every tab with type and your visibility: **↑ ↓** reorder, **Access**, **✕** remove (asks first). |
+| 3 · Who can see a tab | Pick a tab, choose **Default On / Default Off / Hidden**, then the **profiles** and **permission sets** — or **Just make it visible to me** (verified and repaired). **Check access** shows why a tab is or isn't in your App Launcher, with **Fix it**. |
 | From the Object Builder | A newly created object's tab arrives ready to add. |
 
 ---
@@ -450,8 +451,10 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 | Setting | Details |
 |---|---|
 | Providers | **OpenAI**, **Anthropic Claude**, **Google Gemini**, **OpenRouter**, any **OpenAI-compatible** endpoint. |
-| Key & model | Paste your API key (stays in your browser); the model list loads from your key. |
+| AI is optional | The Settings page opens with a note: every core tool works with just your Salesforce login; AI only adds the ✨ helpers. The AI assistant card shows **Ready** or **Not set up**. |
+| Key & model | Pick a provider tile, paste your API key (**Get a key ↗** links to the provider), pick a model; **Refresh list** loads the models your key can use. **Save settings**, **Test connection**, **Remove key**. |
 | Without a key | Everything except ✨ features works. |
+| Preferences | Success celebration animation; open the Inspector in a new tab (switch). |
 | Tours | Each tour shows automatically only once; replay any of them from **?**. |
 
 ---

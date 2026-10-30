@@ -126,7 +126,7 @@ FIELD TYPE-SPECIFIC PROPERTIES (include these in the field object):
 
 OBJECT EXTRAS (all optional — include only when the user asks or they clearly help):
 - On "object": "enableHistory", "enableReports", "enableActivities", "enableSearch", "enableFeeds" (true/false).
-- Top-level "validationRules": [{"name": "Amount_Must_Be_Positive", "formula": "Amount__c < 0", "message": "Amount must be positive", "field": "Amount__c"}]. The formula is the ERROR condition.
+- Top-level "validationRules": [{"name": "Amount_Must_Be_Positive", "formula": "Amount__c < 0", "message": "Amount must be positive", "field": "Amount__c"}]. The formula is the ERROR condition. In every formula (validation rules and Formula fields) reference fields by their exact API name from this plan or the existing object (e.g. Amount__c, never the label "Amount").
 - Top-level "listViews": [{"name": "All_Open", "label": "All Open", "columns": ["NAME", "Status__c"]}]. Columns are "NAME" or field API names from this plan.
 - Top-level "compactLayout": {"fields": ["Name", "Status__c"]} (up to 10 fields from this plan).
 

@@ -3,6 +3,9 @@ import {safeCopyText} from "../../utils.js";
 import {escapeSoqlString} from "../../core/soql.js";
 import {useFfSession} from "../shared/session-state.js";
 import {appTabsResolveCurrentUserId} from "../shared/apex-debug.js";
+import {SearchSelect} from "../shared/combo.js";
+import {readTabAccess, ensureTabVisibleForUser} from "../shared/tab-access.js";
+import {explainTabAccess, tabAccessReport} from "../../core/tab-access.js";
 
 const h = React.createElement;
 
@@ -160,13 +163,18 @@ async function appTabsListMetadata(type) {
   const body = `<met:listMetadata><met:queries><met:type>${appTabsEscXml(type)}</met:type></met:queries></met:listMetadata>`;
   const {doc} = await appTabsSoapPost(body);
   const entries = [];
-  for (const fp of appTabsDomFindAll(doc.documentElement, "fileProperties")) {
+  // listMetadata returns FileProperties as <result> elements.
+  let props = appTabsDomFindAll(doc.documentElement, "fileProperties");
+  if (!props.length) props = appTabsDomFindAll(doc.documentElement, "result");
+  for (const fp of props) {
     const fn = appTabsDomFind(fp, "fullName");
     if (fn && fn.textContent) {
       const cd = appTabsDomFind(fp, "createdDate");
+      const idEl = appTabsDomFind(fp, "id");
       entries.push({
         fullName: fn.textContent.trim(),
-        createdDate: cd && cd.textContent ? cd.textContent.trim() : null
+        createdDate: cd && cd.textContent ? cd.textContent.trim() : null,
+        id: idEl && idEl.textContent ? idEl.textContent.trim() : null
       });
     }
   }
@@ -710,8 +718,9 @@ function AppTabManager() {
   const [error, setError] = React.useState(null);
   const [debug, setDebug] = React.useState("");
   // App Tab Manager: search filters, table, visibility, prefill.
-  const [appQuery, setAppQuery] = React.useState("");
-  const [tabQuery, setTabQuery] = React.useState("");
+  const [alsoVisible, setAlsoVisible] = React.useState(true);
+  const [accessChk, setAccessChk] = React.useState(null);   // {tab, facts, result}
+  const [accessBusy, setAccessBusy] = React.useState(false);
   const [listQuery, setListQuery] = React.useState("");
   const [moveBusy, setMoveBusy] = React.useState(null);
   const [confirmRm, setConfirmRm] = React.useState(null);
@@ -972,12 +981,14 @@ function AppTabManager() {
       if (opts.makeVisible) {
         try {
           const profileFn = await appTabsEnsureTabVisibleForMe(tab);
-          visNote = ` Visibility DefaultOn set for your profile (${profileFn}).`;
+          visNote = ` It is now visible to you (Default On on ${profileFn}).`;
+          setProfileVis(prev => ({...(prev || {}), [tab]: "DefaultOn"}));
         } catch (ve) {
-          visNote = ` Could not set visibility automatically (${ve.message}) — use "Visible to me" in the visibility panel.`;
+          visNote = ` Could not make it visible to you (${ve.message}) — use section 3.`;
         }
       }
-      setStatus(`"${tab}" is now on "${writeName}" (verified by re-read).${visNote} If the nav bar still doesn't show it, switch to another app and back, or hard-refresh Lightning.`);
+      setStatus(`Added "${appTabsLabelFor(tab, customTabs)}" to ${(apps.find(a => a.fullName === writeName) || {}).label || writeName} — confirmed in Salesforce.${visNote} Not in the nav bar yet? Switch apps once or refresh Lightning.`);
+      setTabName("");
       if (prefill && prefill.tabApiName === tab) { setPrefill(null); setPrefillCheck(null); }
     } catch (e) {
       setError(e.message);
@@ -993,11 +1004,11 @@ function AppTabManager() {
   // App Launcher search only lists tabs your profile can see (DefaultOn).
   // This sets it without a redeploy and without touching Setup.
   const makeVisible = async (tabOverride) => {
-    setError(null);
-    setStatus(null);
+    setVisErr(null);
+    setVisMsg(null);
     const tab = String(tabOverride || visTab || tabName || "").trim();
-    if (!tab) { setError("Enter a tab API name first"); return; }
-    if (appTabsIsSfId(tab)) { setError(`"${tab}" looks like a Salesforce Id — enter the tab API name instead`); return; }
+    if (!tab) { setVisErr("Enter a tab API name first"); return; }
+    if (appTabsIsSfId(tab)) { setVisErr(`"${tab}" looks like a Salesforce Id — enter the tab API name instead`); return; }
     setVisWorking(true);
     try {
       const exists = await appTabsTabExists(tab);
@@ -1005,14 +1016,36 @@ function AppTabManager() {
         throw new Error(
           `Tab "${tab}" was not found in this org. If you just deployed it, wait a minute and retry.`);
       }
-      const profileFn = await appTabsEnsureTabVisibleForMe(tab);
-      setStatus(`Tab "${tab}" set to DefaultOn for your profile (${profileFn}). Open App Launcher search in ~30s — if it still doesn't appear, hard-refresh Lightning.`);
-      // Refresh the visibility column.
-      setProfileVis(prev => ({...(prev || {}), [tab]: "DefaultOn"}));
+      // Profile write, then read back what Salesforce applies and repair
+      // (tab setting / object access / access permission set) if needed.
+      const acc = await ensureTabVisibleForUser(tab, {profileWrite: () => appTabsEnsureTabVisibleForMe(tab), resaveTab: () => appTabsResaveTab(tab)});
+      setAccessChk({tab, facts: acc.facts, result: explainTabAccess(acc.facts)});
+      if (acc.ok) {
+        setVisMsg(`"${tab}" is visible to you (confirmed via ${acc.how}). Refresh the Salesforce page, then search the App Launcher.`);
+        setProfileVis(prev => ({...(prev || {}), [tab]: "DefaultOn"}));
+      } else {
+        setVisErr(`Could not confirm "${tab}" is visible to you: ${acc.steps.join("; ")}`);
+      }
     } catch (e) {
-      setError(e.message);
+      setVisErr(e.message);
     } finally {
       setVisWorking(false);
+    }
+  };
+
+  // Read the facts for one tab and show the checklist.
+  const checkAccess = async (tabOverride) => {
+    const tab = String(tabOverride || visTab || "").trim();
+    if (!tab) { setVisErr("Pick a tab first."); return; }
+    setAccessBusy(true);
+    setVisErr(null);
+    try {
+      const facts = await readTabAccess(tab);
+      setAccessChk({tab, facts, result: explainTabAccess(facts)});
+    } catch (e) {
+      setVisErr(e.message);
+    } finally {
+      setAccessBusy(false);
     }
   };
 
@@ -1037,7 +1070,7 @@ function AppTabManager() {
       const {writeName, tabs} = await appTabsWriteTabList(sel, desired, {action: "remove"});
       setCurrentTabs(tabs);
       if (sel !== writeName) setSel(writeName);
-      setStatus(`"${tab}" was removed from "${writeName}" (verified by re-read). Profile / permission-set access to the tab was not changed.`);
+      setStatus(`Removed "${appTabsLabelFor(tab, customTabs)}" from the app — confirmed in Salesforce. Who can see the tab was not changed.`);
     } catch (e) {
       setError(e.message);
       if (_appTabsDebug) {
@@ -1065,7 +1098,7 @@ function AppTabManager() {
       const {writeName, tabs} = await appTabsWriteTabList(sel, desired, {action: "reorder"});
       setCurrentTabs(tabs);
       if (sel !== writeName) setSel(writeName);
-      setStatus(`"${tab}" moved to position ${target + 1} of ${tabs.length} on "${writeName}" (verified by re-read).`);
+      setStatus(`Moved "${appTabsLabelFor(tab, customTabs)}" to position ${target + 1} of ${tabs.length} — confirmed in Salesforce.`);
     } catch (e) {
       setError(e.message);
       if (_appTabsDebug) {
@@ -1168,23 +1201,35 @@ function AppTabManager() {
       ? "Metadata verified"
       : "Metadata not read yet";
 
-  // Searchable app dropdown (label + developer name).
-  const appNeedle = appQuery.trim().toLowerCase();
-  const shownApps = appNeedle
-    ? apps.filter(a => a.label.toLowerCase().includes(appNeedle) ||
-        a.fullName.toLowerCase().includes(appNeedle))
-    : apps;
+  // App picker: label, developer name, Standard / Custom.
+  const appOptions = apps.map(a => {
+    const twin = apps.filter(x => x.label === a.label).length > 1;
+    return {value: a.fullName, label: a.label, sub: a.fullName !== a.label ? a.fullName : null,
+      tag: twin ? "same name" : appTabsAppType(a.fullName), tagTone: twin ? "warn" : appTabsAppType(a.fullName) === "Standard" ? "info" : "violet"};
+  });
 
-  // Tab picker + suggestions: org tabs not already on the selected app.
+  // Tab picker: org custom tabs, marked when already on the app / new.
   const currentSet = new Set((currentTabs || []).map(t => t.toLowerCase()));
-  const tabNeedle = tabQuery.trim().toLowerCase();
-  const matchTab = (t) => !tabNeedle ||
-    t.apiName.toLowerCase().includes(tabNeedle) || t.label.toLowerCase().includes(tabNeedle);
-  const shownPickerTabs = customTabs.filter(matchTab);
-  const suggested = customTabs
-    .filter(t => !currentSet.has(t.apiName.toLowerCase()))
-    .filter(matchTab)
-    .slice(0, 40);
+  const tabOptions = customTabs
+    .map(t => {
+      const onApp = currentSet.has(t.apiName.toLowerCase());
+      const recent = appTabsIsRecent(t.createdDate);
+      return {value: t.apiName, label: t.label, sub: t.label !== t.apiName ? t.apiName : null,
+        tag: onApp ? "on app" : recent ? "new" : null, tagTone: onApp ? "muted" : "ok", onApp, recent};
+    })
+    // Not-yet-added first, newest custom tabs on top.
+    .sort((a, b) => (a.onApp - b.onApp) || (b.recent - a.recent) || a.label.localeCompare(b.label));
+  const recentTabs = tabOptions.filter(t => t.recent && !t.onApp).slice(0, 8);
+
+  // Visibility picker: tabs on the app first, then every other org tab.
+  const visOptions = [
+    ...(currentTabs || []).map(api => {
+      const label = appTabsLabelFor(api, customTabs);
+      return {value: api, label, sub: label !== api ? api : null, tag: "on app", tagTone: "muted"};
+    }),
+    ...tabOptions.filter(t => !t.onApp)
+  ];
+  const visTabValue = visTab || "";
 
   // Current App Tabs table rows.
   const listNeedle = listQuery.trim().toLowerCase();
@@ -1201,11 +1246,18 @@ function AppTabManager() {
 
   const visValueLabel = visValue === "DefaultOn" ? "Default On" :
     visValue === "DefaultOff" ? "Default Off" : "Hidden";
+  const visTargetCount = visProfiles.length + visPsets.length;
+  const pickApp = v => { setSel(v); setStatus(null); setError(null); setRefMsg(null); setConfirmRm(null); };
+  const visCell = r => profileVis === null
+    ? h("span", {className: "apptm-vis-cell apptm-vis-loading"}, "…")
+    : r.vis
+      ? h("span", {className: `apptm-vis-cell apptm-vis-${r.vis === "DefaultOn" ? "on" : r.vis === "DefaultOff" ? "off" : "hid"}`},
+        r.vis === "DefaultOn" ? "Default On" : r.vis === "DefaultOff" ? "Default Off" : r.vis === "Hidden" ? "Hidden" : "Set")
+      : h("span", {className: "apptm-vis-cell apptm-vis-none", title: "Not in your profile's tab settings (defaults apply)"}, "Default");
 
   return h("div", {className: "insp-panel apptm"},
     h("p", {className: "insp-hint-strip"},
-      "Add custom object tabs, standard tabs and supported custom tabs to Lightning apps — no Setup navigation needed. Every write is a full read-modify-write round-trip verified by re-reading the app metadata."
-    ),
+      "Pick an app, add or reorder its tabs, and choose who can see them. Every change is read back from Salesforce to confirm it."),
 
     // ── Prefill from AI Object Builder (approval required) ──
     prefill && h("div", {className: "apptm-prefill"},
@@ -1222,15 +1274,15 @@ function AppTabManager() {
           h("span", {className: "apptm-warn-text"},
             "✗ Tab not found — create it in Setup → Tabs (or redeploy the object), then reload."),
         h("span", {className: "apptm-prefill-note"},
-          "Choose the target app in section 1 and visibility in section 2, then approve — nothing is written until you click.")
+          "Choose the app below, then add it — nothing is written until you click.")
       ),
       h("div", {className: "apptm-prefill-actions"},
         h("button", {
           className: "btn btn-primary btn-sm",
           disabled: working || !sel || (prefillCheck && prefillCheck.exists === false),
-          title: "Add this tab to the selected app (you choose the app above)",
-          onClick: () => addTab({})
-        }, working ? "Working…" : "Add to app"),
+          title: "Add this tab to the selected app",
+          onClick: () => addTab({makeVisible: alsoVisible})
+        }, working ? "Working…" : `Add to ${selLabel || "app"}`),
         h("button", {
           className: "btn btn-secondary btn-sm",
           onClick: () => { setPrefill(null); setPrefillCheck(null); }
@@ -1238,358 +1290,301 @@ function AppTabManager() {
       )
     ),
 
-    // ── 1 · App Selection ───────────────────────────────────
+    // ── 1 · App ─────────────────────────────────────────────
     h("div", {className: "apptm-card"},
       h("div", {className: "apptm-card-h"},
         h("span", {className: "apptm-num"}, "1"),
         h("div", {className: "apptm-card-headings"},
-          h("div", {className: "apptm-card-t"}, "App Selection"),
-          h("div", {className: "apptm-card-sub"}, "Find the Lightning app whose navigation you want to manage")
-        ),
-        h("button", {
-          className: "btn btn-secondary btn-sm apptm-reload",
-          disabled: appsLoading || tabsLoading || working,
-          title: "Re-fetch apps and tabs from Salesforce metadata",
-          onClick: loadAll
-        }, (appsLoading || tabsLoading) ? "Loading…" : "↻ Reload Apps")
-      ),
-      h("div", {className: "apptm-grid2"},
-        h("label", {className: "apptm-field"},
-          h("span", null, "Search apps"),
-          h("input", {
-            value: appQuery,
-            placeholder: "Filter by app label or developer name…",
-            disabled: appsLoading || working,
-            onChange: e => setAppQuery(e.target.value)
-          })
-        ),
-        h("label", {className: "apptm-field"},
-          h("span", null, "Lightning app"),
-          h("select", {
-            value: sel,
-            disabled: appsLoading || working,
-            onChange: e => { setSel(e.target.value); setStatus(null); setError(null); setRefMsg(null); setConfirmRm(null); }
-          },
-            apps.length === 0 && h("option", {value: ""},
-              appsLoading ? "Loading apps…" : "No apps found"),
-            shownApps.map(a =>
-              h("option", {key: a.fullName, value: a.fullName},
-                `${a.label} (${a.fullName})`)
-            )
-          )
+          h("div", {className: "apptm-card-t"}, "Choose an app"),
+          h("div", {className: "apptm-card-sub"}, "Type to search by app name or developer name")
         )
       ),
-      dupes.length > 1 && h("div", {className: "insp-warn"},
-        `Warning: ${dupes.length} apps share the label "${selApp.label}" (${dupes.map(a => a.fullName).join(", ")}). ` +
-        `Only the exact DeveloperName you update will change. Use Find App below to pin the one you actually open.`
+      h("div", {className: "apptm-row"},
+        h(SearchSelect, {
+          value: sel,
+          options: appOptions,
+          onChange: pickApp,
+          placeholder: appsLoading ? "Loading apps…" : "Search apps…",
+          emptyText: appsLoading ? "Loading apps…" : "No apps found",
+          disabled: appsLoading || working,
+          ariaLabel: "Lightning app",
+          className: "apptm-grow"
+        }),
+        h("button", {
+          className: "btn btn-secondary btn-sm",
+          disabled: !sel,
+          title: "Open the selected app in a new browser tab",
+          onClick: previewApp
+        }, "Open app ↗"),
+        h("button", {
+          className: "apptm-ico-btn apptm-ico-lg",
+          disabled: appsLoading || tabsLoading || working,
+          title: "Reload apps and tabs from Salesforce",
+          "aria-label": "Reload apps and tabs",
+          onClick: loadAll
+        }, (appsLoading || tabsLoading) ? "…" : "↻")
       ),
-      h("div", {className: "apptm-pin"},
-        h("label", {className: "apptm-field apptm-field-grow"},
-          h("span", null, "Pin exact app (optional) — App URL or record Id"),
+      sel && h("div", {className: "apptm-facts"},
+        h("span", {className: `apptm-tag ${appType === "Standard" ? "apptm-tag-std" : "apptm-tag-cus"}`}, appType),
+        h("span", {className: "apptm-mono apptm-fact"}, sel),
+        h("span", {className: `apptm-tag ${currentTabs ? "apptm-tag-ok" : "apptm-tag-idle"}`},
+          currentLoading ? "Reading…" : currentTabs ? `✓ ${currentTabs.length} tab${currentTabs.length === 1 ? "" : "s"}` : appStatus)),
+      dupes.length > 1 && h("div", {className: "insp-warn"},
+        `${dupes.length} apps are called "${selApp.label}" (${dupes.map(a => a.fullName).join(", ")}). ` +
+        `Pin the one you actually open below.`),
+      h("details", {className: "apptm-more", open: dupes.length > 1 || !!refMsg},
+        h("summary", null, "Two apps with the same name? Pin the exact one by its URL or Id"),
+        h("div", {className: "apptm-row"},
           h("input", {
+            className: "apptm-input apptm-grow",
             value: appRef,
-            placeholder: "https://…/lightning/setup/…/02u…  (or just the 02u… Id)",
+            placeholder: "App Manager URL or record Id (02u…)",
+            "aria-label": "App Manager URL or record Id",
             disabled: resolving || working,
             onChange: e => setAppRef(e.target.value),
             onKeyDown: e => { if (e.key === "Enter") resolveFromRef(); }
-          })
-        ),
-        h("button", {
-          className: "btn btn-secondary",
-          disabled: resolving || working || !appRef.trim(),
-          title: "Look up the exact CustomApplication by record Id and select it",
-          onClick: resolveFromRef
-        }, resolving ? "Finding…" : "Find App")
-      ),
-      refMsg && h("div", {className: refMsg.ok ? "insp-ok" : "insp-error"}, refMsg.text),
-      sel && h("div", {className: "apptm-info"},
-        h("div", {className: "apptm-info-row"},
-          h("span", {className: "apptm-info-k"}, "App Name"),
-          h("span", {className: "apptm-info-v"}, selLabel)),
-        h("div", {className: "apptm-info-row"},
-          h("span", {className: "apptm-info-k"}, "Developer Name"),
-          h("span", {className: "apptm-info-v apptm-mono"}, sel)),
-        h("div", {className: "apptm-info-row"},
-          h("span", {className: "apptm-info-k"}, "Type"),
-          h("span", {className: "apptm-info-v"},
-            h("span", {className: `apptm-tag ${appType === "Standard" ? "apptm-tag-std" : "apptm-tag-cus"}`}, appType))),
-        h("div", {className: "apptm-info-row"},
-          h("span", {className: "apptm-info-k"}, "Status"),
-          h("span", {className: "apptm-info-v"},
-            h("span", {className: `apptm-tag ${currentTabs ? "apptm-tag-ok" : "apptm-tag-idle"}`}, appStatus)))
-      )
+          }),
+          h("button", {
+            className: "btn btn-secondary btn-sm",
+            disabled: resolving || working || !appRef.trim(),
+            onClick: resolveFromRef
+          }, resolving ? "Finding…" : "Find app")),
+        refMsg && h("div", {className: refMsg.ok ? "insp-ok" : "insp-error"}, refMsg.text))
     ),
 
-    // ── 2 · Add Tabs & Visibility ───────────────────────────
+    // ── 2 · Tabs on this app ────────────────────────────────
     h("div", {className: "apptm-card"},
       h("div", {className: "apptm-card-h"},
         h("span", {className: "apptm-num"}, "2"),
         h("div", {className: "apptm-card-headings"},
-          h("div", {className: "apptm-card-t"}, "Add Tabs & Visibility"),
-          h("div", {className: "apptm-card-sub"}, "Search the org's tabs, add one to the selected app, then grant access")
-        )
-      ),
-      h("div", {className: "apptm-grid2"},
-        h("label", {className: "apptm-field"},
-          h("span", null, "Search tabs (API name or label)"),
-          h("input", {
-            value: tabQuery,
-            placeholder: "IT_Asset__c, Orders, Reports…",
-            disabled: tabsLoading,
-            onChange: e => setTabQuery(e.target.value)
-          })
+          h("div", {className: "apptm-card-t"}, sel ? `Tabs on ${selLabel}` : "Tabs on this app"),
+          h("div", {className: "apptm-card-sub"}, "Add a tab, change the order, or remove one")
         ),
-        h("label", {className: "apptm-field"},
-          h("span", null, "Available custom tabs"),
-          h("select", {
-            value: "",
-            disabled: tabsLoading || working || !customTabs.length,
-            onChange: e => { if (e.target.value) setTabName(e.target.value); }
-          },
-            h("option", {value: ""},
-              customTabs.length ? "— choose a tab —" : "No custom tabs found"),
-            shownPickerTabs.map(t =>
-              h("option", {key: t.apiName, value: t.apiName},
-                `${t.label} (${t.apiName})${appTabsIsRecent(t.createdDate) ? " · new" : ""}`)
-            )
-          )
-        )
+        h("button", {
+          className: "apptm-ico-btn apptm-ico-lg",
+          disabled: currentLoading || !sel || working,
+          title: "Re-read this app from Salesforce",
+          "aria-label": "Re-read this app",
+          onClick: () => refreshCurrent()
+        }, currentLoading ? "…" : "↻")
       ),
-      h("label", {className: "apptm-field"},
-        h("span", null, "Tab API name"),
-        h("input", {
+      h("div", {className: "apptm-addbar"},
+        h(SearchSelect, {
           value: tabName,
-          placeholder: "IT_Asset__c",
-          disabled: working,
-          onChange: e => setTabName(e.target.value),
-          onKeyDown: e => { if (e.key === "Enter") addTab({}); }
-        })
-      ),
-      suggested.length > 0 && h("div", {className: "apptm-sugg"},
-        h("div", {className: "apptm-sugg-h"},
-          "Suggested from your org",
-          h("span", {className: "apptm-sugg-count"}, `${suggested.length} not on this app`)),
-        h("div", {className: "apptm-chips"},
-          suggested.map(t =>
-            h("button", {
-              key: t.apiName,
-              className: `apptm-chip ${appTabsIsRecent(t.createdDate) ? "apptm-chip-new" : ""}`,
-              title: appTabsIsRecent(t.createdDate)
-                ? `Recently created (${t.createdDate}) — click to select`
-                : "Click to select this tab",
-              disabled: working,
-              onClick: () => setTabName(t.apiName)
-            },
-              t.label,
-              appTabsIsRecent(t.createdDate) && h("span", {className: "apptm-chip-new-badge"}, "NEW"))
-          )
-        )
-      ),
-      h("div", {className: "apptm-actions"},
+          options: tabOptions,
+          onChange: v => setTabName(v),
+          placeholder: tabsLoading ? "Loading tabs…" : "Search tabs, or type an API name (e.g. standard-Account)",
+          emptyText: "No custom tabs match",
+          disabled: working || !sel,
+          allowFree: true,
+          ariaLabel: "Tab to add",
+          className: "apptm-grow"
+        }),
+        h("label", {className: "apptm-check", title: "Also set the tab to Default On for your profile, so App Launcher search finds it"},
+          h("input", {type: "checkbox", checked: alsoVisible, onChange: e => setAlsoVisible(e.target.checked)}),
+          " Make visible to me"),
         h("button", {
           className: "btn btn-primary",
-          disabled: working || !sel || !tabName.trim(),
-          title: "Add the selected tab to the app's navigation (verified by re-reading metadata)",
-          onClick: () => addTab({})
-        }, working ? "Working…" : "Add Tab to App"),
-        h("button", {
-          className: "btn btn-primary apptm-btn-accent",
-          disabled: working || visWorking || !sel || !tabName.trim(),
-          title: "Add the tab, then set it to Default On for your profile so App Launcher search finds it",
-          onClick: () => addTab({makeVisible: true})
-        }, working ? "Working…" : "Add & Make Visible"),
-        h("button", {
-          className: "btn btn-secondary",
-          disabled: !sel,
-          title: "Open the selected app in a new tab to preview its navigation",
-          onClick: previewApp
-        }, "Preview in App")
+          disabled: working || !sel || !tabName.trim() || currentSet.has(tabName.trim().toLowerCase()),
+          title: currentSet.has(tabName.trim().toLowerCase()) ? "This tab is already on the app" : "Add the tab to the app",
+          onClick: () => addTab({makeVisible: alsoVisible})
+        }, working ? "Adding…" : "+ Add tab")
       ),
-
-      // Visibility sub-panel
-      h("div", {className: "apptm-vis"},
-        h("div", {className: "apptm-vis-h"},
-          h("span", {className: "apptm-vis-title"}, "Visibility"),
-          h("span", {className: "apptm-vis-note"},
-            "Adding a tab to an app and granting users access to it are separate Salesforce operations. Visibility below is written to Profile / PermissionSet tab settings — the places Salesforce actually stores it.")
-        ),
-        h("div", {className: "apptm-grid3"},
-          h("label", {className: "apptm-field"},
-            h("span", null, "Tab"),
-            h("input", {
-              value: visTab || tabName,
-              placeholder: "Tab API name",
-              disabled: working,
-              onChange: e => setVisTab(e.target.value),
-              onKeyDown: e => { if (e.key === "Enter") makeVisible(); }
-            })
-          ),
-          h("label", {className: "apptm-field"},
-            h("span", null, "Value"),
-            h("select", {
-              value: visValue,
-              disabled: visTargetsBusy,
-              onChange: e => setVisValue(e.target.value)
-            },
-              h("option", {value: "DefaultOn"}, "Default On (visible)"),
-              h("option", {value: "DefaultOff"}, "Default Off (hidden by default)"),
-              h("option", {value: "Hidden"}, "Hidden")
-            )
-          ),
-          h("div", {className: "apptm-field"},
-            h("span", null, "Apply to"),
-            h("div", {className: "apptm-vis-targets"},
-              h(MultiCheckDropdown, {
-                label: "Profiles",
-                items: profileList.map(p => ({id: p.fullName, name: p.name})),
-                selected: visProfiles,
-                onChange: setVisProfiles,
-                emptyText: targetsLoading ? "Loading profiles…" : "No profiles found"
-              }),
-              h(MultiCheckDropdown, {
-                label: "Permission sets",
-                items: psetList.map(p => ({id: p.fullName, name: p.name})),
-                selected: visPsets,
-                onChange: setVisPsets,
-                emptyText: targetsLoading ? "Loading permission sets…" : "No permission sets found"
-              })
-            )
-          )
-        ),
-        h("div", {className: "apptm-actions"},
-          h("button", {
-            className: "btn btn-secondary",
-            disabled: visWorking || working || !(visTab || tabName).trim(),
-            title: "Set this tab to Default On for YOUR profile so App Launcher search finds it",
-            onClick: () => makeVisible()
-          }, visWorking ? "Setting…" : "Visible to me"),
-          h("button", {
-            className: "btn btn-primary",
-            disabled: visTargetsBusy || targetsLoading,
-            title: `Write ${visValueLabel} to the selected profiles / permission sets`,
-            onClick: applyVisibility
-          }, visTargetsBusy ? "Applying…" : `Apply to selected (${visProfiles.length + visPsets.length})`)
-        ),
-        (targetsLoading || profileList.length || psetList.length > 0) &&
-          h("div", {className: "apptm-vis-hint"},
-            targetsLoading
-              ? "Loading profiles and permission sets from the org…"
-              : `${profileList.length} profiles · ${psetList.length} permission sets available. ` +
-                `If a user still can't see the tab, they also need Read access on the tab's object (profile or permission-set object permissions) — Salesforce will not show a tab whose object the user cannot access.`),
-        visMsg && h("div", {className: "insp-ok"}, visMsg),
-        visErr && h("div", {className: "insp-error"}, visErr)
-      )
-    ),
-
-    // ── 3 · Current App Tabs ────────────────────────────────
-    h("div", {className: "apptm-card"},
-      h("div", {className: "apptm-card-h"},
-        h("span", {className: "apptm-num"}, "3"),
-        h("div", {className: "apptm-card-headings"},
-          h("div", {className: "apptm-card-t"}, "Current App Tabs"),
-          h("div", {className: "apptm-card-sub"},
-            currentTabs
-              ? `${currentTabs.length} tab${currentTabs.length === 1 ? "" : "s"} on ${selLabel}`
-              : "Load an app to see its navigation")
-        ),
-        h("button", {
-          className: "btn btn-secondary btn-sm",
-          disabled: currentLoading || !sel || working,
-          title: "Re-read the app metadata from Salesforce",
-          onClick: () => refreshCurrent()
-        }, currentLoading ? "Reading…" : "↻ Refresh")
-      ),
-      currentTabs && h("div", {className: "apptm-toolbar"},
+      recentTabs.length > 0 && h("div", {className: "apptm-chips apptm-recent"},
+        h("span", {className: "apptm-recent-l"}, "New in your org:"),
+        recentTabs.map(t => h("button", {
+          key: t.value,
+          className: "apptm-chip apptm-chip-new" + (tabName === t.value ? " active" : ""),
+          title: `${t.sub} — click to select`,
+          disabled: working,
+          onClick: () => setTabName(t.value)
+        }, t.label))),
+      status && h("div", {className: "insp-ok"}, status),
+      error && h("div", {className: "insp-error"}, error),
+      debug && h("details", {className: "apptm-more"},
+        h("summary", null, "Technical details"),
+        h("div", {className: "insp-toolbar"},
+          h("button", {className: "btn btn-secondary btn-sm", onClick: copyDebug}, "Copy details")),
+        h("textarea", {className: "insp-csv-preview", readOnly: true, value: debug.slice(0, 8000)})),
+      currentTabs && currentTabs.length > 6 && h("div", {className: "apptm-toolbar"},
         h("input", {
           className: "apptm-list-search",
           value: listQuery,
-          placeholder: "Search tabs…",
+          placeholder: "Filter these tabs…",
+          "aria-label": "Filter tabs on this app",
           onChange: e => setListQuery(e.target.value)
-        }),
-        h("span", {className: "ff-badge ff-badge-info"}, `${selLabel} → ${sel}`),
-        profileVis === null
-          ? h("span", {className: "apptm-vis-state"}, "Loading visibility…")
-          : profileVis && profileVisName
-            ? h("span", {className: "apptm-vis-state"}, `Visibility shown for profile: ${profileVisName}`)
-            : h("span", {className: "apptm-vis-state"}, "Visibility unavailable (profile read failed)")
+        })),
+      !sel ? h("div", {className: "insp-empty"}, "Choose an app above.")
+      : currentLoading && !currentTabs ? h("div", {className: "insp-meta"}, "Reading the app…")
+      : currentTabs && currentTabs.length === 0 ? h("div", {className: "insp-empty"}, "No tabs on this app yet — add one above.")
+      : currentTabs && tableRows.length === 0 ? h("div", {className: "insp-empty"}, `No tabs match "${listQuery}".`)
+      : currentTabs && h("div", {className: "apptm-table-wrap"},
+        h("table", {className: "apptm-table"},
+          h("thead", null,
+            h("tr", null,
+              h("th", {className: "apptm-th-pos"}, "#"),
+              h("th", null, "Tab"),
+              h("th", null, "Type"),
+              h("th", {title: profileVisName ? `Tab setting on your profile (${profileVisName})` : "Tab setting on your profile"}, "Your visibility"),
+              h("th", {className: "apptm-th-act"}, ""))),
+          h("tbody", null,
+            tableRows.map(r =>
+              h("tr", {key: r.api, className: "apptm-tr"},
+                h("td", {className: "apptm-td-pos"}, String(r.idx + 1)),
+                h("td", null,
+                  h("div", {className: "apptm-tab-label"}, r.label),
+                  r.label !== r.api && h("div", {className: "apptm-tab-api"}, r.api)),
+                h("td", null,
+                  h("span", {className: `apptm-tag ${r.kind === "Standard" ? "apptm-tag-std" : "apptm-tag-cus"}`}, r.kind)),
+                h("td", null, visCell(r)),
+                h("td", {className: "apptm-td-act"},
+                  h("button", {
+                    className: "apptm-ico-btn",
+                    disabled: r.idx === 0 || moveBusy !== null || working || !!listNeedle,
+                    title: "Move up",
+                    "aria-label": `Move ${r.label} up`,
+                    onClick: () => moveTab(r.idx, -1)
+                  }, moveBusy === r.idx ? "…" : "↑"),
+                  h("button", {
+                    className: "apptm-ico-btn",
+                    disabled: r.idx === currentTabs.length - 1 || moveBusy !== null || working || !!listNeedle,
+                    title: "Move down",
+                    "aria-label": `Move ${r.label} down`,
+                    onClick: () => moveTab(r.idx, 1)
+                  }, "↓"),
+                  h("button", {
+                    className: "apptm-ico-btn apptm-ico-text",
+                    disabled: working,
+                    title: "Choose who can see this tab (section 3)",
+                    onClick: () => {
+                      setVisTab(r.api);
+                      const el = document.getElementById("apptm-access");
+                      if (el) el.scrollIntoView({behavior: "smooth", block: "start"});
+                    }
+                  }, "Access"),
+                  confirmRm === r.api
+                    ? [
+                      h("button", {key: "y", className: "apptm-ico-btn apptm-ico-danger apptm-ico-text", disabled: working,
+                        onClick: () => removeTab(r.api)}, "Remove"),
+                      h("button", {key: "n", className: "apptm-ico-btn apptm-ico-text", onClick: () => setConfirmRm(null)}, "Keep")
+                    ]
+                    : h("button", {
+                      className: "apptm-ico-btn apptm-ico-danger",
+                      disabled: working,
+                      title: `Remove from this app (who can see the tab is not changed)`,
+                      "aria-label": `Remove ${r.label}`,
+                      onClick: () => setConfirmRm(r.api)
+                    }, "✕"))))))),
+      currentTabs && h("div", {className: "apptm-vis-state"},
+        profileVis === null ? "Loading your visibility…"
+          : profileVisName ? `"Your visibility" is the tab setting on your profile (${profileVisName}).`
+          : "Your visibility could not be read.")
+    ),
+
+    // ── 3 · Who can see a tab ───────────────────────────────
+    h("div", {className: "apptm-card", id: "apptm-access"},
+      h("div", {className: "apptm-card-h"},
+        h("span", {className: "apptm-num"}, "3"),
+        h("div", {className: "apptm-card-headings"},
+          h("div", {className: "apptm-card-t"}, "Who can see a tab"),
+          h("div", {className: "apptm-card-sub"},
+            "Being on an app and being visible are separate: set the tab's visibility for profiles or permission sets")
+        )
       ),
-      currentTabs && (
-        currentTabs.length === 0
-          ? h("div", {className: "insp-empty"}, "No tabs on this app yet — add one in section 2.")
-          : tableRows.length === 0
-            ? h("div", {className: "insp-empty"}, `No tabs match "${listQuery}".`)
-            : h("div", {className: "apptm-table-wrap"},
-              h("table", {className: "apptm-table"},
-                h("thead", null,
-                  h("tr", null,
-                    h("th", null, "Tab Label / API Name"),
-                    h("th", null, "Type"),
-                    h("th", null, "Visibility"),
-                    h("th", {className: "apptm-th-pos"}, "Position"),
-                    h("th", {className: "apptm-th-act"}, "Actions"))),
-                h("tbody", null,
-                  tableRows.map(r =>
-                    h("tr", {key: r.api, className: "apptm-tr"},
-                      h("td", null,
-                        h("div", {className: "apptm-tab-label"}, r.label),
-                        h("div", {className: "apptm-tab-api"}, r.api)),
-                      h("td", null,
-                        h("span", {className: `apptm-tag ${r.kind === "Standard" ? "apptm-tag-std" : "apptm-tag-cus"}`}, r.kind)),
-                      h("td", null,
-                        profileVis === null
-                          ? h("span", {className: "apptm-vis-cell apptm-vis-loading"}, "…")
-                          : r.vis
-                            ? h("span", {className: `apptm-vis-cell apptm-vis-${r.vis === "DefaultOn" ? "on" : r.vis === "DefaultOff" ? "off" : "hid"}`},
-                              r.vis === "DefaultOn" ? "Default On" : r.vis === "DefaultOff" ? "Default Off" : r.vis === "Hidden" ? "Hidden" : "Set")
-                            : h("span", {className: "apptm-vis-cell apptm-vis-none"},
-                              h("span", {title: "Not in your profile's tab settings (defaults apply)"}, "Default"))),
-                      h("td", {className: "apptm-td-pos"}, String(r.idx + 1)),
-                      h("td", {className: "apptm-td-act"},
-                        h("button", {
-                          className: "apptm-ico-btn",
-                          disabled: r.idx === 0 || !!moveBusy || working,
-                          title: "Move up",
-                          onClick: () => moveTab(r.idx, -1)
-                        }, "↑"),
-                        h("button", {
-                          className: "apptm-ico-btn",
-                          disabled: r.idx === currentTabs.length - 1 || !!moveBusy || working,
-                          title: "Move down",
-                          onClick: () => moveTab(r.idx, 1)
-                        }, "↓"),
-                        h("button", {
-                          className: "apptm-ico-btn",
-                          disabled: !!moveBusy || working,
-                          title: "Use this tab in the visibility panel",
-                          onClick: () => { setVisTab(r.api); setTabName(r.api); }
-                        }, "👁"),
-                        confirmRm === r.api
-                          ? h("button", {
-                              className: "apptm-ico-btn apptm-ico-danger",
-                              disabled: working,
-                              title: "Confirm removal",
-                              onClick: () => removeTab(r.api)
-                            }, "Confirm")
-                          : h("button", {
-                              className: "apptm-ico-btn apptm-ico-danger",
-                              disabled: working,
-                              title: `Remove ${r.api} from this app (profile access is kept)`,
-                              onClick: () => setConfirmRm(r.api)
-                            }, "✕"))))
-                )
-              )
-            )
+      h("div", {className: "apptm-vis-grid"},
+        h("div", {className: "apptm-field"},
+          h("span", null, "Tab"),
+          h(SearchSelect, {
+            value: visTabValue,
+            options: visOptions,
+            onChange: v => setVisTab(v),
+            placeholder: "Search tabs…",
+            allowFree: true,
+            ariaLabel: "Tab for visibility"
+          })),
+        h("div", {className: "apptm-field"},
+          h("span", null, "Visibility"),
+          h("div", {className: "sq3-pills apptm-seg", role: "radiogroup", "aria-label": "Visibility"},
+            [["DefaultOn", "Default On", "Shown in the app and in App Launcher"],
+              ["DefaultOff", "Default Off", "Available, but users add it themselves"],
+              ["Hidden", "Hidden", "Users can't see the tab"]].map(([v, label, tip]) => h("button", {
+              key: v, type: "button", role: "radio", "aria-checked": visValue === v, title: tip,
+              className: "sq3-pill" + (visValue === v ? " active" : ""),
+              disabled: visTargetsBusy,
+              onClick: () => setVisValue(v)
+            }, label))))
       ),
-      status && h("div", {className: "insp-ok"}, status),
-      error && h("div", {className: "insp-error"}, error),
-      debug && h("div", {className: "insp-toolbar"},
-        h("button", {className: "btn btn-secondary btn-sm", onClick: copyDebug}, "Copy debug")
-      ),
-      debug && h("textarea", {
-        className: "insp-csv-preview",
-        readOnly: true,
-        value: debug.slice(0, 8000)
-      })
+      h("div", {className: "apptm-field"},
+        h("span", null, "For"),
+        h("div", {className: "apptm-vis-targets"},
+          h(MultiCheckDropdown, {
+            label: "Profiles",
+            items: profileList.map(p => ({id: p.fullName, name: p.name})),
+            selected: visProfiles,
+            onChange: setVisProfiles,
+            emptyText: targetsLoading ? "Loading profiles…" : "No profiles found"
+          }),
+          h(MultiCheckDropdown, {
+            label: "Permission sets",
+            items: psetList.map(p => ({id: p.fullName, name: p.name})),
+            selected: visPsets,
+            onChange: setVisPsets,
+            emptyText: targetsLoading ? "Loading permission sets…" : "No permission sets found"
+          }))),
+      h("div", {className: "apptm-actions"},
+        h("button", {
+          className: "btn btn-primary",
+          disabled: visTargetsBusy || targetsLoading || !visTabValue.trim() || !visTargetCount,
+          title: visTargetCount ? `Set ${visValueLabel} for the ${visTargetCount} selected` : "Choose profiles or permission sets first",
+          onClick: applyVisibility
+        }, visTargetsBusy ? "Applying…" : `Set ${visValueLabel}${visTargetCount ? ` for ${visTargetCount} selected` : ""}`),
+        h("span", {className: "apptm-or"}, "or"),
+        h("button", {
+          className: "btn btn-secondary",
+          disabled: visWorking || working || !visTabValue.trim(),
+          title: "Set this tab to Default On for your own profile",
+          onClick: () => makeVisible(visTabValue)
+        }, visWorking ? "Setting…" : "Just make it visible to me"),
+        h("button", {
+          className: "btn btn-secondary",
+          disabled: accessBusy || visWorking || !visTabValue.trim(),
+          title: "Check what Salesforce applies for you: tab exists, tab setting, object access, App Launcher",
+          onClick: () => checkAccess(visTabValue)
+        }, accessBusy ? "Checking…" : "Check access")),
+      accessChk && accessChk.tab === visTabValue && h("div", {className: "access-check" + (accessChk.result.ok ? " ok" : "")},
+        h("div", {className: "access-check-h"},
+          h("span", null, accessChk.result.ok ? `✓ "${accessChk.tab}" is ready in your App Launcher` : `Can you see "${accessChk.tab}"?`),
+          h("div", {className: "access-check-actions"},
+            !accessChk.result.ok && h("button", {
+              className: "btn btn-primary btn-sm",
+              disabled: visWorking,
+              onClick: () => makeVisible(accessChk.tab)
+            }, visWorking ? "Fixing…" : "Fix it"),
+            accessChk.result.items.some(i => i.key === "launcher" && !i.ok) && h("button", {
+              className: "btn btn-secondary btn-sm",
+              title: "Opens this tab's edit page in Setup — click Save there, then Check access",
+              onClick: async () => window.open(await appTabsTabEditUrl(accessChk.tab), "_blank")
+            }, "Save in Setup ↗"),
+            h("button", {
+              className: "btn btn-secondary btn-sm",
+              disabled: accessBusy,
+              onClick: () => checkAccess(accessChk.tab)
+            }, "Check again"),
+            h("button", {
+              className: "field-action-btn",
+              onClick: () => safeCopyText(tabAccessReport(accessChk.tab, accessChk.facts, accessChk.result))
+            }, "Copy details"))),
+        h("ul", {className: "access-check-list"},
+          accessChk.result.items.map(i => h("li", {key: i.key, className: i.ok ? "ok" : "no"},
+            h("span", {className: "access-check-ico", "aria-hidden": "true"}, i.ok ? "✓" : "✕"),
+            h("span", {className: "access-check-l"}, i.label),
+            h("span", {className: "access-check-d"}, i.detail)))),
+        h("div", {className: "access-check-note"},
+          "Salesforce caches the App Launcher — after a change, refresh the Salesforce page (or log out and in) before searching.")),
+      h("div", {className: "apptm-vis-hint"},
+        "Users also need Read access to the tab's object — Salesforce hides a tab whose object they can't open."),
+      visMsg && h("div", {className: "insp-ok"}, visMsg),
+      visErr && h("div", {className: "insp-error"}, visErr)
     )
   );
 }
@@ -1650,4 +1645,60 @@ function MultiCheckDropdown({label, items, selected, onChange, emptyText}) {
   );
 }
 
-export {ffHasAppTabPrefill, AppTabManager};
+// Save an object tab again, unchanged — what Setup → Tabs → Edit → Save does.
+// Tab visibility written through the API is stored but Salesforce only
+// recomputes who can see the tab (App Launcher) when the tab itself is saved.
+async function appTabsResaveTab(tab) {
+  const name = String(tab || "").trim();
+  if (!name || /^standard-/i.test(name)) return false;   // standard tabs can't be re-saved
+  const body = `<met:readMetadata><met:type>CustomTab</met:type><met:fullNames>${appTabsEscXml(name)}</met:fullNames></met:readMetadata>`;
+  const {doc} = await appTabsSoapPost(body);
+  const records = appTabsDomFind(doc.documentElement, "records");
+  if (!records || !appTabsDomFind(records, "fullName")) throw new Error(`Tab "${name}" was not found`);
+  // An unchanged save may be skipped, so change the description, save, then
+  // put it back — two real saves, like editing the tab in Setup.
+  const kids = appTabsDomChildren(records).filter(c => appTabsDomLocal(c) !== "fullName");
+  const descEl = kids.find(c => appTabsDomLocal(c) === "description");
+  const original = descEl ? descEl.textContent : null;
+  const write = (desc) => {
+    const parts = kids.filter(c => appTabsDomLocal(c) !== "description").map(appTabsDomToMetXml);
+    if (desc !== null) parts.push(`<met:description>${appTabsEscXml(desc)}</met:description>`);
+    return appTabsUpdateMetadataRaw(`<met:metadata xsi:type="met:CustomTab"><met:fullName>${appTabsEscXml(name)}</met:fullName>${parts.join("")}</met:metadata>`);
+  };
+  const base = original || `Tab for ${name.replace(/__c$/, "").replace(/_/g, " ")}`;
+  await write(base + " (refresh)");
+  await write(base);
+  return true;
+}
+
+// Setup page that edits this tab — the one-click manual fallback
+// (Edit → Save there always makes Salesforce apply the tab visibility).
+async function appTabsTabEditUrl(tab) {
+  const home = "https://" + sfConn.instanceHostname + "/lightning/setup/CustomTabs/home";
+  try {
+    const entry = (await appTabsListMetadata("CustomTab")).find(e => e.fullName.toLowerCase() === String(tab).toLowerCase());
+    if (entry && entry.id) {
+      return "https://" + sfConn.instanceHostname + "/lightning/setup/CustomTabs/page?address=" + encodeURIComponent(`/${entry.id}/e`);
+    }
+  } catch (e) { /* fall back to the Tabs list */ }
+  return home;
+}
+
+// For the Object Builder: tabs on an app, and add one tab (verified re-read).
+async function appTabsForApp(fullName) {
+  const records = await appTabsReadRecords(fullName);
+  if (!records) throw new Error(`Could not read app "${fullName}"`);
+  return appTabsOfRecords(records);
+}
+
+async function addTabToApp(fullName, tab) {
+  const records = await appTabsReadRecords(fullName);
+  if (!records) throw new Error(`Could not read app "${fullName}"`);
+  const existing = appTabsOfRecords(records);
+  if (existing.some(t => t.toLowerCase() === String(tab).toLowerCase())) return {already: true, tabs: existing};
+  const desired = existing.length ? [...existing, tab] : ["standard-home", tab];
+  const {writeName, tabs} = await appTabsWriteTabList(fullName, desired, {verifyTab: tab, action: "add", recordsEl: records});
+  return {already: false, writeName, tabs};
+}
+
+export {ffHasAppTabPrefill, AppTabManager, appTabsLoadApps, appTabsForApp, addTabToApp, appTabsResaveTab, appTabsTabEditUrl};
