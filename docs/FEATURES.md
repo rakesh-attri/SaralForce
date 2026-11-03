@@ -454,6 +454,7 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 | AI is optional | The Settings page opens with a note: every core tool works with just your Salesforce login; AI only adds the ✨ helpers. The AI assistant card shows **Ready** or **Not set up**. |
 | Key & model | Pick a provider tile, paste your API key (**Get a key ↗** links to the provider), pick a model; **Refresh list** loads the models your key can use. **Save settings**, **Test connection**, **Remove key**. |
 | Without a key | Everything except ✨ features works. |
+| **AI usage** | After every ✨ request a small note fades in for a few seconds (hover keeps it) with the tokens used — input, output, total — and the time. Click it, or **?** → **AI usage**, for every call of this session with the exact input (system and user messages) and output, copyable, plus today and all-time token totals. The text is kept only until the panel is closed; totals are numbers only. Turn the note off in Settings → Preferences. Tokens marked ≈ are estimated when a provider reports none. |
 | Preferences | Success celebration animation; open the Inspector in a new tab (switch). |
 | Tours | Each tour shows automatically only once; replay any of them from **?**. |
 

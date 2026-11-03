@@ -11708,3 +11708,348 @@ html[data-theme="dark"] .access-check-l {
 .deploy-result {
   flex-wrap: wrap;
 }
+
+/* AI usage: ghost note after each request + usage drawer */
+.aiu-toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.aiu-toast {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto auto auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 1px;
+  max-width: 360px;
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  background: rgba(11, 31, 68, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #fff;
+  font: 12.5px var(--font-ui);
+  text-align: left;
+  box-shadow: 0 8px 24px rgba(2, 16, 44, 0.25);
+  cursor: pointer;
+  opacity: 0.94;
+  animation: aiu-in 0.3s ease-out;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.aiu-toast:hover,
+.aiu-toast:focus-visible {
+  opacity: 1;
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.aiu-toast.leaving {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.aiu-toast.bad {
+  background: rgba(120, 30, 20, 0.75);
+}
+
+.aiu-toast-ico {
+  grid-row: span 2;
+  font-size: 15px;
+}
+
+.aiu-toast-f {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aiu-toast-n {
+  font-weight: 700;
+  color: #9cc4ff;
+  white-space: nowrap;
+}
+
+.aiu-toast-d {
+  grid-column: 2 / span 2;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.aiu-toast-x {
+  grid-column: 2 / span 2;
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffb4a8;
+}
+
+@keyframes aiu-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 0.94; transform: none; }
+}
+
+.aiu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483001;
+  background: rgba(2, 16, 44, 0.28);
+}
+
+.aiu-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: var(--cf-card, #fff);
+  border-left: 1px solid var(--cf-border, #dce5f2);
+  box-shadow: -12px 0 32px rgba(2, 16, 44, 0.18);
+  color: var(--cf-text, #172b4d);
+  font-family: var(--font-ui);
+}
+
+.aiu-h {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 10px;
+}
+
+.aiu-title {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.aiu-sub,
+.aiu-note,
+.aiu-meta {
+  font-size: 12px;
+  color: var(--cf-text-2, #64748b);
+}
+
+.aiu-close {
+  border: 0;
+  background: none;
+  font-size: 16px;
+  color: var(--cf-text-2, #64748b);
+  cursor: pointer;
+}
+
+.aiu-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 18px 10px;
+}
+
+.aiu-stat {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  border: 1px solid var(--cf-border, #dce5f2);
+  border-radius: 10px;
+}
+
+.aiu-stat b {
+  font-size: 17px;
+}
+
+.aiu-stat span {
+  font-size: 11.5px;
+  color: var(--cf-text-2, #64748b);
+}
+
+.aiu-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 18px 8px;
+}
+
+.aiu-empty {
+  padding: 24px 18px;
+  font-size: 13px;
+  color: var(--cf-text-2, #64748b);
+}
+
+.aiu-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.aiu-row {
+  border: 1px solid var(--cf-border, #dce5f2);
+  border-radius: 10px;
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.aiu-row-h {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: 12.5px var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.aiu-row.open .aiu-row-h,
+.aiu-row-h:hover {
+  background: var(--cf-page, #f4f7fc);
+}
+
+.aiu-row-f {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aiu-row-m,
+.aiu-row-time {
+  color: var(--cf-text-2, #64748b);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aiu-row-t {
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.aiu-status {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: #e8f7ee;
+  color: #15803d;
+}
+
+.aiu-status.error {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.aiu-status.cancelled {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.aiu-row-b {
+  padding: 4px 10px 12px;
+}
+
+.aiu-err {
+  margin: 6px 0;
+  font-size: 12px;
+  color: #b42318;
+}
+
+.aiu-block-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.aiu-copy {
+  padding: 2px 10px;
+  border: 1px solid var(--cf-border, #dce5f2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cf-blue, #2878f0);
+  font: 600 11.5px var(--font-ui);
+  cursor: pointer;
+}
+
+.aiu-msg + .aiu-msg {
+  margin-top: 6px;
+}
+
+.aiu-role {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--cf-text-2, #64748b);
+}
+
+.aiu-pre {
+  margin: 2px 0 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--cf-page, #f4f7fc);
+  font: 11.5px/1.5 var(--font-code);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+html.dark .aiu-drawer,
+html[data-theme="dark"] .aiu-drawer {
+  background: #141c2b;
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+}
+
+html.dark .aiu-pre,
+html[data-theme="dark"] .aiu-pre,
+html.dark .aiu-row.open .aiu-row-h,
+html[data-theme="dark"] .aiu-row.open .aiu-row-h {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+html.dark .aiu-row,
+html[data-theme="dark"] .aiu-row,
+html.dark .aiu-stat,
+html[data-theme="dark"] .aiu-stat {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aiu-toast {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .aiu-row-h {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .aiu-row-m,
+  .aiu-row-time {
+    display: none;
+  }
+}

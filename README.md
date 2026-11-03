@@ -278,6 +278,26 @@ debug-log analysis.
 
 ## What's New
 
+### v2.2.0
+- **New objects show up in the App Launcher** — after deploying, the Object Builder checks
+  what Salesforce really applies for you (tab, tab setting, object access) and repairs it,
+  re-saving the tab so the App Launcher picks it up; a ✓/✕ checklist with **Fix it** and a
+  one-click **Save in Setup** fallback, also under App Tab Manager → Who can see a tab
+- **Show in app** — pick a Lightning app in the builder and the new tab is added to its nav
+  bar; new fields go on every page layout of the object
+- **Field suggestions** — formulas, validation rules, list views and compact layouts suggest
+  field API names as you type; a formula that uses a missing field is caught before deploy
+- **Clearer Object Builder** — picklist values and formulas shown under each field type,
+  Controlled by Parent explained, deploy jumps to its progress, chats named after the object
+- **Redesigned Settings** — says up front that AI is optional; provider tiles, Get a key
+  links, Ready / Not set up status and Remove key
+- **Simpler App Tab Manager** — searchable app and tab pickers, one Add button, the tabs
+  table right below, and a clear "Who can see a tab" step
+- **AI usage you can see** — after every ✨ request a ghost note shows the tokens used
+  (input, output, total) and time for a few seconds; **? → AI usage** lists every call of the
+  session with its exact input and output, plus today and all-time totals. Text stays in
+  memory only; the note can be turned off in Settings
+
 ### v2.1.0
 - **Run Apex** — one call per run returns that run's own debug log (no trace flag);
   a **Limits** tab shows CPU, SOQL, DML and heap used; **Go to line** for errors (also

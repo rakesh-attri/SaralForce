@@ -186,7 +186,7 @@ function RiskCard() {
     if (!hasValidConfig()) { setAiErr("NO_LLM_CONFIG"); return; }
     setAiBusy(true);
     try {
-      setReport({text: await logsAskLlm(SECURITY_AUDIT_SYSTEM, auditFacts(summary)), at: Date.now()});
+      setReport({text: await logsAskLlm(SECURITY_AUDIT_SYSTEM, auditFacts(summary), {feature: "Risky access summary"}), at: Date.now()});
     } catch (e) {
       setAiErr(e.message === "NO_LLM_CONFIG" ? "NO_LLM_CONFIG" : e.message);
     } finally {

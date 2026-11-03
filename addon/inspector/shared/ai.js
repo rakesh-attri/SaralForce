@@ -38,6 +38,7 @@ async function suggestSoqlFix(failedQuery, sfError, {signal} = {}) {
     }
   }
   const parsed = await askAiJson({
+    feature: "Fix SOQL",
     system: SOQL_FIX_SYSTEM,
     user: `Failed SOQL: ${failedQuery}\nSalesforce error: ${sfError}${schemaHint}`,
     validate: o => (o.fixedQuery ? null : "The JSON has no fixedQuery."),
@@ -96,6 +97,7 @@ async function soqlFromText(request, {currentObject, signal} = {}) {
   }
   const others = objects.filter(o => !picked.includes(o.name)).slice(0, 300).map(o => o.name);
   const parsed = await askAiJson({
+    feature: "Write SOQL",
     system: SOQL_FROM_TEXT_SYSTEM,
     user: `Request: ${text}\n\n${schema.join("\n\n") || "(no schema matched)"}` +
       (others.length ? `\n\nOther queryable objects: ${others.join(", ")}` : ""),
@@ -112,7 +114,7 @@ async function soqlFromText(request, {currentObject, signal} = {}) {
 function explainSoql(query, {signal} = {}) {
   const q = String(query || "").trim();
   if (!q) return Promise.reject(new Error("Enter a SOQL query first."));
-  return askAi({system: SOQL_EXPLAIN_SYSTEM, user: q.slice(0, 8000), signal});
+  return askAi({system: SOQL_EXPLAIN_SYSTEM, user: q.slice(0, 8000), signal, feature: "Explain SOQL"});
 }
 
 const METADATA_EXPLAIN_SYSTEM =
@@ -138,6 +140,7 @@ async function validationRuleFromText(objectName, request, {current, signal} = {
   try { schema = describeForPrompt(await ffDescribeObject(objectName)); }
   catch (e) { schema = `(Could not describe ${objectName}: ${e.message})`; }
   const parsed = await askAiJson({
+    feature: "Validation rule",
     system: VALIDATION_RULE_SYSTEM,
     user: `Object: ${objectName}\nRequest: ${text}` + (current ? `\nCurrent formula (improve it): ${current}` : "") + `\n\n${schema}`,
     validate: o => (String(o.formula || "").trim() ? null : "The JSON has no formula."),
@@ -223,6 +226,7 @@ async function lwcFromText(request, {name, label, object, apiVersion, targets, s
   const schema = await schemaForRequest(object, ask);
   let files = [];
   const parsed = await askAiJson({
+    feature: "Build LWC",
     system: LWC_FROM_TEXT_SYSTEM,
     user: `Component folder name: ${name} (JS class ${pascalCase(name)})` +
       (label ? `\nLabel: ${label}` : "") + (object ? `\nMain object: ${object}` : "") +
@@ -269,6 +273,7 @@ async function codeFromText(kind, request, form = {}, {signal} = {}) {
     `Request: ${ask}`,
   ].filter(Boolean).join("\n");
   const parsed = await askAiJson({
+    feature: "Build code",
     system: CODE_FROM_TEXT_SYSTEM,
     user: hints + (schema ? `\n\n${schema}` : ""),
     validate: o => {
@@ -295,6 +300,7 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
   let merged = draft;
   let changed = [];
   const parsed = await askAiJson({
+    feature: "Change draft",
     system: DRAFT_REVISE_SYSTEM,
     user: `Kind: ${draft.kind}\nName: ${draft.name}\n` +
       (ask ? `Request: ${ask}\n` : "") + (error ? `Salesforce deploy error to fix: ${error}\n` : "") +
@@ -324,7 +330,7 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
 function explainMetadata(kind, name, source, {signal} = {}) {
   const text = String(source || "").slice(0, 15000);
   if (!text.trim()) return Promise.reject(new Error("Nothing to explain: the source is empty."));
-  return askAi({system: METADATA_EXPLAIN_SYSTEM, user: `${kind}: ${name}\n\n${text}`, signal});
+  return askAi({system: METADATA_EXPLAIN_SYSTEM, user: `${kind}: ${name}\n\n${text}`, signal, feature: `Explain ${kind}`});
 }
 
 const DATA_QUALITY_SYSTEM =
@@ -335,7 +341,7 @@ const DATA_QUALITY_SYSTEM =
 
 // Plain-words review of a Data quality profile. Never changes anything.
 function explainDataQuality(profileText, {signal} = {}) {
-  return askAi({system: DATA_QUALITY_SYSTEM, user: String(profileText || "").slice(0, 14000), signal});
+  return askAi({system: DATA_QUALITY_SYSTEM, user: String(profileText || "").slice(0, 14000), signal, feature: "Data quality review"});
 }
 
 const TEST_FAILURE_SYSTEM =
@@ -349,7 +355,7 @@ function explainTestFailure({className, method, message, stackTrace, testSource,
   const parts = [`Test: ${className}.${method}`, `Failure: ${message || "(no message)"}`, `Stack trace:\n${stackTrace || "(none)"}`];
   if (testSource) parts.push(`Test method source:\n${String(testSource).slice(0, 6000)}`);
   if (codeSource) parts.push(`Code under test (where it failed):\n${String(codeSource).slice(0, 6000)}`);
-  return askAi({system: TEST_FAILURE_SYSTEM, user: parts.join("\n\n"), signal});
+  return askAi({system: TEST_FAILURE_SYSTEM, user: parts.join("\n\n"), signal, feature: "Explain test failure"});
 }
 
 // Ask the Options-configured LLM to review Apex for compile errors BEFORE a run
@@ -358,6 +364,7 @@ function explainTestFailure({className, method, message, stackTrace, testSource,
 async function apexAiCheck(sourceCode, serverError, {signal} = {}) {
   const code = String(sourceCode || "").slice(0, 12000);
   const parsed = await askAiJson({
+    feature: "Apex check",
     system: APEX_CHECK_SYSTEM,
     user: serverError
       ? `Salesforce rejected this code with: ${serverError}\n\nApex code:\n${code}`
@@ -376,8 +383,8 @@ async function apexAiCheck(sourceCode, serverError, {signal} = {}) {
 
 // One shared call to the Options-configured LLM (log Quick Analysis, log
 // chat, org audit). Throws "NO_LLM_CONFIG" when no provider is set up.
-function logsAskLlm(systemPrompt, userText, {signal} = {}) {
-  return askAi({system: systemPrompt, user: userText, signal});
+function logsAskLlm(systemPrompt, userText, {signal, feature = "Log analysis"} = {}) {
+  return askAi({system: systemPrompt, user: userText, signal, feature});
 }
 
 export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm};

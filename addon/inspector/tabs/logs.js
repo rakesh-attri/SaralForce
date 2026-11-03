@@ -645,7 +645,7 @@ function LogsTab() {
       const prompt = `DEBUG LOG:\n${logsExcerpt(lg, body, 12000)}\n\n` +
         (transcript ? `EARLIER IN THIS CONVERSATION:\n${transcript}\n\n` : "") +
         `QUESTION: ${q}`;
-      const answer = await logsAskLlm(LOGS_CHAT_SYSTEM, prompt);
+      const answer = await logsAskLlm(LOGS_CHAT_SYSTEM, prompt, {feature: "Ask about log"});
       setChats(p => ({...p, [lg.Id]: [...(p[lg.Id] || []), {role: "ai", text: answer}]}));
     } catch (e) {
       setChats(p => ({...p, [lg.Id]: [...(p[lg.Id] || []),

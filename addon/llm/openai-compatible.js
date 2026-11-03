@@ -1,3 +1,5 @@
+import {usageFromOpenAI} from "../core/ai-usage.js";
+
 export class OpenAICompatibleProvider {
   constructor() {
     this.name = "OpenAI Compatible";
@@ -116,7 +118,9 @@ export class OpenAICompatibleProvider {
     return response;
   }
 
-  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal} = {}) {
+  // onUsage({input, output, reasoning}) reports tokens when the endpoint
+  // returns them (stream_options is not sent: some endpoints reject it).
+  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal, onUsage} = {}) {
     const endpoint = this._endpoint(baseUrl);
     const headers = {
       "Content-Type": "application/json",
@@ -132,7 +136,7 @@ export class OpenAICompatibleProvider {
 
     if (onChunk) {
       const response = await this._post(endpoint, headers, body, true, signal);
-      return this._handleStream(response, onChunk);
+      return this._handleStream(response, onChunk, onUsage);
     }
 
     const text = await this._post(endpoint, headers, body, false);
@@ -142,6 +146,7 @@ export class OpenAICompatibleProvider {
     } catch (e) {
       throw new Error("Invalid JSON from API: " + String(text).slice(0, 200));
     }
+    if (onUsage) onUsage(usageFromOpenAI(data.usage));
     const content = data.choices?.[0]?.message?.content;
     if (content == null) {
       throw new Error("API response missing choices[0].message.content: " +
@@ -170,11 +175,12 @@ export class OpenAICompatibleProvider {
     return (data.data || data.models || []).map(m => (typeof m === "string" ? m : m && m.id)).filter(Boolean).sort();
   }
 
-  async _handleStream(response, onChunk) {
+  async _handleStream(response, onChunk, onUsage) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullText = "";
     let buffer = "";
+    let usage = null;
 
     while (true) {
       const {done, value} = await reader.read();
@@ -190,7 +196,8 @@ export class OpenAICompatibleProvider {
           if (data === "[DONE]") continue;
           try {
             const parsed = JSON.parse(data);
-            const content = parsed.choices[0]?.delta?.content;
+            if (parsed.usage) usage = parsed.usage;
+            const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               fullText += content;
               onChunk(fullText);
@@ -202,6 +209,7 @@ export class OpenAICompatibleProvider {
       }
     }
 
+    if (onUsage) onUsage(usageFromOpenAI(usage));
     return fullText;
   }
 }

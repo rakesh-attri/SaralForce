@@ -4,6 +4,7 @@
 // attempt. Pure apart from the provider modules it calls.
 import {getSavedConfig, hasValidConfig, getLLMProvider} from "../llm/llm-service.js";
 import {parseJSONFromText} from "./object-builder-rules.js";
+import {recordAiCall} from "./ai-usage.js";
 
 // Thrown (as message) when no provider is configured; callers already check
 // for this exact string to show the "Set up AI" hint.
@@ -21,7 +22,8 @@ function abortError() {
 
 // Resolves with the provider's reply text. messages: [{role, content}], or
 // pass system + user. onChunk(fullTextSoFar) streams when the provider can.
-export async function askAi({system, user, messages, onChunk, signal, provider: providerOverride} = {}) {
+// feature names the call in the AI usage log (tokens, time, input, output).
+export async function askAi({system, user, messages, onChunk, signal, provider: providerOverride, feature} = {}) {
   const config = getSavedConfig();
   if (!config || !hasValidConfig()) throw new Error(NO_LLM_CONFIG);
   const list = messages ? messages.slice() : [];
@@ -31,21 +33,41 @@ export async function askAi({system, user, messages, onChunk, signal, provider: 
   }
   if (signal && signal.aborted) throw abortError();
   const provider = providerOverride || getLLMProvider(config.provider);
-  const call = provider.sendMessage(list, config.apiKey, config.model, onChunk || null, config.baseUrl, {signal});
-  // Providers that cannot abort their transport still stop the caller here.
-  const raw = await (signal ? Promise.race([call, new Promise((_, reject) => {
-    signal.addEventListener("abort", () => reject(abortError()), {once: true});
-  })]) : call);
+  let usage = null;
+  let streamed = "";
+  const started = Date.now();
+  const record = (extra) => recordAiCall({
+    feature, provider: provider.name || config.provider, model: config.model, messages: list, usage,
+    ms: Date.now() - started, ...extra
+  });
+  const call = provider.sendMessage(list, config.apiKey, config.model,
+    onChunk ? (t) => { streamed = t; onChunk(t); } : null, config.baseUrl,
+    {signal, onUsage: (u) => { if (u) usage = u; }});
+  let raw;
+  try {
+    // Providers that cannot abort their transport still stop the caller here.
+    raw = await (signal ? Promise.race([call, new Promise((_, reject) => {
+      signal.addEventListener("abort", () => reject(abortError()), {once: true});
+    })]) : call);
+  } catch (e) {
+    const cancelled = e && e.name === "AbortError";
+    record({reply: streamed, error: cancelled ? null : (e && e.message) || String(e), cancelled});
+    throw e;
+  }
   const text = String(raw || "").trim();
-  if (!text) throw new Error("The AI returned an empty reply");
+  if (!text) {
+    record({reply: "", error: "The AI returned an empty reply"});
+    throw new Error("The AI returned an empty reply");
+  }
+  record({reply: text});
   return text;
 }
 
 // Like askAi but returns a parsed JSON object. When the reply is not valid
 // JSON (or validate(obj) returns an error string), asks once more with the
 // problem spelled out before giving up.
-export async function askAiJson({system, user, validate, signal, provider} = {}) {
-  const first = await askAi({system, user, signal, provider});
+export async function askAiJson({system, user, validate, signal, provider, feature} = {}) {
+  const first = await askAi({system, user, signal, provider, feature});
   let parsed = parseJSONFromText(first);
   let problem = parsed ? (validate ? validate(parsed) : null) : "The reply was not valid JSON.";
   if (!problem) return parsed;
@@ -58,7 +80,8 @@ export async function askAiJson({system, user, validate, signal, provider} = {})
       {role: "user", content: `${problem} Reply again with ONLY the JSON object, no other text.`}
     ],
     signal,
-    provider
+    provider,
+    feature: `${feature || "AI request"} · retry`
   });
   parsed = parseJSONFromText(retry);
   problem = parsed ? (validate ? validate(parsed) : null) : "The reply was not valid JSON.";

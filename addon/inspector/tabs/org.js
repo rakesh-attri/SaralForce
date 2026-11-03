@@ -778,7 +778,7 @@ function AuditCard({info}) {
       const facts = await orgAuditFacts(info);
       const snap = orgAuditSnapshot(info, facts);
       setSnapshot(snap);
-      const text = await logsAskLlm(ORG_AUDIT_SYSTEM, "Org hygiene facts:\n" + snap);
+      const text = await logsAskLlm(ORG_AUDIT_SYSTEM, "Org hygiene facts:\n" + snap, {feature: "Org hygiene audit"});
       setReport({text, at: Date.now()});
     } catch (e) {
       setAuditErr(e.message === "NO_LLM_CONFIG" ? "NO_LLM_CONFIG" : e.message);

@@ -69,6 +69,17 @@ export const SETTINGS_TOUR = {
 // Highlights per release, shown once after an update (newest first).
 export const RELEASE_NOTES = [
   {
+    version: "2.2.0",
+    title: "What's new in SaralForce 2.2",
+    items: [
+      "New objects now show up in the App Launcher: the builder checks your access, fixes it, and shows a checklist with Fix it.",
+      "Show in app: add the new tab to a Lightning app's nav bar; new fields go on every page layout.",
+      "Field suggestions while you type formulas, rules and list views, with missing fields caught before deploy.",
+      "See AI usage: a short note shows the tokens after each ✨ request; ? → AI usage shows the exact input and output.",
+      "Redesigned Settings (AI is optional) and a simpler App Tab Manager."
+    ]
+  },
+  {
     version: "2.1.0",
     title: "What's new in SaralForce 2.1",
     items: [

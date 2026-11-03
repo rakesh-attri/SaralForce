@@ -8,6 +8,7 @@ import {initSettings} from "./core/storage.js";
 import {openInspectorInNewTab} from "./core/preferences.js";
 import {showMenu} from "./ui/tour.js";
 import {installMessageFocus} from "./ui/message-focus.js";
+import {mountAiUsage, openAiUsage} from "./ui/ai-usage-ui.js";
 import {runTour, autoStartPanelTours, autoStartBuilderTour, showReleaseNotes} from "./ui/tour-runner.js";
 import {PANEL_TOUR, BUILDER_TOUR, tabTour} from "./ui/tour-content.js";
 import {getThemePreference, setThemePreference, applyTheme, resolveTheme, nextThemePreference, themeLabel, watchSystemTheme} from "./core/theme.js";
@@ -147,6 +148,7 @@ class App extends React.Component {
       items.push({label: `Tour this tool (${label})`, onSelect: () => runTour(tabTour(tabId))});
     }
     items.push({label: "What's new", onSelect: () => showReleaseNotes()});
+    items.push({label: "✨ AI usage (tokens, input, output)", onSelect: () => openAiUsage()});
     items.push({label: "Open Settings", onSelect: () => chrome.runtime.sendMessage({message: "openOptions", host: this.props.sfHost})});
     items.push({label: "Help", onSelect: () => window.open(HELP_URL, "_blank", "noopener,noreferrer")});
     showMenu(anchor, items);
@@ -577,7 +579,8 @@ class App extends React.Component {
         this.setState({streamingText: text});
       };
 
-      const response = await askAi({messages: apiMessages, onChunk});
+      const response = await askAi({messages: apiMessages, onChunk,
+        feature: currentProposal ? "Object Builder · change plan" : "Object Builder · design"});
 
       this.setState({streamingText: ""});
 
@@ -663,7 +666,7 @@ class App extends React.Component {
         {role: "user", content: `Draft request to improve:${proposalCtx}\n\n"${draft}"`}
       ];
 
-      const response = await askAi({messages: apiMessages});
+      const response = await askAi({messages: apiMessages, feature: "Enhance Prompt"});
 
       const enhanced = String(response || "").trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
       if (!enhanced) throw new Error("LLM returned an empty enhancement.");
@@ -3267,6 +3270,8 @@ if (!sfHost) {
 
     // Bring new success / error messages into view after user actions.
     installMessageFocus(document.getElementById("root"));
+    // Ghost note after each AI request + the AI usage drawer.
+    mountAiUsage();
     ReactDOM.render(
       h(App, {sfHost}),
       document.getElementById("root"),

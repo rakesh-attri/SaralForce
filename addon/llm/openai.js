@@ -1,3 +1,5 @@
+import {usageFromOpenAI} from "../core/ai-usage.js";
+
 const API_BASE = "https://api.openai.com/v1";
 export const OPENAI_DEFAULT_MODEL = "gpt-5.6-terra";
 
@@ -14,7 +16,8 @@ export class OpenAIProvider {
     this.name = "OpenAI";
   }
 
-  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal} = {}) {
+  // onUsage({input, output, reasoning}) reports the tokens the API counted.
+  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal, onUsage} = {}) {
     const response = await fetch(`${API_BASE}/chat/completions`, {
       method: "POST",
       headers: {
@@ -25,7 +28,9 @@ export class OpenAIProvider {
         model: model || OPENAI_DEFAULT_MODEL,
         messages: messages,
         max_completion_tokens: MAX_COMPLETION_TOKENS,
-        stream: !!onChunk
+        stream: !!onChunk,
+        // Streams only report usage (in a last chunk) when asked.
+        ...(onChunk ? {stream_options: {include_usage: true}} : {})
       }),
       signal
     });
@@ -36,10 +41,11 @@ export class OpenAIProvider {
     }
 
     if (onChunk) {
-      return this._handleStream(response, onChunk);
+      return this._handleStream(response, onChunk, onUsage);
     }
 
     const data = await response.json();
+    if (onUsage) onUsage(usageFromOpenAI(data.usage));
     const choice = data.choices?.[0];
     if (choice?.message?.refusal) {
       throw new Error(choice.message.refusal);
@@ -63,11 +69,12 @@ export class OpenAIProvider {
       .reverse();
   }
 
-  async _handleStream(response, onChunk) {
+  async _handleStream(response, onChunk, onUsage) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullText = "";
     let buffer = "";
+    let usage = null;
 
     while (true) {
       const {done, value} = await reader.read();
@@ -83,7 +90,8 @@ export class OpenAIProvider {
           if (data === "[DONE]") continue;
           try {
             const parsed = JSON.parse(data);
-            const content = parsed.choices[0]?.delta?.content;
+            if (parsed.usage) usage = parsed.usage;
+            const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               fullText += content;
               onChunk(fullText);
@@ -95,6 +103,7 @@ export class OpenAIProvider {
       }
     }
 
+    if (onUsage) onUsage(usageFromOpenAI(usage));
     return fullText;
   }
 }

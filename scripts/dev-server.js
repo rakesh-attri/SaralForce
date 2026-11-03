@@ -550,16 +550,20 @@ function mockLlm(req, res) {
       : /suggest|fix/i.test(system) && /fixedQuery/.test(system)
       ? JSON.stringify({explanation: "Mock fix.", fixedQuery: "SELECT Id, Name FROM Account LIMIT 50"})
       : "Returns the Id and Name of up to 50 Account records. There is no filter, so any 50 accounts may come back.";
+    // Token usage like a real endpoint (about 4 characters a token).
+    const promptTokens = Math.round(JSON.stringify(body.messages || []).length / 4);
+    const usage = {prompt_tokens: promptTokens, completion_tokens: Math.round(content.length / 4),
+      total_tokens: promptTokens + Math.round(content.length / 4)};
     if (body.stream) {
       // Server-sent events in a few chunks, like a real streaming provider.
       res.writeHead(200, {"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*"});
       for (let i = 0; i < content.length; i += 400) {
         res.write(`data: ${JSON.stringify({id: "mock", object: "chat.completion.chunk", choices: [{index: 0, delta: {content: content.slice(i, i + 400)}}]})}\n\n`);
       }
-      res.write(`data: ${JSON.stringify({id: "mock", choices: [{index: 0, delta: {}, finish_reason: "stop"}]})}\n\n`);
+      res.write(`data: ${JSON.stringify({id: "mock", choices: [{index: 0, delta: {}, finish_reason: "stop"}], usage})}\n\n`);
       return res.end("data: [DONE]\n\n");
     }
-    json(res, 200, {id: "mock", object: "chat.completion", choices: [{index: 0, message: {role: "assistant", content}, finish_reason: "stop"}]});
+    json(res, 200, {id: "mock", object: "chat.completion", choices: [{index: 0, message: {role: "assistant", content}, finish_reason: "stop"}], usage});
   });
 }
 
