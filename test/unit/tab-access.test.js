@@ -60,7 +60,7 @@ test("everything set but not in the launcher yet asks for a refresh", () => {
 test("app membership and report", () => {
   const r = explainTabAccess({...ok, app: {label: "Sales", onApp: false}});
   assert.equal(byKey(r, "app").fix, "add-to-app");
-  assert.match(tabAccessReport("Home_Page__c", ok), /OK  Tab visible to you/);
+  assert.match(tabAccessReport("Home_Page__c", ok), /OK {2}Tab visible to you/);
 });
 
 test("app line explains why an app tab is not in the nav bar yet", () => {
