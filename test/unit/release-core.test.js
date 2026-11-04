@@ -118,7 +118,7 @@ test("package.xml parse, merge, members", () => {
   assert.deepEqual(m, {ApexClass: ["A", "B"], CustomField: ["X__c.F__c"]});
   assert.deepEqual(mergeMembers(m, {ApexClass: ["C", "A"]}).ApexClass, ["A", "B", "C"]);
   assert.deepEqual(membersFromKeys(["ApexClass:Z", "Flow:F", "ApexClass:Y"]), {ApexClass: ["Y", "Z"], Flow: ["F"]});
-  assert.equal(chunkMembers({ApexClass: ["a", "b", "c"]}, 2).length, 2);
+  assert.equal(chunkMembers({ApexClass: ["a", "b", "c"]}, 4).length, 2);
   assert.ok(deployExtraFiles({ApexClass: ["Old"]}, "67.0")["destructiveChangesPost.xml"].includes("<members>Old</members>"));
   assert.deepEqual(deployExtraFiles({}, "67.0"), {});
 });
@@ -194,4 +194,50 @@ test("deploy entries: only the chosen fields go into the object file", async () 
   const both = new Map(buildDeployEntries([compKey("CustomObject", "Invoice__c"), compKey("ValidationRule", "Invoice__c.Positive")], comps, "67.0").entries);
   const o = both.get("objects/Invoice__c.object");
   assert.ok(o.indexOf("<label>") < o.indexOf("<validationRules>"));
+});
+
+test("deletes can run before the deploy", async () => {
+  const {buildDeployEntries} = await import("../../addon/core/deploy.js");
+  const files = new Map(buildDeployEntries([], new Map(), "67.0", {destructive: {ApexClass: ["Old"]}, post: false}).entries);
+  assert.ok(files.has("destructiveChanges.xml"));
+  assert.ok(!files.has("destructiveChangesPost.xml"));
+});
+
+test("review fixes: merge parts, comments, order, members, profiles, folders", async () => {
+  const d = await import("../../addon/core/deploy.js");
+  // Two retrieve parts with the same object file keep both halves.
+  const a = `<?xml version="1.0"?><CustomObject xmlns="x"><fields><fullName>A__c</fullName></fields><label>Inv</label></CustomObject>`;
+  const b = `<?xml version="1.0"?><CustomObject xmlns="x"><validationRules><fullName>R</fullName></validationRules></CustomObject>`;
+  const merged = d.mergeZipFiles(new Map([["objects/Inv__c.object", textToBytes(a)]]), new Map([["objects/Inv__c.object", textToBytes(b)]]), bytesToText);
+  const comps = d.componentsFromZip(merged, bytesToText);
+  assert.ok(comps.has("CustomField:Inv__c.A__c") && comps.has("ValidationRule:Inv__c.R"));
+  // Comments are not members.
+  assert.deepEqual(d.parsePackageXml("<Package><types><!-- <members>Old</members> --><members>New</members><name>ApexClass</name></types></Package>"), {ApexClass: ["New"]});
+  // Schema order: fieldSets before fields.
+  const obj = d.assembleParentFile("CustomObject", "", ["<fields><fullName>F</fullName></fields>", "<fieldSets><fullName>S</fullName></fieldSets>"]);
+  assert.ok(obj.indexOf("<fieldSets>") < obj.indexOf("<fields>"));
+  // CustomObject member brings children; CustomLabels brings labels.
+  const all = new Map([["CustomObject:Inv__c", {}], ["CustomField:Inv__c.A__c", {}], ["CustomField:Other__c.B__c", {}], ["CustomLabel:Hi", {}]]);
+  assert.deepEqual(d.expandMemberKeys({CustomObject: ["Inv__c"], CustomLabels: ["CustomLabels"]}, all).sort(),
+    ["CustomField:Inv__c.A__c", "CustomLabel:Hi", "CustomLabels:CustomLabels", "CustomObject:Inv__c"]);
+  // Profiles keep access only for components in the deploy.
+  const prof = `<Profile><fieldPermissions><field>Inv__c.A__c</field><readable>true</readable></fieldPermissions><fieldPermissions><field>Other__c.B__c</field></fieldPermissions><classAccesses><apexClass>X</apexClass></classAccesses><userLicense>Salesforce</userLicense></Profile>`;
+  const t = d.trimProfile(prof, ["CustomField:Inv__c.A__c"]);
+  assert.ok(t.includes("Inv__c.A__c") && !t.includes("Other__c.B__c") && !t.includes("<apexClass>X") && t.includes("userLicense"));
+  assert.deepEqual(d.permissionRefs(prof).sort(), ["ApexClass:X", "CustomField:Inv__c.A__c", "CustomField:Other__c.B__c"]);
+  // A new report needs its folder.
+  const rows = [{key: "Report:Sales", type: "Report", fullName: "Sales", status: "new"}, {key: "Report:Sales/Pipe", type: "Report", fullName: "Sales/Pipe", status: "new"}];
+  assert.deepEqual(d.dependencyGaps(rows, new Set(["Report:Sales/Pipe"])).map(g => g.key), ["Report:Sales"]);
+  // Namespaced dev org: unmanaged rows stay.
+  assert.equal(d.keepListRow({fullName: "a", namespacePrefix: "acme", manageableState: "unmanaged"}), true);
+});
+
+test("compressed deploy zips round-trip and are smaller", async () => {
+  const {writeZipCompressed} = await import("../../addon/core/zip.js");
+  const big = "<fields><fullName>A__c</fullName></fields>\n".repeat(500);
+  const zip = await writeZipCompressed([["objects/A__c.object", big], ["classes/B.cls", "x"], ["s.resource", new Uint8Array([1, 2, 3])]]);
+  assert.ok(zip.length < big.length / 5);
+  const files = await readZip(zip);
+  assert.equal(bytesToText(files.get("objects/A__c.object")), big);
+  assert.deepEqual([...files.get("s.resource")], [1, 2, 3]);
 });

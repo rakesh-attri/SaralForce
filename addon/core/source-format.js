@@ -2,7 +2,11 @@
 // so releases and snapshots can be committed to Git and a Git branch can be
 // deployed. Pure: works on components (deploy.js componentsFromZip shape)
 // and plain file maps.
-import {TYPE_BY_NAME, METADATA_TYPES, assembleParentFile, componentsFromZip, compKey} from "./deploy.js";
+import {TYPE_BY_NAME, METADATA_TYPES, assembleParentFile, componentsFromZip, compKey, pathToComponent} from "./deploy.js";
+import {writeZip} from "./zip.js";
+
+// Folder meta files: mdapi "reports/Sales-meta.xml" ↔ DX "reports/Sales.reportFolder-meta.xml".
+const FOLDER_SUFFIX = {reports: "reportFolder", dashboards: "dashboardFolder", email: "emailFolder", documents: "documentFolder"};
 
 // Child types of objects: source folder and file suffix.
 const CHILD_SOURCE = {
@@ -58,6 +62,11 @@ export function toSourceFiles(comps, base = "force-app/main/default") {
         continue;
       }
       const def = TYPE_BY_NAME[c.type];
+      const dir = path.split("/")[0];
+      if (def && def.folder && FOLDER_SUFFIX[dir] && /^[^/]+\/[^/]+-meta\.xml$/.test(path) && !c.fullName.includes("/")) {
+        out.set(joinPath(base, path.replace(/-meta\.xml$/, `.${FOLDER_SUFFIX[dir]}-meta.xml`)), raw || text);
+        continue;
+      }
       // Types without a -meta.xml companion get the suffix added in source format.
       const needsMeta = def && !def.meta && !def.bundle && !path.endsWith("-meta.xml");
       out.set(joinPath(base, needsMeta ? path + "-meta.xml" : path), raw || text);
@@ -75,6 +84,7 @@ const DIRS = new Set(METADATA_TYPES.filter(t => t.dir).map(t => t.dir));
 // Source files (Map relPath under base → bytes) → Metadata API files map.
 export function sourceToMdapi(files, decode) {
   const mdapi = new Map();
+  const resourceDirs = new Map(); // name → Map(inner path → bytes)
   const objects = new Map(); // name → {parent, children: []}
   const obj = name => {
     if (!objects.has(name)) objects.set(name, {parent: "", children: []});
@@ -94,10 +104,25 @@ export function sourceToMdapi(files, decode) {
       mdapi.set("labels/CustomLabels.labels", bytes);
       continue;
     }
+    if (parts[0] === "staticresources") {
+      // DX keeps the content as Name.<ext> or an expanded Name/ folder.
+      if (parts.length > 2) {
+        if (!resourceDirs.has(parts[1])) resourceDirs.set(parts[1], new Map());
+        resourceDirs.get(parts[1]).set(parts.slice(2).join("/"), bytes);
+      } else if (path.endsWith(".resource-meta.xml")) mdapi.set(path, bytes);
+      else mdapi.set(`staticresources/${parts[1].replace(/\.[^.]+$/, "")}.resource`, bytes);
+      continue;
+    }
+    const folderSuffix = FOLDER_SUFFIX[parts[0]];
+    if (folderSuffix && parts.length === 2 && path.endsWith(`.${folderSuffix}-meta.xml`)) {
+      mdapi.set(path.replace(`.${folderSuffix}-meta.xml`, "-meta.xml"), bytes);
+      continue;
+    }
     const def = METADATA_TYPES.find(t => t.dir === parts[0]);
     if (def && !def.meta && !def.bundle && path.endsWith("-meta.xml")) mdapi.set(path.replace(/-meta\.xml$/, ""), bytes);
     else mdapi.set(path, bytes);
   }
+  for (const [name, inner] of resourceDirs) mdapi.set(`staticresources/${name}.resource`, writeZip(inner));
   for (const [name, o] of objects) {
     const parentInner = o.parent ? o.parent : "";
     mdapi.set(`objects/${name}.object`, assembleParentFile("CustomObject", parentInner, o.children));
@@ -117,4 +142,25 @@ export function componentsFromSource(files, decode) {
 export function keysOfTypes(comps, types) {
   const want = new Set(types);
   return [...comps.values()].filter(c => want.has(c.type)).map(c => compKey(c.type, c.fullName));
+}
+
+// The component a DX path belongs to ({type, fullName}) or null.
+export function sourcePathType(rel) {
+  const parts = String(rel).split("/");
+  if (parts[0] === "objects" && parts.length >= 3) {
+    if (parts.length === 3) return {type: "CustomObject", fullName: parts[1]};
+    const child = CHILD_BY_DIR[parts[2]];
+    if (child && parts.length === 4) return {type: child.type, fullName: parts[1] + "." + parts[3].replace(/\.[^.]+-meta\.xml$/, "")};
+    return null;
+  }
+  if (parts[0] === "labels") return {type: "CustomLabel", fullName: "*"};
+  if (parts[0] === "staticresources" && parts.length >= 2) return {type: "StaticResource", fullName: parts[1].replace(/\.resource-meta\.xml$/, "").replace(/\.[^.]+$/, "")};
+  const folderSuffix = FOLDER_SUFFIX[parts[0]];
+  if (folderSuffix && parts.length === 2 && rel.endsWith(`.${folderSuffix}-meta.xml`)) {
+    const def = METADATA_TYPES.find(t => t.dir === parts[0]);
+    return def ? {type: def.name, fullName: parts[1].replace(`.${folderSuffix}-meta.xml`, "")} : null;
+  }
+  const def = METADATA_TYPES.find(t => t.dir === parts[0]);
+  const mdapi = def && !def.meta && !def.bundle ? rel.replace(/-meta\.xml$/, "") : rel;
+  return pathToComponent(mdapi);
 }

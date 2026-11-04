@@ -49,6 +49,12 @@ export const METADATA_TYPES = [
   {name: "NamedCredential", label: "Named credential", dir: "namedCredentials", suffix: "namedCredential"},
   {name: "ExternalCredential", label: "External credential", dir: "externalCredentials", suffix: "externalCredential"},
   {name: "ConnectedApp", label: "Connected app", dir: "connectedApps", suffix: "connectedApp"},
+  {name: "ExternalDataSource", label: "External data source", dir: "dataSources", suffix: "dataSource"},
+  {name: "CspTrustedSite", label: "CSP trusted site", dir: "cspTrustedSites", suffix: "cspTrustedSite"},
+  {name: "ExternalServiceRegistration", label: "External service", dir: "externalServiceRegistrations", suffix: "externalServiceRegistration"},
+  {name: "ExternalClientApplication", label: "External client app", dir: "externalClientApps", suffix: "eca"},
+  {name: "ExtlClntAppOauthSettings", label: "External client app OAuth settings", dir: "extlClntAppOauthSettings", suffix: "ecaOauth"},
+  {name: "ExtlClntAppOauthConfigurablePolicies", label: "External client app OAuth policies", dir: "extlClntAppOauthPolicies", suffix: "ecaOauthPlcy"},
   {name: "ApprovalProcess", label: "Approval process", dir: "approvalProcesses", suffix: "approvalProcess"},
   {name: "PathAssistant", label: "Path", dir: "pathAssistants", suffix: "pathAssistant"},
   {name: "DuplicateRule", label: "Duplicate rule", dir: "duplicateRules", suffix: "duplicateRule"},
@@ -74,7 +80,9 @@ export const TYPE_PRESETS = [
   {id: "objects", label: "Objects & fields", types: ["CustomObject", "CustomField", "ValidationRule", "RecordType", "ListView", "WebLink", "CompactLayout", "FieldSet", "BusinessProcess", "GlobalValueSet"]},
   {id: "pages", label: "Layouts & pages", types: ["Layout", "FlexiPage", "QuickAction", "CustomTab", "CustomApplication", "PathAssistant"]},
   {id: "security", label: "Security", types: ["PermissionSet", "PermissionSetGroup", "CustomPermission", "Profile"]},
-  {id: "config", label: "Config & labels", types: ["CustomMetadata", "CustomLabel", "RemoteSiteSetting", "NamedCredential", "ExternalCredential", "CustomNotificationType", "DuplicateRule", "ApprovalProcess"]},
+  {id: "config", label: "Config & labels", types: ["CustomMetadata", "CustomLabel", "CustomNotificationType", "DuplicateRule", "ApprovalProcess"]},
+  {id: "integrations", label: "Integrations", types: ["NamedCredential", "ExternalCredential", "ExternalDataSource", "RemoteSiteSetting", "CspTrustedSite",
+    "ExternalServiceRegistration", "ConnectedApp", "ExternalClientApplication", "ExtlClntAppOauthSettings", "ExtlClntAppOauthConfigurablePolicies"]},
   {id: "content", label: "Email & reports", types: ["EmailTemplate", "Report", "Dashboard"]}
 ];
 
@@ -102,7 +110,7 @@ export function keepListRow(row) {
   if (!row || !row.fullName) return false;
   const st = row.manageableState;
   if (st && st !== "unmanaged") return false;
-  if (row.namespacePrefix) return false;
+  if (!st && row.namespacePrefix) return false;
   return true;
 }
 
@@ -223,14 +231,15 @@ export function assembleParentFile(rootTag, parentText, childTexts) {
     const m = /^<([A-Za-z_][\w.:-]*)/.exec(t.trim());
     parts.push({tag: m ? m[1] : "", text: t.trim()});
   }
-  const sorted = parts.map((p, i) => ({...p, i})).sort((a, b) => a.tag.localeCompare(b.tag) || a.i - b.i);
+  const sorted = parts.map((p, i) => ({...p, i})).sort((a, b) => (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : a.i - b.i));
   return XML_HEAD + `<${rootTag} xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
     sorted.map(p => "    " + p.text.trim()).join("\n") + `\n</${rootTag}>\n`;
 }
 
 // Zip entries for deploying exactly `keys` from `comps` (componentsFromZip):
 // [[path, Uint8Array|string]] incl. package.xml and destructive changes.
-export function buildDeployEntries(keys, comps, apiVersion, {destructive = null} = {}) {
+// post=false runs deletes before the deploy (destructiveChanges.xml).
+export function buildDeployEntries(keys, comps, apiVersion, {destructive = null, post = true, trimProfiles = false, passthrough = null, extraMembers = null} = {}) {
   const entries = new Map();
   const parents = new Map(); // parent path → {rootTag, parentText, children[]}
   const included = [];
@@ -248,14 +257,18 @@ export function buildDeployEntries(keys, comps, apiVersion, {destructive = null}
       } else if (c.type === "CustomObject") {
         if (!parents.has(path)) parents.set(path, {rootTag: "CustomObject", parentText: "", children: []});
         parents.get(path).parentText = text;
+      } else if (trimProfiles && c.type === "Profile" && !path.endsWith("-meta.xml")) {
+        entries.set(path, trimProfile(text, keys));
       } else {
         entries.set(path, (c.raw && c.raw[path]) || text);
       }
     }
   }
   for (const [path, p] of parents) entries.set(path, assembleParentFile(p.rootTag, p.parentText, p.children));
-  entries.set("package.xml", buildPackageXml(membersFromKeys(included), apiVersion));
-  for (const [path, text] of Object.entries(deployExtraFiles(destructive, apiVersion))) entries.set(path, text);
+  // Files of types SaralForce doesn't model (Workflow, Settings…) go as retrieved.
+  if (passthrough) for (const [path, bytes] of passthrough) if (!entries.has(path)) entries.set(path, bytes);
+  entries.set("package.xml", buildPackageXml(mergeMembers(membersFromKeys(included), extraMembers || {}), apiVersion));
+  for (const [path, text] of Object.entries(deployExtraFiles(destructive, apiVersion, {post}))) entries.set(path, text);
   return {entries: [...entries.entries()], included};
 }
 
@@ -345,8 +358,9 @@ function xmlUnescape(s) {
 export function parsePackageXml(xml) {
   const out = {};
   const re = /<types>([\s\S]*?)<\/types>/g;
+  const text = String(xml || "").replace(/<!--[\s\S]*?-->/g, "");
   let m;
-  while ((m = re.exec(String(xml || "")))) {
+  while ((m = re.exec(text))) {
     const name = (/<name>([^<]*)<\/name>/.exec(m[1]) || [])[1];
     if (!name) continue;
     const members = [...m[1].matchAll(/<members>([^<]*)<\/members>/g)].map(x => xmlUnescape(x[1].trim()));
@@ -369,9 +383,121 @@ export function deployExtraFiles(destructive, apiVersion, {post = true} = {}) {
 }
 
 // Retrieves are capped at 10,000 files; keep chunks well under that.
-export function chunkMembers(members, size = 2500) {
+// Bundles hold several files; types with -meta.xml two.
+function fileWeight(key) {
+  const t = TYPE_BY_NAME[splitKey(key).type];
+  if (!t) return 1;
+  if (t.bundle) return 8;
+  return t.meta ? 2 : 1;
+}
+
+export function chunkMembers(members, maxFiles = 5000) {
   const keys = keysFromMembers(members);
-  return chunk(keys, size).map(membersFromKeys);
+  const out = [];
+  let cur = [];
+  let weight = 0;
+  for (const k of keys) {
+    const w = fileWeight(k);
+    if (cur.length && weight + w > maxFiles) { out.push(cur); cur = []; weight = 0; }
+    cur.push(k);
+    weight += w;
+  }
+  if (cur.length) out.push(cur);
+  return out.map(membersFromKeys);
+}
+
+// Two copies of one parent file (objects/X.object, labels/CustomLabels.labels)
+// from different retrieve parts → one file holding the elements of both.
+export function mergeParentXml(a, b) {
+  const rootTag = (/<(CustomObject|CustomLabels)\b/.exec(a) || /<(CustomObject|CustomLabels)\b/.exec(b) || [])[1] || "CustomObject";
+  const seen = new Map();
+  for (const xml of [a, b]) {
+    for (const el of topLevelElements(xml)) {
+      const text = xml.slice(el.start, el.end);
+      const name = innerFullName(text);
+      const key = el.tag + "|" + (name || text);
+      if (!seen.has(key)) seen.set(key, text);
+    }
+  }
+  return assembleParentFile(rootTag, "", [...seen.values()]);
+}
+
+const PARENT_FILE = /^(unpackaged\/)?(objects\/[^/]+\.object|labels\/[^/]+\.labels)$/;
+
+// Adds a retrieve part's files to the running map, merging parent files.
+export function mergeZipFiles(into, part, decode) {
+  for (const [path, bytes] of part) {
+    if (into.has(path) && PARENT_FILE.test(path)) {
+      into.set(path, new TextEncoder().encode(mergeParentXml(decode(into.get(path)), decode(bytes))));
+    } else into.set(path, bytes);
+  }
+  return into;
+}
+
+// Package members → component keys, the way Salesforce reads them:
+// CustomObject X brings its fields, rules…; CustomLabels brings every label;
+// "*" means every retrieved component of the type.
+export function expandMemberKeys(members, comps) {
+  const keys = [];
+  const all = [...comps.keys()];
+  for (const [type, names] of Object.entries(members || {})) {
+    for (const n of names) {
+      if (n === "*") { all.filter(k => splitKey(k).type === type).forEach(k => keys.push(k)); }
+      else keys.push(compKey(type, n));
+      if (type === "CustomObject") {
+        all.filter(k => {
+          const p = splitKey(k);
+          return TYPE_BY_NAME[p.type] && TYPE_BY_NAME[p.type].parent === "CustomObject" && (n === "*" || p.fullName.startsWith(n + "."));
+        }).forEach(k => keys.push(k));
+      }
+      if (type === "CustomLabels") all.filter(k => splitKey(k).type === "CustomLabel").forEach(k => keys.push(k));
+    }
+  }
+  return [...new Set(keys)];
+}
+
+// Permission elements of a Profile and the component they point at.
+const PERM_REFS = {
+  fieldPermissions: ["field", "CustomField"], objectPermissions: ["object", "CustomObject"],
+  classAccesses: ["apexClass", "ApexClass"], pageAccesses: ["apexPage", "ApexPage"],
+  tabVisibilities: ["tab", "CustomTab"], recordTypeVisibilities: ["recordType", "RecordType"],
+  layoutAssignments: ["layout", "Layout"], flowAccesses: ["flow", "Flow"], customPermissions: ["name", "CustomPermission"]
+};
+
+// Keys a Profile / PermissionSet file refers to (for rollback retrieves).
+export function permissionRefs(xml) {
+  const out = new Set();
+  for (const el of topLevelElements(xml || "")) {
+    const ref = PERM_REFS[el.tag];
+    if (!ref) continue;
+    const m = new RegExp("<" + ref[0] + ">([^<]+)</" + ref[0] + ">").exec(xml.slice(el.start, el.end));
+    if (m) out.add(compKey(ref[1], m[1]));
+  }
+  return [...out];
+}
+
+// A Profile retrieved in a compare carries access for everything retrieved
+// with it. Keep only the access lines for components in this deploy (what
+// Gearset does), plus the profile's own settings.
+export function trimProfile(xml, includedKeys) {
+  const keep = new Set(includedKeys);
+  const objects = new Set([...keep].filter(k => k.startsWith("CustomObject:")).map(k => splitKey(k).fullName));
+  for (const k of keep) if (k.startsWith("CustomField:")) objects.add(splitKey(k).fullName.split(".")[0]);
+  let out = "";
+  let last = 0;
+  for (const el of topLevelElements(xml)) {
+    const ref = PERM_REFS[el.tag];
+    if (!ref) continue;
+    const text = xml.slice(el.start, el.end);
+    const m = new RegExp("<" + ref[0] + ">([^<]+)</" + ref[0] + ">").exec(text);
+    const key = m ? compKey(ref[1], m[1]) : "";
+    const ok = keep.has(key) || (ref[1] === "CustomObject" && m && objects.has(m[1])) ||
+      (ref[1] === "Layout" && m && objects.has(m[1].split("-")[0]) && [...keep].some(k => k.startsWith("Layout:")));
+    if (ok) continue;
+    out += xml.slice(last, el.start).replace(/[ \t]*$/, "");
+    last = el.end;
+  }
+  return out + xml.slice(last);
 }
 
 // ── Dependency gaps ───────────────────────────────────────────────────
@@ -431,6 +557,11 @@ export function dependencyGaps(rows, selected, {edges = []} = {}) {
         if (fields.length === 1) need(fields[0], key);
       }
     }
+  }
+  // Reports, dashboards, email templates need their folder.
+  for (const key of selected) {
+    const {type, fullName} = splitKey(key);
+    if (TYPE_BY_NAME[type] && TYPE_BY_NAME[type].folder && fullName.includes("/")) need(compKey(type, fullName.split("/")[0]), key);
   }
   for (const e of edges) if (selected.has(e.from)) need(e.to, e.from);
   return [...missing.entries()].map(([key, by]) => ({key, ...splitKey(key), neededBy: [...by]}));

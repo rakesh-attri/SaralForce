@@ -12894,3 +12894,20 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
 .rel-orgbar > .rel-swap {
   align-self: flex-start;
 }
+
+
+.rel-branch {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.rel-relname-cell {
+  font-family: var(--font-ui);
+  white-space: normal;
+}
+
+.rel-relname .soql-save-input {
+  flex: 1 1 320px;
+}

@@ -4,9 +4,11 @@ import {nextVersion, rollbackPlan, restoreFromDrift, trimSummary, formatBytes, l
 
 test("versions count real deploys per target org", () => {
   const list = [
-    {targetHost: "uat", kind: "deploy"}, {targetHost: "uat", kind: "validation"},
-    {targetHost: "uat", kind: "rollback"}, {targetHost: "prod", kind: "quick"}
+    {targetHost: "uat", kind: "deploy", version: "v1"}, {targetHost: "uat", kind: "validation"},
+    {targetHost: "uat", kind: "rollback", version: "v2"}, {targetHost: "prod", kind: "quick", version: "v1"}
   ];
+  // A deleted v2 never makes the next one repeat v3.
+  assert.equal(nextVersion([{targetHost: "x", kind: "deploy", version: "v1"}, {targetHost: "x", kind: "deploy", version: "v3"}], "x"), "v4");
   assert.equal(nextVersion(list, "uat"), "v3");
   assert.equal(nextVersion(list, "prod"), "v2");
   assert.equal(nextVersion([], "dev"), "v1");
@@ -46,4 +48,11 @@ test("sizes and last release", () => {
     {sourceHost: "dev", kind: "validation", success: true, at: "2026-11-01"}, {sourceHost: "dev", kind: "deploy", success: false, at: "2026-11-02"}];
   assert.equal(lastReleaseAt(list, "dev"), "2026-10-20");
   assert.equal(lastReleaseAt(list, "x"), "");
+});
+
+test("rollback brings an object's children and ignores case", () => {
+  const plan = rollbackPlan({items: ["CustomObject:Inv__c", "ApexClass:MyClass"], deletes: []},
+    new Set(["CustomObject:Inv__c", "CustomField:Inv__c.A__c", "ValidationRule:Inv__c.R", "ApexClass:myClass"]), []);
+  assert.deepEqual(plan.restore.sort(), ["ApexClass:myClass", "CustomField:Inv__c.A__c", "CustomObject:Inv__c", "ValidationRule:Inv__c.R"]);
+  assert.deepEqual(plan.unknown, []);
 });

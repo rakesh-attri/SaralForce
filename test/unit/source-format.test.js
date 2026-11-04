@@ -54,3 +54,27 @@ test("source → components round-trips content", () => {
   }
   assert.ok(sourceToMdapi(bytes, bytesToText).has("layouts/Invoice__c-Main.layout"));
 });
+
+test("DX static resources and folders map back to the Metadata API", async () => {
+  const {readZip} = await import("../../addon/core/zip.js");
+  const {sourcePathType} = await import("../../addon/core/source-format.js");
+  const files = new Map([
+    ["staticresources/logo.png", new Uint8Array([9, 9])],
+    ["staticresources/logo.resource-meta.xml", textToBytes("<StaticResource/>")],
+    ["staticresources/lib/js/a.js", textToBytes("var a;")],
+    ["staticresources/lib.resource-meta.xml", textToBytes("<StaticResource/>")],
+    ["reports/Sales.reportFolder-meta.xml", textToBytes("<ReportFolder/>")]
+  ]);
+  const md = sourceToMdapi(files, bytesToText);
+  assert.deepEqual([...md.get("staticresources/logo.resource")], [9, 9]);
+  const inner = await readZip(md.get("staticresources/lib.resource"));
+  assert.equal(bytesToText(inner.get("js/a.js")), "var a;");
+  assert.ok(md.has("reports/Sales-meta.xml"));
+  const comps = componentsFromSource(files, bytesToText);
+  assert.ok(comps.has("StaticResource:logo") && comps.has("StaticResource:lib") && comps.has("Report:Sales"));
+  // And back to DX for a folder.
+  assert.ok([...toSourceFiles(comps, "").keys()].includes("reports/Sales.reportFolder-meta.xml"));
+  assert.deepEqual(sourcePathType("objects/Inv__c/fields/A__c.field-meta.xml"), {type: "CustomField", fullName: "Inv__c.A__c"});
+  assert.deepEqual(sourcePathType("classes/A.cls"), {type: "ApexClass", fullName: "A"});
+  assert.deepEqual(sourcePathType("layouts/Inv__c-Main.layout-meta.xml"), {type: "Layout", fullName: "Inv__c-Main"});
+});

@@ -1,14 +1,16 @@
 // Release Center → Compare: two orgs side by side, pick what to move.
 import {
   presetTypes, compKey, splitKey, typeLabel, membersFromKeys, chunkMembers, componentsFromZip,
-  classifyComponents, compareCounts, dependencyGaps, changesForPrompt, mergeMembers
+  classifyComponents, compareCounts, dependencyGaps, changesForPrompt, mergeMembers, mergeZipFiles
 } from "../../core/deploy.js";
 import {bytesToText} from "../../core/zip.js";
 import {listComponents, retrieve, queryAll} from "../shared/deploy-api.js";
 import {releaseNotesFromChanges} from "../shared/ai.js";
+import {permissionHolders} from "../../core/analyzers.js";
+import {putDraft} from "../shared/release-store.js";
 import {useFfSession} from "../shared/session-state.js";
 import {FFBadge} from "../shared/ui.js";
-import {useRelease, setRelease, releaseState, orgByHost, orgLabel, fmtWhen, gitComponents} from "./release-state.js";
+import {useRelease, setRelease, releaseState, orgByHost, orgLabel, fmtWhen, gitComponents, orgDayStart} from "./release-state.js";
 import {OrgBar, PresetPicker, DiffView, CardHead, STATUS_BADGE, AiAnswer, AiError} from "./release-ui.js";
 
 const h = React.createElement;
@@ -27,7 +29,7 @@ export async function retrieveAll(conn, keys, label, onStatus) {
   for (let i = 0; i < parts.length; i++) {
     onStatus(`Retrieving from ${label}${parts.length > 1 ? ` (part ${i + 1} of ${parts.length})` : ""}…`);
     const res = await retrieve(conn, parts[i], {onProgress: s => onStatus(`Retrieving from ${label}… ${s}`)});
-    for (const [p, b] of res.files) files.set(p, b);
+    mergeZipFiles(files, res.files, bytesToText);
     problems.push(...res.messages);
   }
   return {files, problems};
@@ -103,7 +105,7 @@ export async function runCompare({presets, since, onStatus}) {
   for (const list of [srcList, tgtList]) for (const k of [...list.keys()]) if (!keepObject(k)) list.delete(k);
   let srcKeys = [...srcList.keys()];
   if (since) {
-    const t = new Date(since).getTime();
+    const t = orgDayStart(since);
     srcKeys = srcKeys.filter(k => {
       const d = srcList.get(k).lastModifiedDate;
       return d && new Date(d).getTime() >= t;
@@ -176,6 +178,20 @@ export function CompareView({goTo}) {
     const next = new Set(sel);
     for (const r of shown) if (r.status !== "same") { if (on) next.add(r.key); else next.delete(r.key); }
     setRelease({selected: next});
+  };
+  const perms = React.useMemo(() => cmp ? permissionHolders(rows, sel) : [], [cmp, sel, rows]);
+  const addPerms = () => {
+    const next = new Set(sel);
+    perms.forEach(k => next.add(k));
+    setRelease({selected: next});
+  };
+  const [relName] = useFfSession("release", "relName", "");
+  const saveDraft = async () => {
+    const name = relName.trim() || `Draft ${`${new Date().toLocaleDateString(undefined, {day: "numeric", month: "short"})} ${new Date().toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"})}`}`;
+    await putDraft({name: name.trim(), members: membersFromKeys(deploying.map(r => r.key)), destructive: membersFromKeys(deleting.map(r => r.key)),
+      sourceName: orgByHost(cmp.sourceHost) ? orgByHost(cmp.sourceHost).name : cmp.sourceHost});
+    setAdded(`Saved draft “${name.trim()}”. Load it from Package.`);
+    setTimeout(() => setAdded(""), 3000);
   };
   const addMissing = () => {
     const next = new Set(sel);
@@ -250,6 +266,9 @@ export function CompareView({goTo}) {
         cmp.problems.slice(0, 50).map((p, i) => h("div", {key: i}, `${p.fileName}: ${p.problem}`))),
       notes && h(AiAnswer, {title: "Release notes", text: notes, onClose: () => setNotes(null)}),
       h(AiError, {error: aiErr}),
+      perms.length > 0 && h("div", {className: "insp-hint-strip rel-perms"},
+        `${perms.length} permission set(s)/profile(s) grant access to what you picked: ${perms.slice(0, 4).map(k => splitKey(k).fullName).join(", ")}${perms.length > 4 ? "…" : ""}. `,
+        h("button", {className: "field-action-btn", onClick: addPerms}, "Include them")),
       gaps.length > 0 && h("div", {className: "insp-warn rel-gaps"},
         h("div", null, h("b", null, `${gaps.length} thing(s) your selection needs are missing in the target and not selected:`)),
         h("ul", null, gaps.slice(0, 8).map(g => h("li", {key: g.key}, `${typeLabel(g.type)} ${g.fullName}`,
@@ -289,6 +308,7 @@ export function CompareView({goTo}) {
           setRelease({impactTarget: {host: cmp.targetHost, type: deleting[0].type, fullName: deleting[0].fullName}});
           goTo("impact");
         }}, "Check impact of delete"),
+        h("button", {className: "btn btn-secondary btn-sm", disabled: !sel.size, onClick: saveDraft, title: "Save this selection to reuse later (Package → Drafts)"}, "Save draft"),
         h("button", {className: "btn btn-secondary btn-sm", disabled: !deploying.length, onClick: addToPackage}, "Add to package"),
         h("button", {className: "btn btn-secondary btn-sm", disabled: !sel.size, onClick: () => setRelease({selected: new Set()})}, "Clear"),
         h("button", {className: "btn btn-primary btn-sm", disabled: !sel.size, onClick: () => goTo("deploy")}, "Next: validate & deploy →"))));

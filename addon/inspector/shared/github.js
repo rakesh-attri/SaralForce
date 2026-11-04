@@ -2,7 +2,11 @@
 // format, and read a branch as a deploy source. Uses the Git Data API with a
 // personal access token kept in this browser's extension storage.
 import {getSetting, setSetting} from "../../core/storage.js";
-import {bytesToBase64, base64ToBytes, textToBytes} from "../../core/zip.js";
+import {bytesToBase64, base64ToBytes, textToBytes, bytesToText} from "../../core/zip.js";
+import {mergeParentXml} from "../../core/deploy.js";
+
+// Branch names in URLs keep their slashes (release/v3).
+const refPath = b => String(b).split("/").map(encodeURIComponent).join("/");
 
 const API = "https://api.github.com";
 export const GITHUB_ORIGIN = "https://api.github.com/*";
@@ -56,16 +60,16 @@ export async function listBranches(cfg) {
   return (list || []).map(b => b.name);
 }
 
-async function branchSha(cfg, branch, {create = false} = {}) {
+async function branchSha(cfg, branch, {create = false, from = ""} = {}) {
   try {
-    const ref = await gh(cfg, `/repos/${cfg.repo}/git/ref/heads/${encodeURIComponent(branch)}`);
+    const ref = await gh(cfg, `/repos/${cfg.repo}/git/ref/heads/${refPath(branch)}`);
     return ref.object.sha;
   } catch (e) {
     if (e.status !== 404 || !create) throw e;
-    const info = await gh(cfg, `/repos/${cfg.repo}`);
-    const from = await gh(cfg, `/repos/${cfg.repo}/git/ref/heads/${encodeURIComponent(info.default_branch)}`);
-    await gh(cfg, `/repos/${cfg.repo}/git/refs`, {method: "POST", body: {ref: "refs/heads/" + branch, sha: from.object.sha}});
-    return from.object.sha;
+    const base = from || (await gh(cfg, `/repos/${cfg.repo}`)).default_branch;
+    const ref = await gh(cfg, `/repos/${cfg.repo}/git/ref/heads/${refPath(base)}`);
+    await gh(cfg, `/repos/${cfg.repo}/git/refs`, {method: "POST", body: {ref: "refs/heads/" + branch, sha: ref.object.sha}});
+    return ref.object.sha;
   }
 }
 
@@ -82,11 +86,25 @@ async function pool(items, size, fn) {
 }
 
 // files: Map(path → string | Uint8Array). Returns {sha, url, files}.
-export async function commitFiles(cfg, files, message, {branch, onStatus = () => {}} = {}) {
+// deletePaths: files to remove (only those that exist). mergeLabels: merge a
+// CustomLabels file with the branch's own instead of replacing it.
+export async function commitFiles(cfg, files, message, {branch, from, onStatus = () => {}, deletePaths = [], mergeLabels = true} = {}) {
   const br = branch || cfg.branch;
   onStatus(`Reading ${cfg.repo}@${br}…`);
-  const head = await branchSha(cfg, br, {create: true});
+  const head = await branchSha(cfg, br, {create: true, from});
   const commit = await gh(cfg, `/repos/${cfg.repo}/git/commits/${head}`);
+  const labelsPath = [...files.keys()].find(p => /labels\/CustomLabels\.labels-meta\.xml$/.test(p));
+  let existing = null;
+  if ((labelsPath && mergeLabels) || deletePaths.length) {
+    const full = await gh(cfg, `/repos/${cfg.repo}/git/trees/${commit.tree.sha}?recursive=1`);
+    existing = new Map((full.tree || []).filter(e => e.type === "blob").map(e => [e.path, e.sha]));
+  }
+  if (labelsPath && mergeLabels && existing && existing.has(labelsPath)) {
+    const old = await gh(cfg, `/repos/${cfg.repo}/git/blobs/${existing.get(labelsPath)}`);
+    const cur = files.get(labelsPath);
+    files = new Map(files);
+    files.set(labelsPath, mergeParentXml(bytesToText(base64ToBytes(old.content || "")), typeof cur === "string" ? cur : bytesToText(cur)));
+  }
   const list = [...files.entries()];
   let done = 0;
   const tree = await pool(list, 4, async ([path, data]) => {
@@ -95,11 +113,12 @@ export async function commitFiles(cfg, files, message, {branch, onStatus = () =>
     onStatus(`Uploading files… ${++done}/${list.length}`);
     return {path, mode: "100644", type: "blob", sha: blob.sha};
   });
+  for (const p of deletePaths) if (existing && existing.has(p) && !files.has(p)) tree.push({path: p, mode: "100644", type: "blob", sha: null});
   onStatus("Committing…");
   const newTree = await gh(cfg, `/repos/${cfg.repo}/git/trees`, {method: "POST", body: {base_tree: commit.tree.sha, tree}});
   if (newTree.sha === commit.tree.sha) return {sha: head, url: `https://github.com/${cfg.repo}/commit/${head}`, files: list.length, unchanged: true};
   const created = await gh(cfg, `/repos/${cfg.repo}/git/commits`, {method: "POST", body: {message, tree: newTree.sha, parents: [head]}});
-  await gh(cfg, `/repos/${cfg.repo}/git/refs/heads/${encodeURIComponent(br)}`, {method: "PATCH", body: {sha: created.sha}});
+  await gh(cfg, `/repos/${cfg.repo}/git/refs/heads/${refPath(br)}`, {method: "PATCH", body: {sha: created.sha}});
   return {sha: created.sha, url: created.html_url || `https://github.com/${cfg.repo}/commit/${created.sha}`, files: list.length};
 }
 
@@ -122,4 +141,31 @@ export async function readBranch(cfg, {branch, onStatus = () => {}, maxFiles = 4
     onStatus(`Reading files… ${++done}/${blobs.length}`);
   });
   return {files, sha: head, truncated: !!tree.truncated};
+}
+
+// Commit to a new branch made from the configured one, then open (or find)
+// a pull request into it. Returns {url, number, existing}.
+export async function openPullRequest(cfg, files, {branch, title, body, onStatus = () => {}, deletePaths = []}) {
+  const res = await commitFiles(cfg, files, title + (body ? "\n\n" + body : ""), {branch, from: cfg.branch, onStatus, deletePaths});
+  onStatus("Opening the pull request…");
+  try {
+    const pr = await gh(cfg, `/repos/${cfg.repo}/pulls`, {method: "POST", body: {title, head: branch, base: cfg.branch, body: body || ""}});
+    return {url: pr.html_url, number: pr.number, existing: false, commit: res};
+  } catch (e) {
+    if (e.status !== 422) throw e;
+    const owner = cfg.repo.split("/")[0];
+    const list = await gh(cfg, `/repos/${cfg.repo}/pulls?state=open&head=${encodeURIComponent(owner + ":" + branch)}`);
+    if (list && list[0]) return {url: list[0].html_url, number: list[0].number, existing: true, commit: res};
+    throw new Error(res.unchanged ? "GitHub already has these files on " + cfg.branch + ": nothing to review." : e.message);
+  }
+}
+
+// Paths under cfg.base on a branch (no file contents): Set of relative paths.
+export async function listPaths(cfg, {branch} = {}) {
+  const head = await branchSha(cfg, branch || cfg.branch);
+  const commit = await gh(cfg, `/repos/${cfg.repo}/git/commits/${head}`);
+  const tree = await gh(cfg, `/repos/${cfg.repo}/git/trees/${commit.tree.sha}?recursive=1`);
+  const base = String(cfg.base || "").replace(/^\/+|\/+$/g, "");
+  const prefix = base ? base + "/" : "";
+  return new Set((tree.tree || []).filter(e => e.type === "blob" && e.path.startsWith(prefix)).map(e => e.path.slice(prefix.length)));
 }

@@ -2,7 +2,8 @@
 import {SearchSelect} from "../shared/combo.js";
 import {TYPE_PRESETS} from "../../core/deploy.js";
 import {diffLines, diffStats, sideBySide} from "../../core/text-diff.js";
-import {useRelease, setRelease, loadOrgs, orgByHost} from "./release-state.js";
+import {useRelease, setRelease, loadOrgs, orgByHost, setGitBranch} from "./release-state.js";
+import {listBranches} from "../shared/github.js";
 
 const h = React.createElement;
 
@@ -39,6 +40,20 @@ export function OrgTag({org}) {
     org.isCurrent && h("span", {className: "rel-orgtag-me"}, "this org"));
 }
 
+// Branch of the GitHub source (lists the repository's branches).
+function BranchPicker({org, disabled}) {
+  const [branches, setBranches] = React.useState(null);
+  React.useEffect(() => {
+    let stale = false;
+    listBranches(org.git).then(b => { if (!stale) setBranches(b); }).catch(() => { if (!stale) setBranches([]); });
+    return () => { stale = true; };
+  }, [org.git.repo]);
+  return h("div", {className: "rel-branch"},
+    h("span", {className: "rel-org-l"}, "Branch"),
+    h(SearchSelect, {value: org.git.branch, options: (branches || [org.git.branch]).map(b => ({value: b, label: b})), allowFree: true,
+      disabled, ariaLabel: "Git branch", onChange: b => { if (b && b !== org.git.branch) setGitBranch(b); }}));
+}
+
 // Source → target pickers with swap (reverse deployment) and refresh.
 export function OrgBar({showTarget = true, sourceLabel = "Source", disabled}) {
   const st = useRelease();
@@ -47,6 +62,8 @@ export function OrgBar({showTarget = true, sourceLabel = "Source", disabled}) {
   }, []);
   const orgs = st.orgs || [];
   const target = orgByHost(st.targetHost);
+  // Never switch orgs under a running deploy (cancel and links follow it).
+  disabled = disabled || !!(st.deploy && !st.deploy.finished);
   const swap = () => setRelease({sourceHost: st.targetHost, targetHost: st.sourceHost, compare: null, selected: new Set(), validation: null});
   return h("div", {className: "rel-orgbar"},
     h("div", {className: "rel-org"},
@@ -56,7 +73,8 @@ export function OrgBar({showTarget = true, sourceLabel = "Source", disabled}) {
         ariaLabel: sourceLabel + " org", placeholder: st.orgsBusy ? "Finding your orgs…" : "Pick an org",
         onChange: v => setRelease({sourceHost: v, ...(v === st.targetHost ? {targetHost: ""} : {}), compare: null, selected: new Set()})
       }),
-      h(OrgTag, {org: orgByHost(st.sourceHost)})),
+      h(OrgTag, {org: orgByHost(st.sourceHost)}),
+      orgByHost(st.sourceHost) && orgByHost(st.sourceHost).isGit && h(BranchPicker, {org: orgByHost(st.sourceHost), disabled})),
     showTarget && h("button", {
       className: "btn btn-secondary btn-sm rel-swap", disabled: disabled || !st.sourceHost || !st.targetHost || st.sourceHost.startsWith("git:"),
       title: "Swap source and target (reverse deployment)", "aria-label": "Swap source and target", onClick: swap

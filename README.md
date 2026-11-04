@@ -294,6 +294,12 @@ debug-log analysis.
   safe-to-delete verdict and ✨ risk summary
 - **GitHub** (optional) — commit releases and snapshots in source format, compare and deploy
   from a branch
+- **Changes** shows New / Updated / Deleted (deletes from source tracking and the audit trail), dates in
+  the org user's time zone; **Integrations** in Compare (named and external credentials, external data
+  sources, remote sites, CSP sites, external services, connected and external client apps)
+- **Release safety** — problem checks before deploy, overwrite warning when the target changed, release
+  name/ticket and who deployed, drafts, deploy a release to the next org, partial rollback, check status of
+  a lost deploy, all deployments in an org, pull requests from a release, deletes before or after
 - **Log profiler** — Logs → ⏱ Profile: timeline, slowest methods, queries and DML in loops,
   limits, ✨ speed-up tips
 - **Deploy fixes** — Apex and trigger templates and AI use `WITH USER_MODE` (current API versions

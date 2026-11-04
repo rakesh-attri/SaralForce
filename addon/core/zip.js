@@ -134,3 +134,65 @@ export function writeZip(entries) {
   for (const part of [...locals, ...centrals, end]) { out.set(part, p); p += part.length; }
   return out;
 }
+
+async function deflateRaw(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+// Like writeZip, but each entry is deflated when that makes it smaller
+// (deploy zips: the API takes at most 39 MB, base64 included).
+export async function writeZipCompressed(entries) {
+  const list = [...(entries instanceof Map ? entries.entries() : entries)]
+    .map(([path, data]) => [path, typeof data === "string" ? textToBytes(data) : data]);
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const [path, data] of list) {
+    const name = textToBytes(path);
+    const crc = crc32(data);
+    const packed = data.length > 64 ? await deflateRaw(data) : data;
+    const deflated = packed !== data && packed.length < data.length;
+    const body = deflated ? packed : data;
+    const method = deflated ? 8 : 0;
+    const local = new Uint8Array(30 + name.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, method, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, body.length, true);
+    lv.setUint32(22, data.length, true);
+    lv.setUint16(26, name.length, true);
+    local.set(name, 30);
+    const central = new Uint8Array(46 + name.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true);
+    cv.setUint16(10, method, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, body.length, true);
+    cv.setUint32(24, data.length, true);
+    cv.setUint16(28, name.length, true);
+    cv.setUint32(42, offset, true);
+    central.set(name, 46);
+    locals.push(local, body);
+    centrals.push(central);
+    offset += local.length + body.length;
+  }
+  const cdSize = centrals.reduce((n, c) => n + c.length, 0);
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, list.length, true);
+  ev.setUint16(10, list.length, true);
+  ev.setUint32(12, cdSize, true);
+  ev.setUint32(16, offset, true);
+  const out = new Uint8Array(offset + cdSize + 22);
+  let p = 0;
+  for (const part of [...locals, ...centrals, end]) { out.set(part, p); p += part.length; }
+  return out;
+}
