@@ -92,7 +92,7 @@ export const STEP_CATALOG = [
     id: "secrets", phase: "post", auto: false, setup: "/lightning/setup/NamedCredential/home",
     title: "Enter secrets and passwords",
     why: "Passwords, client secrets and certificates are never deployed. Enter them in the target by hand.",
-    detect: ctx => ["NamedCredential", "ExternalCredential", "ConnectedApp", "AuthProvider"]
+    detect: ctx => ["NamedCredential", "ExternalCredential", "ConnectedApp", "AuthProvider", "ExternalClientApplication", "ExternalDataSource"]
       .flatMap(t => names(ctx.items || [], t).map(n => `${typeLabel(t)} ${n}`))
   },
   {

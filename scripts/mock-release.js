@@ -42,8 +42,8 @@ private class InvoiceServiceTest {
 `;
 const TRIGGER = "trigger InvoiceTrigger on Invoice__c (before insert) {\n    // keep totals in sync\n}\n";
 
-function comp(by, ago, files) {
-  return {by, at: when(ago), files};
+function comp(by, ago, files, createdAgo) {
+  return {by, at: when(ago), created: when(createdAgo == null ? 200 * day : createdAgo), files};
 }
 
 function baseObject(fields, rules = "") {
@@ -59,6 +59,13 @@ function makeOrgs() {
       InvoiceServiceTest: comp("Priya Nair", 3 * day, {"classes/InvoiceServiceTest.cls": TEST, "classes/InvoiceServiceTest.cls-meta.xml": meta("ApexClass")}),
       InvoiceReminderJob: comp("Priya Nair", 1 * day, {"classes/InvoiceReminderJob.cls": "public class InvoiceReminderJob implements Schedulable {\n    public void execute(SchedulableContext sc) {}\n}\n", "classes/InvoiceReminderJob.cls-meta.xml": meta("ApexClass")})
     },
+    NamedCredential: {
+      Payment_Gateway: comp("Shivam Ojha", 0.1 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v2</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+    },
+    RemoteSiteSetting: {
+      PayGateway_Sandbox: comp("Shivam Ojha", 0.05 * day, {"remoteSiteSettings/PayGateway_Sandbox.remoteSite": meta("RemoteSiteSetting", "\n    <isActive>true</isActive>\n    <url>https://sandbox.pay.example.com</url>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")}, 0.05 * day)
+    },
+    ExternalDataSource: {},
     PermissionSet: {
       Invoice_Manager: comp("Rakesh Sharma", 1 * day, {"permissionsets/Invoice_Manager.permissionset": meta("PermissionSet", "\n    <label>Invoice Manager</label>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
@@ -103,13 +110,19 @@ function makeOrgs() {
         Amount__c: field("Amount__c", "Currency", "        <precision>18</precision>\n        <scale>2</scale>\n")
       }))
     },
-    Layout: {}
+    Layout: {},
+    NamedCredential: {
+      Payment_Gateway: comp("Deploy User", 30 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v1</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+    },
+    RemoteSiteSetting: {},
+    ExternalDataSource: {}
   };
   return {source, target};
 }
 
 let orgs = makeOrgs();
 let failMode = "none";
+let lastDeployPaths = [];
 let manual = freshManual();
 
 function freshManual() {
@@ -144,11 +157,12 @@ function listRows(org, type) {
     }
     return rows;
   }
-  for (const [name, c] of Object.entries(org[type] || {})) rows.push({fullName: name, by: c.by, at: c.at});
+  for (const [name, c] of Object.entries(org[type] || {})) rows.push({fullName: name, by: c.by, at: c.at, created: c.created});
   return rows;
 }
 
-const RELEASE_TYPES = new Set(["ApexClass", "ApexTrigger", "LightningComponentBundle", "Flow", "CustomObject", "CustomField", "ValidationRule", "Layout"]);
+const RELEASE_TYPES = new Set(["ApexClass", "ApexTrigger", "LightningComponentBundle", "Flow", "CustomObject", "CustomField", "ValidationRule", "Layout",
+  "NamedCredential", "RemoteSiteSetting", "ExternalDataSource"]);
 
 function retrieveZip(org, members) {
   const files = new Map();
@@ -251,7 +265,7 @@ export async function releaseSoap(raw, res) {
     const types = [...raw.matchAll(/<met:type>([^<]+)<\/met:type>/g)].map(m => m[1]);
     if (!types.some(t => RELEASE_TYPES.has(t)) && org === orgs.source) return false;
     const rows = types.flatMap(t => RELEASE_TYPES.has(t) ? listRows(org, t).map(r => ({...r, type: t})) : []);
-    send(env("<listMetadataResponse>" + rows.map(r => `<result><createdByName>${r.by}</createdByName><createdDate>${r.at}</createdDate><fileName>x</fileName><fullName>${r.fullName}</fullName>` +
+    send(env("<listMetadataResponse>" + rows.map(r => `<result><createdByName>${r.by}</createdByName><createdDate>${r.created || r.at}</createdDate><fileName>x</fileName><fullName>${r.fullName}</fullName>` +
       `<id>ID_${r.type}_${r.fullName}</id><lastModifiedByName>${r.by}</lastModifiedByName><lastModifiedDate>${r.at}</lastModifiedDate><manageableState>unmanaged</manageableState><type>${r.type}</type></result>`).join("") + "</listMetadataResponse>"));
     return true;
   }
@@ -281,6 +295,7 @@ export async function releaseSoap(raw, res) {
       failComponent: failMode === "component" || (files.has("classes/InvoiceService.cls") && !hasTax),
       failTest: failMode === "test" && testLevel !== "NoTestRun"};
     deploys.set(d.id, d);
+    lastDeployPaths = [...files.keys()];
     send(env(`<deployResponse><result><done>false</done><id>${d.id}</id><state>Queued</state></result></deployResponse>`));
     return true;
   }
@@ -323,7 +338,10 @@ export function releaseRest(req, res, url, json) {
   if (url.pathname === "/mock-release") {
     if (url.searchParams.get("fail")) failMode = url.searchParams.get("fail");
     if (url.searchParams.get("reset")) resetRelease();
-    json(res, 200, {failMode, manual, target: Object.fromEntries(Object.entries(orgs.target).filter(([k]) => k !== "name").map(([k, v]) => [k, Object.keys(v)]))});
+    // Someone edits a class in UAT after you compared (overwrite check).
+    const touch = url.searchParams.get("touch");
+    if (touch && orgs.target.ApexClass[touch]) { orgs.target.ApexClass[touch].at = when(0); orgs.target.ApexClass[touch].by = "Priya Nair (UAT)"; }
+    json(res, 200, {failMode, manual, lastDeployPaths, target: Object.fromEntries(Object.entries(orgs.target).filter(([k]) => k !== "name").map(([k, v]) => [k, Object.keys(v)]))});
     return true;
   }
   if (/\/chatter\/users\/me\/?$/.test(url.pathname)) {
@@ -371,6 +389,17 @@ export function releaseRest(req, res, url, json) {
         {Assignee: {Username: "ghost@demo.saralforce"}, PermissionSet: {Name: "Invoice_Manager"}, PermissionSetGroup: null}
       ]);
     }
+    if (!isOrg2 && /FROM SourceMember/i.test(q)) {
+      return send([{MemberType: "ApexClass", MemberName: "NxtPay_OldHelper", IsNameObsolete: true, LastModifiedDate: when(0.04 * day), LastModifiedById: "005S00000000001AAA"}]);
+    }
+    if (!isOrg2 && /005S00000000001AAA/.test(q) && /FROM User/i.test(q)) return send([{Id: "005S00000000001AAA", Name: "Shivam Ojha"}]);
+    if (!isOrg2 && /Action, Display, Section FROM SetupAuditTrail/i.test(q)) {
+      return send([
+        {CreatedDate: when(0.08 * day), CreatedBy: {Name: "Narendar R"}, Action: "deletedApexClass", Section: "Apex Class", Display: "Deleted Apex Class NxtPay_LegacyBatch"},
+        {CreatedDate: when(0.04 * day), CreatedBy: {Name: "Shivam Ojha"}, Action: "deletedApexClass", Section: "Apex Class", Display: "Deleted Apex Class NxtPay_OldHelper"},
+        {CreatedDate: when(0.2 * day), CreatedBy: {Name: "Rakesh Sharma"}, Action: "PasswordPolicy", Section: "Password Policies", Display: "Changed minimum password length"}
+      ]);
+    }
     if (/FROM MetadataComponentDependency WHERE (Ref)?MetadataComponentId/i.test(q)) {
       const id = (/'([^']+)'/.exec(q) || [])[1] || "";
       const dep = (type, name) => ({MetadataComponentId: "ID_" + type + "_" + name, MetadataComponentName: name, MetadataComponentType: type});
@@ -391,6 +420,12 @@ export function releaseRest(req, res, url, json) {
       return send(Object.entries(org.ApexTrigger || {}).map(([Name, c]) => ({Id: "ID_ApexTrigger_" + Name, Name, Body: c.files["triggers/" + Name + ".trigger"] || ""})));
     }
     if (/FROM ApexPage WHERE NamespacePrefix/i.test(q)) return send([]);
+    if (/FROM DeployRequest/i.test(q)) {
+      const mine = [...deploys.values()].filter(d => d.org === (isOrg2 ? orgs.target : orgs.source));
+      return send([...mine.map(d => ({Id: d.id, Status: d.calls >= 2 ? (d.canceled ? "Canceled" : (d.failComponent || d.failTest ? "Failed" : "Succeeded")) : "InProgress",
+        CheckOnly: d.checkOnly, StartDate: when(0.01 * day), CompletedDate: when(0.005 * day), CreatedBy: {Name: "Rakesh Sharma"}, NumberComponentsTotal: d.count, NumberComponentErrors: d.failComponent ? 1 : 0, NumberTestsTotal: 0, NumberTestErrors: 0})),
+        {Id: "0Af000000000CS1AAA", Status: "Succeeded", CheckOnly: false, StartDate: when(2 * day), CompletedDate: when(2 * day), CreatedBy: {Name: "Change set (Narendar R)"}, NumberComponentsTotal: 4, NumberComponentErrors: 0, NumberTestsTotal: 12, NumberTestErrors: 0}]);
+    }
     if (/FROM FlowDefinitionView/i.test(q)) return send([{ApiName: "Invoice_Approval", IsActive: true}]);
     if (!isOrg2 && /ScheduledApex/.test(q)) return send([{ApexClass: {Name: "InvoiceReminderJob"}, CronTriggerId: "08eS00000000001AAA"}]);
     if (!isOrg2 && /FROM CronTrigger WHERE Id IN/i.test(q)) return send([{Id: "08eS00000000001AAA", CronExpression: "0 0 6 * * ?", CronJobDetail: {Name: "Invoice reminders"}}]);

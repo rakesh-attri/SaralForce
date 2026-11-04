@@ -469,13 +469,13 @@ Move changes between any two orgs you're logged into in this browser (sandbox �
 
 | You can | Details |
 |---|---|
-| Compare orgs | Pick **Source** and **Target** and what to compare (Apex, LWC & Aura, Flows, Objects & fields, Layouts & pages, Security, Config & labels, Email & reports). Every component is **New**, **Changed**, **Only in target** or **Same**, with who changed it and when in each org. Optional "only changed since" date. |
+| Compare orgs | Pick **Source** and **Target** and what to compare (Apex, LWC & Aura, Flows, Objects & fields, Layouts & pages, Security, Config & labels, Integrations, Email & reports). Every component is **New**, **Changed**, **Only in target** or **Same**, with who changed it and when in each org. Optional "only changed since" date. |
 | See the diff | Click a row for a side-by-side line diff (target now vs incoming). |
 | Reverse deployment | **⇄** swaps source and target, e.g. bring a production hotfix back to a sandbox. |
 | Dependency check | Warns when your selection needs something the target doesn't have (new object for a field, fields on a layout or permission set, objects and classes used by Apex, MetadataComponentDependency). **Add missing** selects them. |
 | Deletes | Tick an "Only in target" item to delete it in the target (destructiveChangesPost.xml). |
 | ✨ Release notes | AI writes plain release notes from the selected changes (names and short diffs only). |
-| Changes | Everything changed in an org since Today / 7 days / 30 days / a date, filtered by person, plus the Setup audit trail. Add to the package or compare with another org. |
+| Changes | Everything changed in an org since Today / 7 days / 30 days / Last release / a date (in the org user's time zone), with a **Status** of New, Updated or Deleted, filtered by status and person, plus the Setup audit trail. Deletes come from source tracking (sandboxes) and the audit trail. **Add to package** puts deleted items on the delete list. |
 | Package | The same basket as Metadata → ＋ package.xml. Add by name, paste a package.xml or destructiveChanges.xml, download package.xml / destructiveChanges.xml / a source zip. |
 | Validate | Check-only deploy with live progress, component errors (line and problem), failing tests with stack traces, and coverage under 75%. Test level: Default, No tests (sandboxes only), Specified tests (**Suggest tests** finds tests that use the changed Apex), Local tests, All tests. |
 | Quick deploy | After a passing validation, release in seconds without re-running tests. |
@@ -490,6 +490,17 @@ Move changes between any two orgs you're logged into in this browser (sandbox �
 | Last release | Changes → **Last release** lists what changed in an org since your last release from it. |
 | Impact | Pick an org, type and name (fields, objects, Apex, triggers, pages, LWC, Aura, flows, labels, static resources, validation rules, layouts). Shows what uses it and what it uses (Salesforce's dependency data), code that names it, how many records have data, and active flows. Verdict: ✓ No references · ⚠ Used in N places · ⛔ Not safe to delete yet. **Add to delete list** puts it in Package → deletes. ✨ **Risk summary** explains what breaks and the safe order. From Compare, **Check impact of delete** on an "Only in target" item. |
 | GitHub (optional) | Connect a repository in Settings (fine-grained token, branch, folder). **Commit to GitHub** on a release or snapshot writes the files in Salesforce DX source format (objects split into fields, rules…). The branch shows up as a **Source** in Compare and Deploy, so you can compare Git with an org and deploy from Git. |
+| Problem checks | Before a deploy: API version newer than the target, new fields nobody can see, field type changes, deleting active flows or fields with data, deploy-and-delete conflicts, queries/DML inside loops, hard-coded record Ids, Apex to production without tests, profiles, package size limits. |
+| Overwrite check | Before a real deploy, quick deploy, rollback or restore, SaralForce lists target components someone changed after your compare / validation / release and asks before overwriting them. |
+| Release name / ticket | Shown in History, Git commits and pull requests; who deployed is recorded too. |
+| Deletes | Run after the deploy (usual) or before it. |
+| Include permissions | Compare offers the permission sets and profiles that grant access to what you picked. Profiles are deployed with access lines for the deployed components only. |
+| Drafts | Save a compare selection or package and load it later (Package → Drafts). |
+| Deploy to another org | History → a release → the exact deployed package to the next org (UAT → production). **Compare again** re-runs a release's items between any two orgs. |
+| Partial rollback | Tick which items to restore or remove before rolling back. |
+| Check status | A deploy SaralForce lost track of (closed screen, network) stays in History; **Check status** reads its result and it can still be rolled back. |
+| All deployments in an org | Salesforce's own deployment list (change sets, CLI, other tools, SaralForce) for any logged-in org. |
+| Pull requests | History → **Open pull request** commits a release to a release/… branch and opens a PR. Deletes are removed from Git; snapshot commits mirror the org. Any branch can be the source. |
 | Exact deploys | Only the fields, rules and parts you ticked are sent; an object file is rebuilt from the selected parts. **Download zip** shows exactly what will be sent. |
 
 History and snapshots live in this browser (IndexedDB); nothing is uploaded. Clearing site data removes them, so download releases you want to keep.

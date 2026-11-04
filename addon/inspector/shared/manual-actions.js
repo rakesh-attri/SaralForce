@@ -92,7 +92,18 @@ async function activateFlows({target, targets}) {
 
 async function userMap(conn) {
   const users = await query(conn, "SELECT Id, Username FROM User WHERE IsActive = true");
-  return new Map(users.map(u => [baseUsername(u.Username), u.Id]));
+  const exact = new Map(users.map(u => [String(u.Username).toLowerCase(), u.Id]));
+  const base = new Map();
+  for (const u of users) {
+    const b = baseUsername(u.Username);
+    base.set(b, base.has(b) ? null : u.Id); // null = two users share it
+  }
+  return {get: name => {
+    const n = String(name || "").toLowerCase();
+    if (exact.has(n)) return exact.get(n);
+    const b = base.get(baseUsername(n));
+    return b || undefined;
+  }};
 }
 
 // ── permission set / group assignments copied by username ─────────────
@@ -171,6 +182,20 @@ async function copyCustomSettings({source, target, targets}) {
     try {
       const d = await target.conn.client.request(`/services/data/v${apiVersion}/sobjects/${obj}/describe`, {useCache: false});
       const fields = (d.fields || []).filter(f => f.custom && f.createable).map(f => f.name);
+      if (!(d.fields || []).some(f => f.name === "SetupOwnerId")) {
+        // List custom setting: rows matched by Name.
+        const rows = await query(source.conn, `SELECT Name, ${fields.join(", ") || "Id"} FROM ${obj}`);
+        const have = new Map((await query(target.conn, `SELECT Id, Name FROM ${obj}`)).map(r => [r.Name, r.Id]));
+        let created = 0;
+        let updated = 0;
+        for (const r of rows) {
+          const body = Object.fromEntries(fields.map(f => [f, r[f]]));
+          if (have.has(r.Name)) { await rest(target.conn, `/sobjects/${obj}/${have.get(r.Name)}`, {method: "PATCH", body}); updated++; }
+          else { await rest(target.conn, `/sobjects/${obj}`, {method: "POST", body: {...body, Name: r.Name}}); created++; }
+        }
+        log.push(`✓ ${obj} (list): ${created} created, ${updated} updated`);
+        continue;
+      }
       const rows = await query(source.conn, `SELECT SetupOwnerId, SetupOwner.Name, ${fields.concat(["Id"]).join(", ")} FROM ${obj}`);
       const tRows = await query(target.conn, `SELECT Id, SetupOwnerId FROM ${obj}`);
       const tOrg = (await query(target.conn, "SELECT Id FROM Organization"))[0];

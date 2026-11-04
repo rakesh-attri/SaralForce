@@ -7,7 +7,7 @@ import {soapPostDom} from "../../builder/metadata-soap.js";
 import {escXml} from "../../builder/metadata-xml.js";
 import {domLocal, domChildren, domFind} from "../../builder/metadata-dom.js";
 import {chunk, keepListRow, compKey, TYPE_BY_NAME, summarizeDeployResult} from "../../core/deploy.js";
-import {readZip, base64ToBytes, bytesToBase64, writeZip} from "../../core/zip.js";
+import {readZip, base64ToBytes, bytesToBase64, writeZipCompressed} from "../../core/zip.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -190,7 +190,7 @@ export async function retrieve(conn, members, {signal, onProgress, timeoutMs = 1
 // ── deploy ────────────────────────────────────────────────────────────
 // entries: [[path, bytes|string]]. options: {checkOnly, testLevel, runTests[], ignoreWarnings}
 export async function startDeploy(conn, entries, options = {}) {
-  const zip = bytesToBase64(writeZip(entries));
+  const zip = bytesToBase64(await writeZipCompressed(entries));
   const runTests = options.testLevel === "RunSpecifiedTests" ? (options.runTests || []) : [];
   // DeployOptions children must follow the WSDL sequence.
   const opts = [
@@ -213,14 +213,24 @@ export async function deployStatus(conn, id) {
 }
 
 // Polls until done; onUpdate(summary) after every check.
-export async function waitForDeploy(conn, id, {onUpdate, signal, timeoutMs = 60 * 60000} = {}) {
+export async function waitForDeploy(conn, id, {onUpdate, signal, timeoutMs = 3 * 60 * 60000} = {}) {
   const t0 = Date.now();
+  let fails = 0;
   for (let i = 0; ; i++) {
     if (signal && signal.aborted) throw new Error("Stopped watching");
-    const s = await deployStatus(conn, id);
+    let s;
+    try {
+      s = await deployStatus(conn, id);
+      fails = 0;
+    } catch (e) {
+      // A network blip or a slow answer must not lose a running deploy.
+      if (++fails >= 6) throw new Error(`Lost contact with Salesforce (${e.message}). The deploy may still be running: check History → Check status.`);
+      await sleep(5000);
+      continue;
+    }
     if (onUpdate) onUpdate(s);
     if (s.done) return s;
-    if (Date.now() - t0 > timeoutMs) throw new Error("Still running in Salesforce: check Setup → Deployment Status");
+    if (Date.now() - t0 > timeoutMs) throw new Error("Still running in Salesforce after 3 hours: check History → Check status, or Setup → Deployment Status.");
     await sleep(i < 5 ? 2000 : 4000);
   }
 }

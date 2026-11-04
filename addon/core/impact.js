@@ -30,7 +30,7 @@ export function codeMentions(code, apiName) {
 
 // {usedBy: groups, codeMatches: [{type, name}], dataCount: n|null, activeFlows: [names]}
 // → {level: "safe"|"warn"|"block", title, reasons: []}
-export function impactVerdict({usedBy = [], codeMatches = [], dataCount = null, activeFlows = [], forDelete = true}) {
+export function impactVerdict({usedBy = [], codeMatches = [], dataCount = null, activeFlows = [], forDelete = true, dataUnknown = false}) {
   const refs = usedBy.reduce((n, g) => n + g.items.length, 0);
   const reasons = [];
   if (refs) reasons.push(`${refs} component(s) use it: ${usedBy.map(g => `${g.items.length} ${g.label.toLowerCase()}`).join(", ")}.`);
@@ -41,6 +41,7 @@ export function impactVerdict({usedBy = [], codeMatches = [], dataCount = null, 
     return {level: "block", title: forDelete ? "Not safe to delete yet" : "High impact", reasons};
   }
   if (refs || codeMatches.length) return {level: "warn", title: `Used in ${refs + codeMatches.length} place(s)`, reasons};
+  if (dataUnknown) return {level: "warn", title: "Check the data first", reasons: ["No references found, but SaralForce could not count the records that hold data. Check with a report or Export before deleting."]};
   return {level: "safe", title: "No references found", reasons: ["Nothing in the org's dependency data or code refers to it." +
     (dataCount === 0 ? " It has no data." : "")]};
 }

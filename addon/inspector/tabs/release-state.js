@@ -5,6 +5,9 @@ import {listOrgs} from "../shared/deploy-api.js";
 import {githubConfig, readBranch} from "../shared/github.js";
 import {componentsFromSource} from "../../core/source-format.js";
 import {bytesToText} from "../../core/zip.js";
+import {getEffectiveTimeZone} from "../../sf-time.js";
+import {kickSfTzFetch} from "../shared/format.js";
+import {whenInZone, daysAgoInZone, zoneMidnight, dateInZone} from "../../core/zone-date.js";
 
 const ORGS_KEY = "sfoc_release_orgs";
 
@@ -72,7 +75,17 @@ export async function loadOrgs(refresh = false) {
 function gitOrgs() {
   const cfg = githubConfig();
   if (!cfg) return [];
-  return [{host: `git:${cfg.repo}@${cfg.branch}`, name: `GitHub ${cfg.repo} (${cfg.branch})`, isGit: true, isSandbox: true, isCurrent: false, conn: null, git: cfg}];
+  const branch = state.gitBranch || cfg.branch;
+  const git = {...cfg, branch};
+  return [{host: `git:${cfg.repo}@${branch}`, name: `GitHub ${cfg.repo} (${branch})`, isGit: true, isSandbox: true, isCurrent: false, conn: null, git}];
+}
+
+// Use another branch of the repository as the source (feature, release…).
+export async function setGitBranch(branch) {
+  state.gitBranch = branch;
+  const orgs = (state.orgs || []).filter(o => !o.isGit);
+  const git = gitOrgs();
+  setRelease({orgs: [...orgs, ...git], sourceHost: git[0] ? git[0].host : state.sourceHost, compare: null, selected: new Set()});
 }
 
 // Components on the GitHub branch (source format), cached per load.
@@ -107,11 +120,28 @@ export function downloadBytes(name, bytes, type = "application/zip") {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+// Dates follow the Salesforce user's time zone (as the rest of SaralForce).
+export function orgZone() {
+  kickSfTzFetch();
+  return getEffectiveTimeZone();
+}
+
 export function fmtWhen(iso) {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d)) return "";
-  const days = Math.floor((Date.now() - d.getTime()) / 86400e3);
-  const date = d.toLocaleDateString(undefined, {day: "numeric", month: "short", year: days > 300 ? "numeric" : undefined});
-  return days < 1 ? "today " + d.toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"}) : date;
+  return whenInZone(iso, orgZone());
+}
+
+// "YYYY-MM-DD" for today minus n days, in the org's zone.
+export function orgDaysAgo(n) {
+  return daysAgoInZone(n, orgZone());
+}
+
+// Start of a "YYYY-MM-DD" day in the org's zone (epoch ms).
+export function orgDayStart(dateStr) {
+  return zoneMidnight(dateStr, orgZone());
+}
+
+export function orgDate(iso) {
+  const ms = Date.parse(iso || "");
+  return Number.isFinite(ms) ? dateInZone(ms, orgZone()) : "";
 }

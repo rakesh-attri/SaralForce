@@ -1,11 +1,12 @@
 // Release history logic: versions, rollback plans, drift labels, sizes.
 // Pure: storage lives in inspector/shared/release-store.js.
-import {splitKey} from "./deploy.js";
+import {splitKey, TYPE_BY_NAME} from "./deploy.js";
 
 // Next version label for a target org: v1, v2… (real deploys only).
 export function nextVersion(releases, targetHost) {
-  const n = releases.filter(r => r.targetHost === targetHost && r.kind !== "validation").length;
-  return "v" + (n + 1);
+  const nums = releases.filter(r => r.targetHost === targetHost && r.kind !== "validation")
+    .map(r => Number((/^v(\d+)$/.exec(r.version || "") || [])[1] || 0));
+  return "v" + (Math.max(0, ...nums) + 1);
 }
 
 // What a rollback must do, from the release and the snapshot taken just
@@ -15,19 +16,31 @@ export function nextVersion(releases, targetHost) {
 //  remove:  delete what the release added
 //  unknown: no record of the old state (cannot be rolled back)
 export function rollbackPlan(release, snapshotKeys, missing) {
-  const has = k => snapshotKeys.has(k);
-  const wasMissing = new Set(missing || []);
+  // Salesforce names are case-insensitive: match MyClass with myClass.
+  const lower = new Map([...snapshotKeys].map(k => [k.toLowerCase(), k]));
+  const real = k => lower.get(String(k).toLowerCase());
+  const has = k => !!real(k);
+  const wasMissing = new Set((missing || []).map(k => k.toLowerCase()));
   const restore = [];
   const remove = [];
   const unknown = [];
   for (const k of release.items || []) {
-    if (has(k)) restore.push(k);
-    else if (wasMissing.has(k)) remove.push(k);
+    if (has(k)) restore.push(real(k));
+    else if (wasMissing.has(k.toLowerCase())) remove.push(k);
     else unknown.push(k);
   }
   for (const k of release.deletes || []) {
-    if (has(k)) restore.push(k);
+    if (has(k)) restore.push(real(k));
     else unknown.push(k);
+  }
+  // Restoring an object restores its fields, rules, record types… too.
+  for (const k of [...restore]) {
+    const {type, fullName} = splitKey(k);
+    if (type !== "CustomObject") continue;
+    for (const s of snapshotKeys) {
+      const p = splitKey(s);
+      if (TYPE_BY_NAME[p.type] && TYPE_BY_NAME[p.type].parent === "CustomObject" && p.fullName.toLowerCase().startsWith(fullName.toLowerCase() + ".")) restore.push(s);
+    }
   }
   // A field removed with its new object goes with the object.
   const removedObjects = new Set(remove.filter(k => k.startsWith("CustomObject:")).map(k => splitKey(k).fullName));

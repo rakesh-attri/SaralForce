@@ -5,7 +5,7 @@ import {writeZip, readZip, textToBytes, bytesToText} from "../../core/zip.js";
 import {componentsFromZip} from "../../core/deploy.js";
 
 const DB = "saralforce-release";
-const VERSION = 1;
+const VERSION = 2;
 let dbPromise = null;
 
 function openDb() {
@@ -17,6 +17,7 @@ function openDb() {
       if (!db.objectStoreNames.contains("releases")) db.createObjectStore("releases", {keyPath: "id"});
       if (!db.objectStoreNames.contains("snapshots")) db.createObjectStore("snapshots", {keyPath: "id"});
       if (!db.objectStoreNames.contains("blobs")) db.createObjectStore("blobs", {keyPath: "id"});
+      if (!db.objectStoreNames.contains("drafts")) db.createObjectStore("drafts", {keyPath: "id"});
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => { dbPromise = null; reject(req.error || new Error("Could not open release history")); };
@@ -138,4 +139,17 @@ export async function importRelease(bytes) {
   }
   await putRelease({...release, imported: true});
   return release;
+}
+
+// Draft deployments: a saved selection to reuse ({id, name, at, members, destructive, sourceName}).
+export async function listDrafts() {
+  return byNewest(await tx("drafts", "readonly", st => st.getAll()));
+}
+
+export function putDraft(d) {
+  return tx("drafts", "readwrite", st => st.put({...d, id: d.id || newId("draft"), at: d.at || new Date().toISOString()}));
+}
+
+export function deleteDraft(id) {
+  return tx("drafts", "readwrite", st => st.delete(id));
 }

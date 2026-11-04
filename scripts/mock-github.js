@@ -31,6 +31,7 @@ export function resetGithub() {
 export function githubState() {
   const out = {};
   for (const [b, c] of repo.refs) out[b] = {commit: c, message: repo.commits.get(c).message, files: repo.trees.get(repo.commits.get(c).tree.sha).map(e => e.path)};
+  out.pulls = repo.pulls || [];
   return out;
 }
 
@@ -96,6 +97,17 @@ export function mockGithub(req, res, url, json) {
     if ((m = /\/git\/trees\/([0-9a-f]+)$/.exec(p))) {
       const t = repo.trees.get(m[1]);
       return t ? send(200, {sha: m[1], tree: t, truncated: false}) : send(404, {message: "Not Found"});
+    }
+    if (/\/pulls$/.test(p) && req.method === "POST") {
+      repo.pulls = repo.pulls || [];
+      if (repo.pulls.some(x => x.head === body.head)) return send(422, {message: "A pull request already exists"});
+      const pr = {number: repo.pulls.length + 14, head: body.head, base: body.base, title: body.title, html_url: `https://github.com/acme/salesforce/pull/${repo.pulls.length + 14}`};
+      repo.pulls.push(pr);
+      return send(201, pr);
+    }
+    if (/\/pulls$/.test(p)) {
+      const head = (url.searchParams.get("head") || "").split(":")[1];
+      return send(200, (repo.pulls || []).filter(x => !head || x.head === head));
     }
     return send(404, {message: "Mock GitHub: " + p});
   });

@@ -57,9 +57,10 @@ async function dataCount(conn, type, fullName) {
         const r = await conn.client.query(`SELECT COUNT() FROM ${obj} WHERE ${field} != null`);
         return r.totalSize;
       } catch (e) {
-        // Long text and some types can't be filtered: sample the newest rows.
+        // Long text and some types can't be filtered: a sample can only prove data exists.
         const r = await conn.client.query(`SELECT ${field} FROM ${obj} ORDER BY CreatedDate DESC LIMIT 200`);
-        return (r.records || []).filter(x => x[field] != null && x[field] !== false && x[field] !== "").length;
+        const n = (r.records || []).filter(x => x[field] != null && x[field] !== false && x[field] !== "").length;
+        return n > 0 ? n : null;
       }
     }
   } catch (e) { return null; }
@@ -92,7 +93,8 @@ export async function analyzeImpact(org, type, fullName, onStatus) {
   onStatus("Checking data and active flows…");
   const count = await dataCount(org.conn, type, fullName);
   const flows = await activeFlows(org.conn, deps.usedBy);
-  const verdict = impactVerdict({usedBy: deps.usedBy, codeMatches: code, dataCount: count, activeFlows: flows});
+  const verdict = impactVerdict({usedBy: deps.usedBy, codeMatches: code, dataCount: count, activeFlows: flows,
+    dataUnknown: count == null && (type === "CustomField" || type === "CustomObject")});
   return {org, type, fullName, id: row.id, ...deps, codeMatches: code, dataCount: count, activeFlows: flows, verdict, depNote};
 }
 

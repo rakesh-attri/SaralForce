@@ -231,7 +231,7 @@ export function ManualView({goTo}) {
       h("div", {className: "rel-orgbar"},
         h("div", {className: "rel-org"},
           h("span", {className: "rel-org-l"}, "Runbook for"),
-          h(SearchSelect, {value: pick, options, onChange: setPick, ariaLabel: "Runbook for"})),
+          h(SearchSelect, {value: pick, options, onChange: setPick, ariaLabel: "Runbook for", disabled: busy})),
         steps && h("div", {className: "rel-prog"},
           h("div", {className: "limit-bar"}, h("div", {className: "limit-fill", style: {width: (prog.total ? Math.round(prog.done / prog.total * 100) : 0) + "%"}})),
           h("span", {className: "insp-meta"}, `${prog.done} of ${prog.total} done`))),
