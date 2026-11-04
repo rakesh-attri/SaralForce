@@ -1,9 +1,11 @@
 import {LLM_PROVIDERS, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant, getLLMProvider, providerPermissionOrigin, checkProviderNetworkAccess, validateBaseUrl, getModelOptions, setCachedModels, hasValidConfig} from "./llm/llm-service.js";
 
 import {initSettings} from "./core/storage.js";
+import {showUsageToast, setShowUsageToast} from "./core/ai-usage.js";
 import {openInspectorInNewTab, setOpenInspectorInNewTab} from "./core/preferences.js";
 import {startTour} from "./ui/tour.js";
 import {SETTINGS_TOUR} from "./ui/tour-content.js";
+import {GitHubCard} from "./ui/github-settings.js";
 import {shouldAutoStart, markTourDone} from "./core/tours.js";
 
 let h = React.createElement;
@@ -80,7 +82,9 @@ class OptionsApp extends React.Component {
       modelOptions: getModelOptions(saved.provider || "openai"),
       modelsStatus: null,
       modelsMessage: "",
-      keyCleared: false
+      keyCleared: false,
+      showUsage: showUsageToast(),
+      testTokens: null
     };
   }
 
@@ -230,7 +234,10 @@ class OptionsApp extends React.Component {
         {role: "user", content: "Test"}
       ];
 
-      const result = await providerImpl.sendMessage(testMessages, apiKey, model, null, baseUrl);
+      let used = null;
+      const result = await providerImpl.sendMessage(testMessages, apiKey, model, null, baseUrl,
+        {onUsage: (u) => { if (u) used = u.input + u.output; }});
+      this.setState({testTokens: used});
       if (!String(result || "").trim()) {
         throw new Error("The provider answered with an empty reply. Check the model name.");
       }
@@ -425,7 +432,9 @@ class OptionsApp extends React.Component {
           testStatus && h("div", {
             className: "opt-alert " + (testStatus === "success" ? "ok" : testStatus === "error" ? "err" : "info"),
             role: testStatus === "error" ? "alert" : "status"
-          }, testStatus === "success" ? "✓ Connected — the AI features are ready to use." : testMessage),
+          }, testStatus === "success"
+            ? `✓ Connected — the AI features are ready to use.${this.state.testTokens ? ` This test used ${this.state.testTokens} tokens.` : ""}`
+            : testMessage),
           this.state.permDenied && h("div", {className: "opt-alert warn"},
             h("span", null, `Network access to ${this.state.permHost} was not granted, so AI requests will fail until you allow it.`),
             h("button", {className: "opt-btn opt-btn-small", onClick: () => this.grantPermission()}, "Allow access")),
@@ -465,7 +474,22 @@ class OptionsApp extends React.Component {
                 checked: this.state.openInspectorTab,
                 onChange: (e) => this.onInspectorTabChange(e)
               }),
+              h("span", {className: "opt-switch-track", "aria-hidden": "true"}))),
+          h("div", {className: "opt-pref"},
+            h("div", {className: "opt-pref-t"},
+              h("label", {htmlFor: "showAiUsage"}, "Show AI usage after each request"),
+              h("p", {className: "opt-help"}, "A small note with the tokens used fades in for a few seconds after every ✨ request; click it to see exactly what was sent and received. The full history is always under ? → AI usage.")),
+            h("label", {className: "opt-switch"},
+              h("input", {
+                id: "showAiUsage",
+                type: "checkbox",
+                role: "switch",
+                checked: this.state.showUsage,
+                onChange: (e) => { setShowUsageToast(e.target.checked); this.setState({showUsage: e.target.checked}); }
+              }),
               h("span", {className: "opt-switch-track", "aria-hidden": "true"})))),
+
+        h(GitHubCard, null),
 
         // ── About ──
         h("section", {className: "opt-card opt-about"},

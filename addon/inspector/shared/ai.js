@@ -14,9 +14,14 @@ const SOQL_FIX_SYSTEM =
   '{"explanation": "<plain simple words, 1-2 sentences, no jargon>", "fixedQuery": "<corrected SOQL, single line>"}';
 
 const APEX_CHECK_SYSTEM =
-  "You are a Salesforce Apex expert helping a beginner. " +
-  "Find compile errors: missing semicolons, unbalanced braces, unknown methods or variables, " +
-  "wrong types, bad SOQL syntax. " +
+  "You are a Salesforce Apex expert helping a beginner. Salesforce has just reported the error given for this " +
+  "anonymous Apex; fix THAT error with the smallest possible change. " +
+  "Rules: keep every statement, comment, record id and value the user wrote unless it is the direct cause of the error; " +
+  "never delete or rewrite working code; never remove code because an object, field or class looks unfamiliar — " +
+  "custom objects (__c), managed packages and industry clouds (Education Cloud AcademicOrder, Health Cloud, Financial " +
+  "Services and so on) are valid in the user's org. If the error comes from data or org setup (a missing required field " +
+  "value, a validation rule, a bad id, a permission) and not from the code, set ok to false, explain it, and leave fixedCode empty. " +
+  "Typical code fixes: missing semicolons, unbalanced braces, wrong types, misspelled methods or variables, bad SOQL syntax. " +
   "Reply with ONLY a JSON object: " +
   '{"ok": true, "error": "", "line": null, "explanation": "", "fixedCode": ""} when the code is fine, ' +
   'or {"ok": false, "error": "<the compile error in plain words>", "line": <number or null>, ' +
@@ -38,6 +43,7 @@ async function suggestSoqlFix(failedQuery, sfError, {signal} = {}) {
     }
   }
   const parsed = await askAiJson({
+    feature: "Fix SOQL",
     system: SOQL_FIX_SYSTEM,
     user: `Failed SOQL: ${failedQuery}\nSalesforce error: ${sfError}${schemaHint}`,
     validate: o => (o.fixedQuery ? null : "The JSON has no fixedQuery."),
@@ -96,6 +102,7 @@ async function soqlFromText(request, {currentObject, signal} = {}) {
   }
   const others = objects.filter(o => !picked.includes(o.name)).slice(0, 300).map(o => o.name);
   const parsed = await askAiJson({
+    feature: "Write SOQL",
     system: SOQL_FROM_TEXT_SYSTEM,
     user: `Request: ${text}\n\n${schema.join("\n\n") || "(no schema matched)"}` +
       (others.length ? `\n\nOther queryable objects: ${others.join(", ")}` : ""),
@@ -112,7 +119,7 @@ async function soqlFromText(request, {currentObject, signal} = {}) {
 function explainSoql(query, {signal} = {}) {
   const q = String(query || "").trim();
   if (!q) return Promise.reject(new Error("Enter a SOQL query first."));
-  return askAi({system: SOQL_EXPLAIN_SYSTEM, user: q.slice(0, 8000), signal});
+  return askAi({system: SOQL_EXPLAIN_SYSTEM, user: q.slice(0, 8000), signal, feature: "Explain SOQL"});
 }
 
 const METADATA_EXPLAIN_SYSTEM =
@@ -138,6 +145,7 @@ async function validationRuleFromText(objectName, request, {current, signal} = {
   try { schema = describeForPrompt(await ffDescribeObject(objectName)); }
   catch (e) { schema = `(Could not describe ${objectName}: ${e.message})`; }
   const parsed = await askAiJson({
+    feature: "Validation rule",
     system: VALIDATION_RULE_SYSTEM,
     user: `Object: ${objectName}\nRequest: ${text}` + (current ? `\nCurrent formula (improve it): ${current}` : "") + `\n\n${schema}`,
     validate: o => (String(o.formula || "").trim() ? null : "The JSON has no formula."),
@@ -159,7 +167,7 @@ const LWC_RULES =
   "lightning-datatable, lightning-record-form, lightning-input, lightning-button) and SLDS utility classes. On record pages " +
   "use `@api recordId` and `@api objectApiName`. Read single records with lightning/uiRecordApi (getRecord, getFieldValue) " +
   "and only add Apex when a query is needed. Apex classes are `public with sharing`, methods `@AuraEnabled(cacheable=true)` " +
-  "for reads, use WITH SECURITY_ENFORCED, bind variables, and LIMIT. Import Apex as `import m from '@salesforce/apex/Class.method'`. " +
+  "for reads, use WITH USER_MODE in SOQL (never WITH SECURITY_ENFORCED, which current API versions reject), bind variables, and LIMIT. Import Apex as `import m from '@salesforce/apex/Class.method'`. " +
   "Show errors with lightning/platformShowToastEvent. No innerHTML, eval, <script>, external libraries or hard-coded ids. " +
   "CSS is scoped to the component (use :host). Use only field API names from the schema given.";
 
@@ -173,7 +181,7 @@ const LWC_FROM_TEXT_SYSTEM =
 
 const APEX_RULES =
   "Apex rules: classes are `with sharing` unless the request needs otherwise; bulkify (no SOQL or DML inside loops, work on " +
-  "collections); use WITH SECURITY_ENFORCED or Security.stripInaccessible for user-facing reads, bind variables, and LIMIT; " +
+  "collections); use WITH USER_MODE in SOQL (never WITH SECURITY_ENFORCED, which current API versions reject) or Security.stripInaccessible for user-facing reads, bind variables, and LIMIT; " +
   "no hard-coded record ids; triggers stay thin and call a handler class; test classes use @IsTest, @TestSetup data, " +
   "Test.startTest/stopTest and real asserts with messages (aim for full coverage). Visualforce pages start with <apex:page> " +
   "and use lightningStylesheets=\"true\". Aura components start with <aura:component>; controller and helper JS files are " +
@@ -223,6 +231,7 @@ async function lwcFromText(request, {name, label, object, apiVersion, targets, s
   const schema = await schemaForRequest(object, ask);
   let files = [];
   const parsed = await askAiJson({
+    feature: "Build LWC",
     system: LWC_FROM_TEXT_SYSTEM,
     user: `Component folder name: ${name} (JS class ${pascalCase(name)})` +
       (label ? `\nLabel: ${label}` : "") + (object ? `\nMain object: ${object}` : "") +
@@ -269,6 +278,7 @@ async function codeFromText(kind, request, form = {}, {signal} = {}) {
     `Request: ${ask}`,
   ].filter(Boolean).join("\n");
   const parsed = await askAiJson({
+    feature: "Build code",
     system: CODE_FROM_TEXT_SYSTEM,
     user: hints + (schema ? `\n\n${schema}` : ""),
     validate: o => {
@@ -295,6 +305,7 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
   let merged = draft;
   let changed = [];
   const parsed = await askAiJson({
+    feature: "Change draft",
     system: DRAFT_REVISE_SYSTEM,
     user: `Kind: ${draft.kind}\nName: ${draft.name}\n` +
       (ask ? `Request: ${ask}\n` : "") + (error ? `Salesforce deploy error to fix: ${error}\n` : "") +
@@ -324,7 +335,7 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
 function explainMetadata(kind, name, source, {signal} = {}) {
   const text = String(source || "").slice(0, 15000);
   if (!text.trim()) return Promise.reject(new Error("Nothing to explain: the source is empty."));
-  return askAi({system: METADATA_EXPLAIN_SYSTEM, user: `${kind}: ${name}\n\n${text}`, signal});
+  return askAi({system: METADATA_EXPLAIN_SYSTEM, user: `${kind}: ${name}\n\n${text}`, signal, feature: `Explain ${kind}`});
 }
 
 const DATA_QUALITY_SYSTEM =
@@ -335,7 +346,7 @@ const DATA_QUALITY_SYSTEM =
 
 // Plain-words review of a Data quality profile. Never changes anything.
 function explainDataQuality(profileText, {signal} = {}) {
-  return askAi({system: DATA_QUALITY_SYSTEM, user: String(profileText || "").slice(0, 14000), signal});
+  return askAi({system: DATA_QUALITY_SYSTEM, user: String(profileText || "").slice(0, 14000), signal, feature: "Data quality review"});
 }
 
 const TEST_FAILURE_SYSTEM =
@@ -349,7 +360,7 @@ function explainTestFailure({className, method, message, stackTrace, testSource,
   const parts = [`Test: ${className}.${method}`, `Failure: ${message || "(no message)"}`, `Stack trace:\n${stackTrace || "(none)"}`];
   if (testSource) parts.push(`Test method source:\n${String(testSource).slice(0, 6000)}`);
   if (codeSource) parts.push(`Code under test (where it failed):\n${String(codeSource).slice(0, 6000)}`);
-  return askAi({system: TEST_FAILURE_SYSTEM, user: parts.join("\n\n"), signal});
+  return askAi({system: TEST_FAILURE_SYSTEM, user: parts.join("\n\n"), signal, feature: "Explain test failure"});
 }
 
 // Ask the Options-configured LLM to review Apex for compile errors BEFORE a run
@@ -358,6 +369,7 @@ function explainTestFailure({className, method, message, stackTrace, testSource,
 async function apexAiCheck(sourceCode, serverError, {signal} = {}) {
   const code = String(sourceCode || "").slice(0, 12000);
   const parsed = await askAiJson({
+    feature: "Apex check",
     system: APEX_CHECK_SYSTEM,
     user: serverError
       ? `Salesforce rejected this code with: ${serverError}\n\nApex code:\n${code}`
@@ -376,8 +388,77 @@ async function apexAiCheck(sourceCode, serverError, {signal} = {}) {
 
 // One shared call to the Options-configured LLM (log Quick Analysis, log
 // chat, org audit). Throws "NO_LLM_CONFIG" when no provider is set up.
-function logsAskLlm(systemPrompt, userText, {signal} = {}) {
-  return askAi({system: systemPrompt, user: userText, signal});
+function logsAskLlm(systemPrompt, userText, {signal, feature = "Log analysis"} = {}) {
+  return askAi({system: systemPrompt, user: userText, signal, feature});
 }
 
-export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm};
+const RELEASE_NOTES_SYSTEM =
+  "You are a Salesforce release manager. From the metadata changes given, write short release notes for admins and business users. " +
+  "Group by area (Data model, Automation, Code, UI, Security). One bullet per real change, in plain words; say what changed and why it matters. " +
+  "Then a 'Watch out' section listing risks: deletes, profile or permission changes, flows that need activation, data that needs loading. " +
+  "No code, no markdown tables, at most 25 bullets.";
+
+const DEPLOY_FAILURE_SYSTEM =
+  "You are a senior Salesforce developer fixing a failed deployment or validation. " +
+  "For each problem give: what is wrong (plain words), the likely cause, and the exact fix (which component to add, change or remove; " +
+  "which test to fix and how). Mention missing dependencies to add to the package. Order the fixes so the next validation passes. " +
+  "Be concise: numbered list, no greetings.";
+
+// Plain release notes from a compare selection (component names and short diffs only).
+function releaseNotesFromChanges(changesText, {source, target, signal} = {}) {
+  return askAi({
+    feature: "Release notes",
+    system: RELEASE_NOTES_SYSTEM,
+    user: `Release from ${source || "source org"} to ${target || "target org"}.
+
+${changesText}`,
+    signal
+  });
+}
+
+// Fix plan for deploy errors and failing tests.
+function explainDeployFailures(failuresText, {signal} = {}) {
+  return askAi({feature: "Explain deploy failure", system: DEPLOY_FAILURE_SYSTEM, user: failuresText, signal});
+}
+
+const RUNBOOK_SYSTEM =
+  "You are a Salesforce release manager writing the manual runbook for a deployment. " +
+  "You get the steps SaralForce detected and the Setup audit trail of the source org. " +
+  "Add only what a person must do by hand that is NOT already in the detected steps: settings changed in Setup (from the audit trail), " +
+  "data to load, users to notify, things to check after the deploy. Order them as they should be done. " +
+  'Reply with ONLY JSON: {"steps": [{"phase": "pre" | "post", "title": "<short imperative>", "detail": "<1-2 plain sentences>", "setupPath": "<optional /lightning/setup/... path>"}]}. At most 15 steps.';
+
+// Extra manual steps for a release (detected steps + audit trail as text).
+async function runbookFromSteps(text, {signal} = {}) {
+  const parsed = await askAiJson({
+    feature: "Release runbook",
+    system: RUNBOOK_SYSTEM,
+    user: text,
+    validate: o => (Array.isArray(o.steps) ? null : "The JSON has no steps array."),
+    signal
+  });
+  return parsed.steps;
+}
+
+const LOG_PROFILE_SYSTEM =
+  "You are a senior Salesforce developer tuning Apex performance. You get a profile summary of one transaction " +
+  "(hot spots, slowest methods, queries, DML, limits). Give the 3-6 changes that save the most time or limits, most important first: " +
+  "what to change, where (method or line), and a short Apex pattern when it helps (bulkify, Map lookups, one DML on a list, selective filters, async). " +
+  "Plain words, numbered list, no greetings.";
+
+// Speed-up advice from a profile summary (core/log-profile.js profileForPrompt).
+function explainLogProfile(summary, {signal} = {}) {
+  return askAi({feature: "Log profile", system: LOG_PROFILE_SYSTEM, user: summary, signal});
+}
+
+const IMPACT_SYSTEM =
+  "You are a senior Salesforce architect reviewing whether a component can be changed or deleted safely. " +
+  "From the dependencies given, explain in plain words what would break, who would notice, and the safe order of changes " +
+  "(for example: update the flow, deploy the Apex change, back up data, then delete the field). Numbered list, at most 8 points.";
+
+// Risk summary for Impact analysis (names and counts only).
+function explainImpact(summary, {signal} = {}) {
+  return askAi({feature: "Impact analysis", system: IMPACT_SYSTEM, user: summary, signal});
+}
+
+export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};

@@ -30,16 +30,17 @@ export const BUILDER_TOUR = {
 const TAB_TOURS = {
   records: ["Records", "Open any record or list view in Salesforce and it loads here. Use View, Read-only or Edit mode, and export the fields to CSV."],
   soql: ["SOQL", "Type a query and suggestions appear (Tab or Enter accepts), or add fields from the explorer, then press Ctrl+Enter to run. Turn on Tooling API for setup objects, or Recycle Bin for deleted rows. Click an Id in the results to see the whole record."],
-  apex: ["Run Apex", "Run anonymous Apex and read the debug log right below. Select a few lines and use Execute Highlighted to run only those. Limits shows the CPU, queries and DML the run used. With Use AI on, code is checked for compile errors first."],
+  apex: ["Run Apex", "Run anonymous Apex and read the debug log right below. Select a few lines and use Execute Highlighted to run only those. Limits shows the CPU, queries and DML the run used. Your code runs exactly as written; with Use AI on, the AI only suggests a fix when Salesforce reports an error, and you choose whether to apply it."],
   export: ["Export", "Build a query or pick an object, preview the rows, then download CSV, Excel or JSON. Bulk API handles very large exports."],
   import: ["Import", "Drop in a CSV, map columns to fields, and validate before you run. Deletes always ask for confirmation, and result files show every success and failure."],
   users: ["Users", "Type to search users as you go. Inspect and assign permission sets, check why a user can see an object or field, log in as a user, or clone one with the same access. Reset, freeze and removals ask before they run."],
   access: ["Access", "Compare up to five profiles or permission sets side by side, audit who holds powerful permissions such as Modify All Data, and work your approval inbox: approve, reject or submit records."],
   metadata: ["Metadata", "Browse Apex, triggers, pages, components, flows, validation rules and custom metadata, read their source, and ask AI to explain them. Schema shows an object's fields, relationships, field access and data quality. Use New to start an Apex class, trigger, page, LWC, Aura component, flow or validation rule from a working template (or describe it and let AI write it), edit it, ask AI for changes, then deploy. Edit opens an existing component the same way and saves it back (Apex classes and triggers: sandboxes and developer orgs only). Add items to a package.xml."],
   api: ["API Explorer", "Send REST, Composite or SOAP requests to this org with your session. Pick a quick request on the left, click any API path in a response to open it, and find past requests in History."],
-  logs: ["Debug logs", "Turn on logging for a user, load recent logs, and use AI Quick Analysis for a plain-English summary. Ask AI lets you ask questions about one log."],
+  logs: ["Debug logs", "Turn on logging for a user, load recent logs, and use AI Quick Analysis for a plain-English summary. Ask AI lets you ask questions about one log. Open a log and switch to ⏱ Profile to see where the time went."],
   org: ["Org info", "Storage, API limits, recent setup changes and login history at a glance, plus an optional AI hygiene check."],
   apptabs: ["App tabs", "Pick an app, add a tab from one search box, reorder or remove tabs, and choose which profiles or permission sets can see each tab."],
+  release: ["Release", "Compare any two orgs you're logged into in this browser and see what is new, changed or only in the target, with side-by-side diffs. ⇄ swaps them for a reverse deployment. Pick items (Add missing fills in what they depend on), then Validate, Quick deploy or Deploy now. Changes lists what changed since a date; Package builds package.xml and deletes. Manual steps runs what a deploy can't (flow activation, assignments, scheduled jobs) and links the rest. History keeps every release with a rollback point, plus snapshots to spot drift. Impact tells you what uses a component before you change or delete it."],
   coverage: ["Code coverage", "Coverage per Apex class, with a filter for test classes. Lines shows which lines are covered. Run tests to see live progress and each failure, and ask AI to explain a failing test."]
 };
 
@@ -68,6 +69,29 @@ export const SETTINGS_TOUR = {
 
 // Highlights per release, shown once after an update (newest first).
 export const RELEASE_NOTES = [
+  {
+    version: "2.3.0",
+    title: "What's new in SaralForce 2.3",
+    items: [
+      "New Release tab: compare any two orgs you're logged into, see side-by-side diffs, add missing dependencies, then Validate and Quick deploy (forward or reverse).",
+      "Every deploy gets a version and a rollback point; History can roll it back, take snapshots and show drift.",
+      "Manual steps: SaralForce activates flows, copies permission set assignments, group members and custom settings, schedules Apex jobs, and links the rest to Setup.",
+      "Impact: see what uses a field, class or flow before you change or delete it.",
+      "Optional GitHub: commit releases and snapshots, and deploy from a branch (Settings → GitHub).",
+      "Logs → Profile: where the time went, queries and DML in loops, limits. Plus deploy fixes for Apex (WITH USER_MODE) and LWC."
+    ]
+  },
+  {
+    version: "2.2.0",
+    title: "What's new in SaralForce 2.2",
+    items: [
+      "New objects now show up in the App Launcher: the builder checks your access, fixes it, and shows a checklist with Fix it.",
+      "Show in app: add the new tab to a Lightning app's nav bar; new fields go on every page layout.",
+      "Field suggestions while you type formulas, rules and list views, with missing fields caught before deploy.",
+      "See AI usage: a short note shows the tokens after each ✨ request; ? → AI usage shows the exact input and output.",
+      "Redesigned Settings (AI is optional) and a simpler App Tab Manager."
+    ]
+  },
   {
     version: "2.1.0",
     title: "What's new in SaralForce 2.1",

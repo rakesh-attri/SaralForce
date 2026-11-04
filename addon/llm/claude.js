@@ -1,3 +1,5 @@
+import {usageFromClaude} from "../core/ai-usage.js";
+
 const API_BASE = "https://api.anthropic.com/v1";
 export const CLAUDE_DEFAULT_MODEL = "claude-sonnet-5-5";
 
@@ -27,7 +29,8 @@ export class ClaudeProvider {
     this.name = "Anthropic Claude";
   }
 
-  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal} = {}) {
+  // onUsage({input, output, reasoning}) reports the tokens the API counted.
+  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal, onUsage} = {}) {
     // Claude takes the system prompt separately from user/assistant turns.
     let systemMessage = "";
     const claudeMessages = [];
@@ -68,10 +71,11 @@ export class ClaudeProvider {
     }
 
     if (onChunk) {
-      return this._handleStream(response, onChunk);
+      return this._handleStream(response, onChunk, onUsage);
     }
 
     const data = await response.json();
+    if (onUsage) onUsage(usageFromClaude(data.usage));
     const refusal = stopReasonError(data.stop_reason);
     if (refusal) throw refusal;
     // Thinking blocks come before the answer; join only the text blocks.
@@ -101,12 +105,14 @@ export class ClaudeProvider {
     return ids;
   }
 
-  async _handleStream(response, onChunk) {
+  async _handleStream(response, onChunk, onUsage) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullText = "";
     let buffer = "";
     let stopReason = null;
+    // Input tokens arrive in message_start, output tokens in message_delta.
+    const usage = {};
 
     while (true) {
       const {done, value} = await reader.read();
@@ -124,6 +130,11 @@ export class ClaudeProvider {
         } catch (e) {
           continue; // Skip malformed chunks
         }
+        if (parsed.type === "message_start" && parsed.message?.usage) {
+          Object.assign(usage, parsed.message.usage);
+        } else if (parsed.type === "message_delta" && parsed.usage) {
+          Object.assign(usage, parsed.usage);
+        }
         if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta") {
           fullText += parsed.delta.text || "";
           onChunk(fullText);
@@ -135,6 +146,7 @@ export class ClaudeProvider {
       }
     }
 
+    if (onUsage) onUsage(usageFromClaude(usage));
     const refusal = stopReasonError(stopReason);
     if (refusal && !fullText) throw refusal;
     return fullText;

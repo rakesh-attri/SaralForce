@@ -11,6 +11,9 @@ import fs from "node:fs";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 import {accessTables, metadataTables, permissionSetDescribe, applyWhere} from "./mock-access-metadata.js";
+import {Readable} from "node:stream";
+import {releaseSoap, releaseRest, resetRelease} from "./mock-release.js";
+import {mockGithub, githubState, resetGithub} from "./mock-github.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const addonDir = path.join(root, "addon");
@@ -69,17 +72,41 @@ const logs = [0, 1, 2, 3, 4].map(i => ({
   Application: "Unknown", Status: i === 1 ? "Attempt to de-reference a null object" : "Success", DurationMilliseconds: 120 + i * 37,
   LogLength: 4200 + i * 900, StartTime: iso((i + 1) * 900e3), Location: "Monitoring"
 }));
-const LOG_BODY = [
-  "67.0 APEX_CODE,DEBUG;APEX_PROFILING,INFO",
-  "12:00:00.0 (100)|EXECUTION_STARTED",
-  "12:00:00.0 (200)|CODE_UNIT_STARTED|[EXTERNAL]|01pdN000000000AAA|PaymentGateway.run",
-  "12:00:00.0 (300)|USER_DEBUG|[12]|DEBUG|Charging invoice INV-0042",
-  "12:00:00.0 (400)|SOQL_EXECUTE_BEGIN|[15]|Aggregations:0|SELECT Id FROM Account LIMIT 1",
-  "12:00:00.0 (500)|EXCEPTION_THROWN|[22]|System.NullPointerException: Attempt to de-reference a null object",
-  "12:00:00.0 (600)|FATAL_ERROR|System.NullPointerException: Attempt to de-reference a null object",
-  "12:00:00.0 (700)|CODE_UNIT_FINISHED|PaymentGateway.run",
-  "12:00:00.0 (800)|EXECUTION_FINISHED"
-].join("\n");
+const LOG_BODY = (() => {
+  // A realistic transaction: a query and an update inside a loop (N+1),
+  // a slow callout, limit usage, then the original NullPointerException.
+  const t = (ms, rest) => `12:00:${String(Math.floor(ms / 1000)).padStart(2, "0")}.${ms % 1000} (${Math.round(ms * 1e6)})|${rest}`;
+  const lines = ["67.0 APEX_CODE,FINE;APEX_PROFILING,INFO", t(0, "EXECUTION_STARTED"),
+    t(1, "CODE_UNIT_STARTED|[EXTERNAL]|01pdN000000000AAA|PaymentGateway.run"),
+    t(2, "USER_DEBUG|[12]|DEBUG|Charging invoice INV-0042"),
+    t(3, "METHOD_ENTRY|[14]|01pdN000000000AAA|PaymentGateway.applyCredits(List<Invoice__c>)")];
+  let ms = 4;
+  for (let i = 0; i < 12; i++) {
+    lines.push(t(ms, `SOQL_EXECUTE_BEGIN|[15]|Aggregations:0|SELECT Id, Balance__c FROM Account WHERE Id = :acctId`));
+    lines.push(t(ms + 6, "SOQL_EXECUTE_END|[15]|Rows:1"));
+    lines.push(t(ms + 7, "DML_BEGIN|[18]|Op:Update|Type:Account|Rows:1"));
+    lines.push(t(ms + 19, "DML_END|[18]"));
+    ms += 21;
+  }
+  lines.push(t(ms, "METHOD_EXIT|[14]|01pdN000000000AAA|PaymentGateway.applyCredits(List<Invoice__c>)"));
+  lines.push(t(ms + 1, "METHOD_ENTRY|[20]|01pdN000000000AAA|PaymentGateway.charge()"));
+  lines.push(t(ms + 2, "CALLOUT_REQUEST|[21]|System.HttpRequest[Endpoint=https://pay.example.com/charge, Method=POST]"));
+  lines.push(t(ms + 2402, "CALLOUT_RESPONSE|[21]|System.HttpResponse[Status=OK, StatusCode=200]"));
+  lines.push(t(ms + 2403, "METHOD_EXIT|[20]|01pdN000000000AAA|PaymentGateway.charge()"));
+  lines.push(t(ms + 2404, "SOQL_EXECUTE_BEGIN|[15]|Aggregations:0|SELECT Id FROM Account LIMIT 1"));
+  lines.push(t(ms + 2405, "SOQL_EXECUTE_END|[15]|Rows:1"));
+  lines.push(t(ms + 2406, "EXCEPTION_THROWN|[22]|System.NullPointerException: Attempt to de-reference a null object"));
+  lines.push(t(ms + 2407, "FATAL_ERROR|System.NullPointerException: Attempt to de-reference a null object"));
+  lines.push(t(ms + 2408, "CUMULATIVE_LIMIT_USAGE"));
+  lines.push(t(ms + 2408, "LIMIT_USAGE_FOR_NS|(default)|"));
+  lines.push("  Number of SOQL queries: 13 out of 100");
+  lines.push("  Number of DML statements: 12 out of 150");
+  lines.push("  Maximum CPU time: 7420 out of 10000 ******* CLOSE TO LIMIT");
+  lines.push("  Number of callouts: 1 out of 100");
+  lines.push(t(ms + 2409, "CODE_UNIT_FINISHED|PaymentGateway.run"));
+  lines.push(t(ms + 2410, "EXECUTION_FINISHED"));
+  return lines.join("\n");
+})();
 
 const field = (name, type, label, extra = {}) => ({
   name, type, label: label || name.replace(/__c$/, "").replace(/_/g, " "), custom: name.endsWith("__c"), nillable: true,
@@ -294,6 +321,24 @@ function mockMetadataSoap(req, res) {
       mockTabDesc.set(name, desc);
       return res.end(env(`<updateMetadataResponse><result><fullName>${name}</fullName><success>true</success></result></updateMetadataResponse>`));
     }
+    if (/readMetadata/.test(raw) && type === "CustomField") {
+      const name = (/<(?:met:)?fullNames>([^<]+)</.exec(raw) || [])[1] || "";
+      const [obj, fld] = name.split(".");
+      const d = (describes[obj] && describes[obj].fields || []).find(x => x.name === fld);
+      if (!d) return res.end(env("<readMetadataResponse><result></result></readMetadataResponse>"));
+      const picklist = d.type === "picklist" ? "<valueSet><restricted>true</restricted><valueSetDefinition><sorted>false</sorted>" +
+        (d.picklistValues || []).map(v => `<value><fullName>${v.value}</fullName><default>false</default><label>${v.label || v.value}</label></value>`).join("") +
+        "</valueSetDefinition></valueSet>" : "";
+      const type = {picklist: "Picklist", currency: "Currency", date: "Date", reference: "Lookup"}[d.type] || "Text";
+      return res.end(env(`<readMetadataResponse><result><records xsi:type="CustomField"><fullName>${name}</fullName><label>${d.label}</label>` +
+        (type === "Text" ? "<length>255</length>" : "") + (type === "Currency" ? "<precision>18</precision><scale>2</scale>" : "") +
+        `<required>false</required><type>${type}</type>${picklist}</records></result></readMetadataResponse>`));
+    }
+    if (/updateMetadata/.test(raw) && /met:CustomField/.test(raw)) {
+      mockLastFieldUpdate = raw.slice(raw.indexOf("<met:metadata"), raw.indexOf("</met:metadata>") + 15);
+      const name = (/<(?:met:)?fullName>([^<]+)</.exec(raw) || [])[1];
+      return res.end(env(`<updateMetadataResponse><result><fullName>${name}</fullName><success>true</success></result></updateMetadataResponse>`));
+    }
     if (/readMetadata/.test(raw) && type === "Layout") {
       const name = (/<(?:met:)?fullNames>([^<]+)</.exec(raw) || [])[1];
       return res.end(env("<readMetadataResponse><result><records xsi:type=\"Layout\"><fullName>" + name + "</fullName>" +
@@ -330,7 +375,17 @@ function api(req, res, url) {
   }
   if (/\/tooling\/runTestsAsynchronous\/?$/.test(p) && req.method === "POST") return json(res, 200, TEST_JOB);
   if (p.startsWith("/services/Soap/s/") && req.method === "POST") return mockExecuteAnonymous(req, res);
-  if (p.startsWith("/services/Soap/m/") && req.method === "POST") return mockMetadataSoap(req, res);
+  if (releaseRest(req, res, url, json)) return undefined;
+  if (p.startsWith("/services/Soap/m/") && req.method === "POST") {
+    // Release Center calls (and the second mock org) first, then the rest.
+    let raw = "";
+    req.on("data", c => { raw += c; });
+    req.on("end", async () => {
+      if (await releaseSoap(raw, res)) return;
+      mockMetadataSoap(Readable.from([Buffer.from(raw)]), res);
+    });
+    return undefined;
+  }
   if (/\/services\/data\/v[\d.]+\/tabs\/?$/.test(p)) {
     return json(res, 200, [{name: "standard-Account", sobjectName: "Account", label: "Accounts"},
       ...mockCustomTabs.map(t => ({name: t.fullName, sobjectName: t.fullName, label: t.fullName.replace(/__c$/, "").replace(/_/g, " "), custom: true}))]);
@@ -402,6 +457,47 @@ function api(req, res, url) {
     });
     return undefined;
   }
+  // Tooling creates with Salesforce's real rules: Apex rejects WITH
+  // SECURITY_ENFORCED; a bundle's base file (.js / .cmp) must come first.
+  const toolCreate = /\/tooling\/sobjects\/(ApexClass|ApexTrigger|ApexPage|LightningComponentBundle|LightningComponentResource|AuraDefinitionBundle|AuraDefinition)\/?$/.exec(p);
+  if (toolCreate && req.method === "POST") {
+    let raw = "";
+    req.on("data", c => { raw += c; });
+    req.on("end", () => {
+      let body = {};
+      try { body = JSON.parse(raw || "{}"); } catch { body = {}; }
+      const type = toolCreate[1];
+      const fail = (errorCode, message) => json(res, 400, [{errorCode, message, fields: []}]);
+      const newId = prefix => prefix + String(++mockToolSeq).padStart(12, "0") + "AAA";
+      if (/^Apex(Class|Trigger)$/.test(type) && /\bWITH\s+SECURITY_ENFORCED\b/i.test(body.Body || "")) {
+        return fail("INVALID_FIELD_FOR_INSERT_UPDATE", "WITH SECURITY_ENFORCED is no longer supported, use WITH USER_MODE instead.");
+      }
+      if (type === "LightningComponentBundle" || type === "AuraDefinitionBundle") {
+        const id = newId(type === "LightningComponentBundle" ? "0Rb" : "0Ab");
+        mockBundles[id] = {name: body.FullName || body.DeveloperName, hasBase: false};
+        return json(res, 201, {id, success: true, errors: []});
+      }
+      if (type === "LightningComponentResource") {
+        const b = mockBundles[body.LightningComponentBundleId] || {name: "c", hasBase: true};
+        const isBase = body.FilePath === `lwc/${b.name}/${b.name}.js`;
+        if (!b.hasBase && !isBase) return fail("FIELD_INTEGRITY_EXCEPTION", `No base file for markup://c:${b.name}: Source [Source]`);
+        if (isBase) b.hasBase = true;
+        mockDeployLog.push(`${type} ${body.FilePath}`);
+        return json(res, 201, {id: newId("0Rd"), success: true, errors: []});
+      }
+      if (type === "AuraDefinition") {
+        const b = mockBundles[body.AuraDefinitionBundleId] || {name: "c", hasBase: true};
+        const isBase = /^(COMPONENT|APPLICATION|EVENT|INTERFACE|TOKENS)$/.test(body.DefType || "");
+        if (!b.hasBase && !isBase) return fail("FIELD_INTEGRITY_EXCEPTION", `No base file for markup://c:${b.name}: Source [Source]`);
+        if (isBase) b.hasBase = true;
+        mockDeployLog.push(`${type} ${body.DefType}`);
+        return json(res, 201, {id: newId("0Ad"), success: true, errors: []});
+      }
+      mockDeployLog.push(`${type} ${body.Name || body.FullName || ""}`);
+      return json(res, 201, {id: newId(type === "ApexClass" ? "01p" : type === "ApexTrigger" ? "01q" : "066"), success: true, errors: []});
+    });
+    return undefined;
+  }
   const perm = /\/data\/v[\d.]+\/sobjects\/(PermissionSet|ObjectPermissions|FieldPermissions|PermissionSetAssignment)\/?$/.exec(p);
   if (perm && req.method === "POST") {
     permPosts[perm[1]] = (permPosts[perm[1]] || 0) + 1;
@@ -435,6 +531,10 @@ function serveFile(res, filePath) {
 // http://127.0.0.1:<PORT>/mock-llm/v1 and any key.
 let lastLlmRequest = null;
 const permPosts = {};
+const mockBundles = {};
+const mockDeployLog = [];
+let mockToolSeq = 0;
+let mockLastFieldUpdate = "";
 // Canned LWC bundle for "Build with AI" (valid enough to pass checkLwcBundle).
 function mockLwcBundle(name) {
   const cls = name.charAt(0).toUpperCase() + name.slice(1);
@@ -448,7 +548,7 @@ function mockLwcBundle(name) {
       css: ":host {\n    display: block;\n}",
     },
     apex: [{name: "OpenCasesController", body: "public with sharing class OpenCasesController {\n    @AuraEnabled(cacheable=true)\n" +
-      "    public static List<Case> getOpenCases(Id accountId) {\n        return [SELECT Id, CaseNumber, Subject FROM Case WHERE AccountId = :accountId AND IsClosed = false WITH SECURITY_ENFORCED LIMIT 50];\n    }\n}"}],
+      "    public static List<Case> getOpenCases(Id accountId) {\n        return [SELECT Id, CaseNumber, Subject FROM Case WHERE AccountId = :accountId AND IsClosed = false WITH USER_MODE LIMIT 50];\n    }\n}"}],
     explanation: "Shows the account's open cases in a table. Add it to an Account record page in Lightning App Builder.",
   });
 }
@@ -467,7 +567,7 @@ function mockCode(user) {
     [`aura/${name}/${name}.cmp`]: `<aura:component implements="flexipage:availableForRecordHome,force:hasRecordId" access="global">\n    <lightning:card title="Contacts"><p class="slds-p-horizontal_small">{!v.recordId}</p></lightning:card>\n</aura:component>`,
     [`aura/${name}/${name}Controller.js`]: "({\n    init: function (component, event, helper) {\n    }\n})",
   } : {
-    [`classes/${name}.cls`]: `public with sharing class ${name} {\n    public static Integer closeStale() {\n        List<Opportunity> rows = [SELECT Id FROM Opportunity WHERE IsClosed = false AND CreatedDate < LAST_N_DAYS:90 WITH SECURITY_ENFORCED LIMIT 200];\n        for (Opportunity o : rows) { o.StageName = 'Closed Lost'; }\n        update rows;\n        return rows.size();\n    }\n}`,
+    [`classes/${name}.cls`]: `public with sharing class ${name} {\n    public static Integer closeStale() {\n        List<Opportunity> rows = [SELECT Id FROM Opportunity WHERE IsClosed = false AND CreatedDate < LAST_N_DAYS:90 WITH USER_MODE LIMIT 200];\n        for (Opportunity o : rows) { o.StageName = 'Closed Lost'; }\n        update rows;\n        return rows.size();\n    }\n}`,
     [`classes/${name}Test.cls`]: `@IsTest\nprivate class ${name}Test {\n    @IsTest static void closesStale() {\n        Test.startTest();\n        Integer n = ${name}.closeStale();\n        Test.stopTest();\n        System.assert(n >= 0, 'Count should not be negative');\n    }\n}`,
   };
   return JSON.stringify({files: Object.entries(files).map(([path, content]) => ({path, content})), label: "",
@@ -533,7 +633,21 @@ function mockLlm(req, res) {
     const system = String(((body.messages || [])[0] || {}).content || "");
     const msgs = body.messages || [];
     const user = String((msgs[msgs.length - 1] || {}).content || "");
-    const content = /design custom objects|refine their custom object design/.test(system)
+    const content = /anonymous Apex; fix THAT error/.test(system)
+      ? (() => {
+        // Run Apex fix: drop the "oops" line Salesforce rejected; data errors get no code change.
+        const code = user.split("Apex code:\n").slice(1).join("Apex code:\n");
+        return /oops/.test(code)
+          ? JSON.stringify({ok: false, error: "Unexpected token 'oops'", line: 2, explanation: "Line 2 has a stray word; removed it.",
+            fixedCode: code.split("\n").filter(l => !l.includes("oops")).join("\n")})
+          : JSON.stringify({ok: false, error: "Data problem", line: null, explanation: "This looks like a data or setup issue, not the code.", fixedCode: ""});
+      })()
+      : /writing the manual runbook/.test(system)
+      ? JSON.stringify({steps: [
+        {phase: "pre", title: "Tell finance users about the release window", detail: "Invoices can't be edited for 10 minutes while it deploys."},
+        {phase: "post", title: "Check the Invoice tax rate setting", detail: "The audit trail shows the tax rate was changed by hand in the source.", setupPath: "/lightning/setup/CustomSettings/home"}
+      ]})
+      : /design custom objects|refine their custom object design/.test(system)
       ? mockObjectPlan(user, /refine their custom object design/.test(system))
       : /Write ONE complete, deployable piece of metadata/.test(system)
       ? mockCode(user)
@@ -550,22 +664,33 @@ function mockLlm(req, res) {
       : /suggest|fix/i.test(system) && /fixedQuery/.test(system)
       ? JSON.stringify({explanation: "Mock fix.", fixedQuery: "SELECT Id, Name FROM Account LIMIT 50"})
       : "Returns the Id and Name of up to 50 Account records. There is no filter, so any 50 accounts may come back.";
+    // Token usage like a real endpoint (about 4 characters a token).
+    const promptTokens = Math.round(JSON.stringify(body.messages || []).length / 4);
+    const usage = {prompt_tokens: promptTokens, completion_tokens: Math.round(content.length / 4),
+      total_tokens: promptTokens + Math.round(content.length / 4)};
     if (body.stream) {
       // Server-sent events in a few chunks, like a real streaming provider.
       res.writeHead(200, {"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*"});
       for (let i = 0; i < content.length; i += 400) {
         res.write(`data: ${JSON.stringify({id: "mock", object: "chat.completion.chunk", choices: [{index: 0, delta: {content: content.slice(i, i + 400)}}]})}\n\n`);
       }
-      res.write(`data: ${JSON.stringify({id: "mock", choices: [{index: 0, delta: {}, finish_reason: "stop"}]})}\n\n`);
+      res.write(`data: ${JSON.stringify({id: "mock", choices: [{index: 0, delta: {}, finish_reason: "stop"}], usage})}\n\n`);
       return res.end("data: [DONE]\n\n");
     }
-    json(res, 200, {id: "mock", object: "chat.completion", choices: [{index: 0, message: {role: "assistant", content}, finish_reason: "stop"}]});
+    json(res, 200, {id: "mock", object: "chat.completion", choices: [{index: 0, message: {role: "assistant", content}, finish_reason: "stop"}], usage});
   });
 }
 
 http.createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   if (url.pathname === "/mock-perm") return json(res, 200, permPosts);
+  if (url.pathname === "/mock-release") {
+    if (url.searchParams.get("reset")) { resetRelease(); resetGithub(); }
+    return releaseRest(req, res, url, json);
+  }
+  if (url.pathname === "/mock-github-state") return json(res, 200, githubState());
+  if (url.pathname.startsWith("/mock-github/")) return mockGithub(req, res, url, json);
+  if (url.pathname === "/mock-deploy-log") return json(res, 200, {creates: mockDeployLog, lastFieldUpdate: mockLastFieldUpdate});
   if (url.pathname.startsWith("/services/")) return api(req, res, url);
   if (url.pathname === "/mock-llm/last") return json(res, 200, lastLlmRequest);
   if (url.pathname.startsWith("/mock-llm/")) {

@@ -8,12 +8,13 @@ import {initSettings} from "./core/storage.js";
 import {openInspectorInNewTab} from "./core/preferences.js";
 import {showMenu} from "./ui/tour.js";
 import {installMessageFocus} from "./ui/message-focus.js";
+import {mountAiUsage, openAiUsage} from "./ui/ai-usage-ui.js";
 import {runTour, autoStartPanelTours, autoStartBuilderTour, showReleaseNotes} from "./ui/tour-runner.js";
 import {PANEL_TOUR, BUILDER_TOUR, tabTour} from "./ui/tour-content.js";
 import {getThemePreference, setThemePreference, applyTheme, resolveTheme, nextThemePreference, themeLabel, watchSystemTheme} from "./core/theme.js";
 import {getParentOrigin, isTrustedFrameOrigin, setTrustedParentOrigin, postToParent, isFromTrustedParent, queryHostRecord} from "./core/messaging.js";
 import {
-  FIELD_TYPES, SHARING_MODELS, normalizeFieldType, escapeSoqlString,
+  FIELD_TYPES, SHARING_MODELS, normalizeFieldType, escapeSoqlString, supportsRequired,
   suggestApiName, nextRetryName, resolveNameField, normalizeProposal, validateProposal,
   parseJSONFromText, isNonTransientDeployError, sortFieldsForDeploy, CALCULATED_TYPES
 } from "./core/object-builder-rules.js";
@@ -22,13 +23,14 @@ import {
   buildTabXml, buildTabVisibilityXml, buildRecordTypeVisibilityXml, buildProfileXml, buildLayoutXml,
   buildValidationRuleXml, buildListViewXml, buildCompactLayoutXml
 } from "./builder/metadata-xml.js";
-import {domLocal, domChildren, domFind, domFindAll, domToMetXml} from "./builder/metadata-dom.js";
+import {domLocal, domChildren, domFind, domFindAll, domToMetXml, domMakeEl} from "./builder/metadata-dom.js";
 import {FieldDetails, ObjectSettings, planFieldOptions} from "./builder/plan-editor-ui.js";
 import {readTabAccess, ensureTabVisibleForUser, setPermissionSetTab} from "./inspector/shared/tab-access.js";
 import {explainTabAccess, tabAccessReport} from "./core/tab-access.js";
 import {appTabsLoadApps, appTabsForApp, addTabToApp, appTabsResaveTab, appTabsTabEditUrl} from "./inspector/tabs/app-tabs.js";
 import {SearchSelect} from "./inspector/shared/combo.js";
-import {fieldDefaults, describeToProposal, permissionSetNameFor, fieldDetailSummary, NEEDS_DETAILS} from "./core/plan-fields.js";
+import {fieldDefaults, describeToProposal, permissionSetNameFor, fieldDetailSummary, NEEDS_DETAILS, existingFieldChanges, snapshotEditable} from "./core/plan-fields.js";
+import {ffGetObjects} from "./inspector/shared/describe.js";
 import {
   ensureLayoutCustomLinks, removeEmptyLayoutColumns, fixCustomLinksWithFields, layoutNeedsRepair,
   pickLayoutFieldColumn, findLayoutItemTemplate, buildLayoutItem
@@ -147,6 +149,7 @@ class App extends React.Component {
       items.push({label: `Tour this tool (${label})`, onSelect: () => runTour(tabTour(tabId))});
     }
     items.push({label: "What's new", onSelect: () => showReleaseNotes()});
+    items.push({label: "✨ AI usage (tokens, input, output)", onSelect: () => openAiUsage()});
     items.push({label: "Open Settings", onSelect: () => chrome.runtime.sendMessage({message: "openOptions", host: this.props.sfHost})});
     items.push({label: "Help", onSelect: () => window.open(HELP_URL, "_blank", "noopener,noreferrer")});
     showMenu(anchor, items);
@@ -263,6 +266,15 @@ class App extends React.Component {
   }
 
   componentDidMount() {
+    // Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) undo and redo plan changes; text boxes keep their own undo.
+    this._planKeys = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || (this.state.builderMode || "plan") !== "plan" || !this.state.currentProposal) return;
+      const t = e.target;
+      if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) { e.preventDefault(); this.undoPlan(); } else if (k === "y" || (k === "z" && e.shiftKey)) { e.preventDefault(); this.redoPlan(); }
+    };
+    window.addEventListener("keydown", this._planKeys);
     applyTheme(this.state.colorTheme);
     this._unwatchTheme = watchSystemTheme(() => this.state.colorTheme, () => this.forceUpdate());
     autoStartPanelTours(this.state.uiMode || "inspector");
@@ -303,6 +315,7 @@ class App extends React.Component {
   }
 
   componentWillUnmount() {
+    window.removeEventListener("keydown", this._planKeys);
     if (this._unwatchTheme) this._unwatchTheme();
     (this._apiNamesChecks || []).forEach(clearTimeout);
     window.removeEventListener("storage", this._onStorage);
@@ -397,6 +410,7 @@ class App extends React.Component {
   }
 
   newChat() {
+    this.resetPlanHistory();
     this.setState({
       messages: [],
       currentProposal: null,
@@ -521,6 +535,7 @@ class App extends React.Component {
   loadChat(chatId) {
     const chat = this.state.chatHistory.find(c => c.id === chatId);
     if (!chat) return;
+    this.resetPlanHistory();
     this.setState(chatToState(chat), () => {
       if (chat.currentProposal) {
         this.loadProfiles().catch(() => {});
@@ -577,7 +592,8 @@ class App extends React.Component {
         this.setState({streamingText: text});
       };
 
-      const response = await askAi({messages: apiMessages, onChunk});
+      const response = await askAi({messages: apiMessages, onChunk,
+        feature: currentProposal ? "Object Builder · change plan" : "Object Builder · design"});
 
       this.setState({streamingText: ""});
 
@@ -600,6 +616,8 @@ class App extends React.Component {
           this.setState({error: "Generated proposal has issues: " + validationErrors.join("; "), lastFailedPrompt: userInput});
         } else {
           this.addAssistantMessage(response, proposal);
+          // An AI change to an existing plan can be undone like a manual edit.
+          if (currentProposal) { this._lastPlanPush = 0; this.pushPlanHistory(currentProposal); }
           this.setState({
             currentProposal: proposal,
             selectedFields: proposal.fields.filter(f => !f.existing).map(f => f.name),
@@ -663,7 +681,7 @@ class App extends React.Component {
         {role: "user", content: `Draft request to improve:${proposalCtx}\n\n"${draft}"`}
       ];
 
-      const response = await askAi({messages: apiMessages});
+      const response = await askAi({messages: apiMessages, feature: "Enhance Prompt"});
 
       const enhanced = String(response || "").trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
       if (!enhanced) throw new Error("LLM returned an empty enhancement.");
@@ -704,7 +722,8 @@ class App extends React.Component {
       ? currentProposal.fields.filter(f => selectedFields.includes(f.name))
       : currentProposal.fields).filter(f => !f.existing));
 
-    if (fieldsToDeploy.length === 0 && !(currentProposal.existing && this.planExtras(currentProposal).length)) {
+    const existingEdits = currentProposal.fields.map(f => ({field: f, changes: existingFieldChanges(f)})).filter(x => x.changes);
+    if (fieldsToDeploy.length === 0 && !existingEdits.length && !(currentProposal.existing && this.planExtras(currentProposal).length)) {
       this.setState({error: currentProposal.existing
         ? "Add a new field (or a validation rule / list view) to deploy to this object."
         : "No fields selected for deployment. Please select at least one field."});
@@ -919,6 +938,31 @@ class App extends React.Component {
       }
 
       if (this._deployAborted) throw new Error("Deployment cancelled");
+
+      // Fields already in the org that were edited in the plan.
+      for (const {field, changes} of existingEdits) {
+        if (this._deployAborted) throw new Error("Deployment cancelled");
+        this.setState({deploymentStep: `Updating field "${field.label}"...`});
+        const what = [...changes.props, ...(changes.addedValues.length ? [`${changes.addedValues.length} new value(s)`] : [])].join(", ");
+        try {
+          await this.updateExistingField(objectName, field, changes);
+          this.setState(prev => ({
+            deploymentResults: [...prev.deploymentResults, {
+              type: "field", name: field.name, label: `${field.label} (updated: ${what})`, status: "success",
+              error: changes.removedValues.length ? `Not removed: ${changes.removedValues.join(", ")} — remove picklist values in Setup` : undefined
+            }],
+            // The org now matches: later deploys don't re-apply these edits.
+            currentProposal: {...prev.currentProposal, fields: prev.currentProposal.fields.map(x =>
+              (x.name === field.name ? {...x, _orig: snapshotEditable(x)} : x))}
+          }));
+        } catch (upErr) {
+          this.setState(prev => ({
+            deploymentResults: [...prev.deploymentResults, {
+              type: "field", name: field.name, label: `${field.label} (update)`, status: "error", error: upErr.message
+            }]
+          }));
+        }
+      }
 
       // Record types are intentionally NOT part of the main deploy.
       // They run later via the "Create record types" button after success.
@@ -2025,6 +2069,7 @@ class App extends React.Component {
   updatePlan(mutator, after) {
     const {currentProposal} = this.state;
     if (!currentProposal || this.state.builderMode !== "plan") return;
+    this.pushPlanHistory(currentProposal);
     const draft = JSON.parse(JSON.stringify(currentProposal));
     mutator(draft);
     // Keep the sharing model consistent with Master-Detail fields.
@@ -2070,6 +2115,95 @@ class App extends React.Component {
     });
   }
 
+  // Custom objects for the Edit an existing object picker (loaded once).
+  async loadOrgObjects() {
+    if ((this.state.orgObjects || []).length || this._objectsLoading) return;
+    this._objectsLoading = true;
+    try {
+      const all = await ffGetObjects();
+      this.setState({orgObjects: all.filter(o => o.custom && /__c$/.test(o.name))});
+    } catch (e) {
+      console.warn("[SaralForce] Object list failed:", e.message);
+    } finally {
+      this._objectsLoading = false;
+    }
+  }
+
+  // Undo / Redo for plan changes (typing in one box within a moment = one step).
+  pushPlanHistory(prev) {
+    if (!prev) return;
+    this._undo = this._undo || [];
+    const now = Date.now();
+    if (!(this._lastPlanPush && now - this._lastPlanPush < 800 && this._undo.length)) {
+      this._undo.push(prev);
+      if (this._undo.length > 50) this._undo.shift();
+    }
+    this._lastPlanPush = now;
+    this._redo = [];
+    this.setState({undoCount: this._undo.length, redoCount: 0});
+  }
+
+  resetPlanHistory() {
+    this._undo = [];
+    this._redo = [];
+    this._lastPlanPush = 0;
+    this.setState({undoCount: 0, redoCount: 0});
+  }
+
+  undoPlan() {
+    if (!(this._undo || []).length || !this.state.currentProposal) return;
+    this._redo = this._redo || [];
+    this._redo.push(this.state.currentProposal);
+    const prev = this._undo.pop();
+    this._lastPlanPush = 0;
+    this.setState({currentProposal: prev, expandedField: null, undoCount: this._undo.length, redoCount: this._redo.length},
+      () => this._autoSaveChat());
+  }
+
+  redoPlan() {
+    if (!(this._redo || []).length || !this.state.currentProposal) return;
+    this._undo.push(this.state.currentProposal);
+    const next = this._redo.pop();
+    this._lastPlanPush = 0;
+    this.setState({currentProposal: next, expandedField: null, undoCount: this._undo.length, redoCount: this._redo.length},
+      () => this._autoSaveChat());
+  }
+
+  // Save edits to a field that already exists: read it from the org, change
+  // only the edited settings, write it back (everything else stays as is).
+  async updateExistingField(objectName, field, changes) {
+    const fullName = `${objectName}.${field.name}`;
+    const records = await this.metadataReadRecords("CustomField", fullName);
+    if (!records) throw new Error(`Could not read ${fullName} from the org`);
+    const doc = records.ownerDocument;
+    // Metadata API elements are in alphabetical order after fullName.
+    const setChild = (parent, tag, value) => {
+      const kids = domChildren(parent);
+      const el = kids.find(k => domLocal(k) === tag);
+      if (value === undefined || value === null || value === "") {
+        if (el && (tag === "description" || tag === "inlineHelpText")) parent.removeChild(el);
+        return;
+      }
+      if (el) { el.textContent = String(value); return; }
+      const next = kids.find(k => domLocal(k) !== "fullName" && domLocal(k) > tag);
+      const made = domMakeEl(doc, tag, String(value));
+      if (next) parent.insertBefore(made, next); else parent.appendChild(made);
+    };
+    for (const k of changes.props) setChild(records, k, k === "required" ? (field.required ? "true" : "false") : field[k]);
+    if (changes.addedValues.length) {
+      const vsd = domFind(records, "valueSetDefinition");
+      if (!vsd) throw new Error("This picklist's values come from a global value set; add values in Setup");
+      for (const v of changes.addedValues) {
+        const val = domMakeEl(doc, "value");
+        val.appendChild(domMakeEl(doc, "fullName", v));
+        val.appendChild(domMakeEl(doc, "default", "false"));
+        val.appendChild(domMakeEl(doc, "label", v));
+        vsd.appendChild(val);
+      }
+    }
+    await this.metadataUpdateRecords("CustomField", fullName, records);
+  }
+
   refinePlanWithAi() {
     const text = String(this.state.planAiInput || "").trim();
     if (!text || this.state.isGenerating) return;
@@ -2089,6 +2223,7 @@ class App extends React.Component {
     try {
       const describe = await sfConn.rest(`/services/data/v${apiVersion}/sobjects/${encodeURIComponent(name)}/describe`);
       const proposal = describeToProposal(describe);
+      this.resetPlanHistory();
       this.addSystemMessage(`Loaded ${describe.label} (${describe.name}) with ${proposal.fields.length} custom field(s). Add fields, rules or list views, then deploy — existing fields are not changed.`);
       this.setState({
         currentProposal: proposal,
@@ -2508,15 +2643,16 @@ class App extends React.Component {
             h("div", {className: "plan-existing"},
               this.state.existingPicker
                 ? [
-                  h("input", {
+                  h(SearchSelect, {
                     key: "in",
-                    className: "plan-cell-input plan-cell-mono",
-                    placeholder: "Object API name, e.g. Invoice__c",
-                    
-                    autoFocus: true,
                     value: this.state.existingName || "",
-                    onChange: e => this.setState({existingName: e.target.value}),
-                    onKeyDown: e => { if (e.key === "Enter") this.loadExistingObject(this.state.existingName); }
+                    options: (this.state.orgObjects || []).map(o => ({value: o.name, label: o.label, sub: o.name})),
+                    onChange: v => { this.setState({existingName: v}); if (v) this.loadExistingObject(v); },
+                    placeholder: (this.state.orgObjects || []).length ? "Search your custom objects by label or API name…" : "Loading objects… (or type an API name)",
+                    emptyText: "No custom object matches",
+                    allowFree: true,
+                    ariaLabel: "Custom object to edit",
+                    className: "plan-existing-pick"
                   }),
                   h("button", {
                     key: "go",
@@ -2529,7 +2665,7 @@ class App extends React.Component {
                 : h("button", {
                   className: "field-action-btn",
                   title: "Add fields, validation rules or list views to an object that already exists",
-                  onClick: () => this.setState({existingPicker: true})
+                  onClick: () => { this.setState({existingPicker: true}); this.loadOrgObjects(); }
                 }, "✎ Edit an existing object")
             ),
             h("div", {className: "chat-input-row"},
@@ -2585,6 +2721,15 @@ class App extends React.Component {
               }, "Build")
             ),
             h("div", {className: "preview-actions"},
+              (this.state.builderMode || "plan") === "plan" && deploymentStatus !== "deploying" && h("div", {className: "plan-history"},
+                h("button", {
+                  className: "btn btn-secondary btn-sm", disabled: !this.state.undoCount,
+                  title: "Undo the last plan change (Ctrl+Z)", onClick: () => this.undoPlan()
+                }, "↶ Undo"),
+                h("button", {
+                  className: "btn btn-secondary btn-sm", disabled: !this.state.redoCount,
+                  title: "Redo (Ctrl+Y)", onClick: () => this.redoPlan()
+                }, "↷ Redo")),
               deploymentStatus !== "deploying" && (this.state.builderMode || "plan") === "build" && (() => {
                 const errs = this.planEditErrors();
                 const deployCount = (selectedFields || currentProposal.fields.map(f => f.name)).length;
@@ -2899,27 +3044,33 @@ class App extends React.Component {
                   currentProposal.fields.map((field, i) => {
                     const inOrg = !!field.existing;
                     const isChecked = !inOrg && (!selectedFields || selectedFields.includes(field.name));
-                    // Fields already in the org are shown read-only.
-                    const isPlan = (this.state.builderMode || "plan") === "plan" && !inOrg;
-                    const open = isPlan && this.state.expandedField === i;
-                    const row = h("tr", {key: i, className: (inOrg ? "plan-row-inorg" : isChecked ? "" : "field-deselected") + (open ? " plan-row-open" : "")},
+                    const planMode = (this.state.builderMode || "plan") === "plan";
+                    // New fields: everything editable. Fields already in the org:
+                    // label, description, required and details; API name and type stay.
+                    const isPlan = planMode && !inOrg;
+                    const canEdit = planMode;
+                    const edits = inOrg ? existingFieldChanges(field) : null;
+                    const open = canEdit && this.state.expandedField === i;
+                    const row = h("tr", {key: i, className: (inOrg ? "plan-row-inorg" + (edits ? " changed" : "") : isChecked ? "" : "field-deselected") + (open ? " plan-row-open" : "")},
                       h("td", {className: "field-checkbox-col"},
                         h("input", {
                           type: "checkbox",
                           checked: isChecked,
                           disabled: inOrg,
-                          title: inOrg ? "Already in the org — not redeployed" : undefined,
+                          title: inOrg ? "Already in the org — edit its label, description or details and it is updated on deploy" : undefined,
                           onChange: () => this.toggleField(field.name),
                           className: "field-checkbox"
                         })
                       ),
-                      isPlan
+                      canEdit
                         ? h("td", null,
                             h("input", {
                               className: "plan-cell-input",
                               value: field.label || "",
                               onChange: e => this.updatePlanField(i, {label: e.target.value})
-                            }))
+                            }),
+                            inOrg && h("span", {className: "plan-inorg" + (edits ? " changed" : ""),
+                              title: edits ? "Changed — saved to the org on deploy" : "Already in the org"}, edits ? "in org · edited" : "in org"))
                         : h("td", null, field.label, inOrg && h("span", {className: "plan-inorg"}, "in org")),
                       isPlan
                         ? h("td", {className: "api-name-cell"},
@@ -2952,8 +3103,11 @@ class App extends React.Component {
                               onClick: () => this.setState({expandedField: open ? null : i})
                             }, fieldDetailSummary(field), " ✎"))
                         : h("td", null, this.getFieldTypeLabel(field.type),
-                            fieldDetailSummary(field) && h("div", {className: "plan-type-sum static"}, fieldDetailSummary(field))),
-                      isPlan
+                            fieldDetailSummary(field) && (canEdit && inOrg
+                              ? h("button", {type: "button", className: "plan-type-sum", title: "Edit values and settings",
+                                onClick: () => this.setState({expandedField: open ? null : i})}, fieldDetailSummary(field), " ✎")
+                              : h("div", {className: "plan-type-sum static"}, fieldDetailSummary(field)))),
+                      canEdit && (!inOrg || supportsRequired(normalizeFieldType(field.type)))
                         ? h("td", {className: "req-cell"},
                             h("input", {
                               type: "checkbox",
@@ -2962,7 +3116,7 @@ class App extends React.Component {
                               className: "field-checkbox"
                             }))
                         : h("td", {className: "req-cell"}, field.required ? "\u2713" : ""),
-                      isPlan
+                      canEdit
                         ? h("td", {className: "desc-cell"},
                             h("input", {
                               className: "plan-cell-input",
@@ -2971,7 +3125,7 @@ class App extends React.Component {
                             }))
                         : h("td", {className: "desc-cell"}, field.description || ""),
                       (this.state.builderMode || "plan") === "plan" && h("td", {className: "field-checkbox-col plan-row-actions"},
-                        isPlan && h("button", {
+                        canEdit && h("button", {
                           className: "plan-del-btn plan-more-btn" + (open ? " active" : ""),
                           title: open ? "Hide field details" : "Field details (length, values, formula\u2026)",
                           onClick: () => this.setState({expandedField: open ? null : i})
@@ -3267,6 +3421,8 @@ if (!sfHost) {
 
     // Bring new success / error messages into view after user actions.
     installMessageFocus(document.getElementById("root"));
+    // Ghost note after each AI request + the AI usage drawer.
+    mountAiUsage();
     ReactDOM.render(
       h(App, {sfHost}),
       document.getElementById("root"),

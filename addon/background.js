@@ -36,6 +36,23 @@ async function resolveSfHost(url, storeId) {
   return currentDomain;
 }
 
+async function listLoggedInOrgs(storeId) {
+  const byOrg = new Map();
+  for (const domain of SESSION_COOKIE_DOMAINS) {
+    const cookies = await getAllCookies({name: "sid", domain, secure: true, storeId});
+    for (const c of cookies) {
+      const host = String(c.domain || "").replace(/^\./, "");
+      if (!host || host === "help.salesforce.com" || /\.(visual|vf|content|documentforce)\./.test(host)) continue;
+      const orgId = String(c.value || "").split("!")[0];
+      if (!/^00D[a-zA-Z0-9]{12,15}$/.test(orgId)) continue;
+      // Prefer the my.salesforce.com API host over lightning.force.com.
+      const prev = byOrg.get(orgId);
+      if (!prev || (/lightning\.force\./.test(prev) && !/lightning\.force\./.test(host))) byOrg.set(orgId, host);
+    }
+  }
+  return [...byOrg.entries()].map(([orgId, host]) => ({orgId, host}));
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Cross-origin LLM call proxied through the service worker so it always
   // runs with host_permissions (options page / content script fetch can
@@ -57,6 +74,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }).catch(err => {
       sendResponse({ok: false, status: 0, error: String(err && err.message || err)});
     });
+    return true;
+  }
+  // Release Center: every Salesforce org with a session in this browser,
+  // one API host per org id. Only hosts and org ids leave this worker.
+  if (request.message === "listOrgs") {
+    if (!isExtensionPage(sender)) {
+      sendResponse([]);
+      return false;
+    }
+    listLoggedInOrgs(sender.tab && sender.tab.cookieStoreId).then(sendResponse, () => sendResponse([]));
     return true;
   }
   if (request.message == "getSfHost") {

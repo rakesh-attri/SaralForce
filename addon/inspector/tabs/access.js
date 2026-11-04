@@ -15,6 +15,7 @@ import {AnalysisReport} from "../shared/analysis-report.js";
 import {FFBadge} from "../shared/ui.js";
 import {useFfSession} from "../shared/session-state.js";
 import {ApprovalsView} from "./approvals.js";
+import {SearchSelect} from "../shared/combo.js";
 
 const h = React.createElement;
 const MAX_COMPARE = 5;
@@ -36,7 +37,6 @@ function CompareCard() {
   const [list, setList] = React.useState(null);
   const [listErr, setListErr] = React.useState(null);
   const [picked, setPicked] = useFfSession("access", "picked", []);
-  const [choice, setChoice] = React.useState("");
   const [matrix, setMatrix] = useFfSession("access", "matrix", null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
@@ -48,11 +48,6 @@ function CompareCard() {
   }, []);
 
   const nameOf = id => (list && (list.find(p => p.id === id) || {}).name) || id;
-  const add = () => {
-    if (!choice || picked.includes(choice) || picked.length >= MAX_COMPARE) return;
-    setPicked([...picked, choice]);
-    setChoice("");
-  };
   const compare = async () => {
     setLoading(true);
     setError(null);
@@ -87,18 +82,22 @@ function CompareCard() {
       `Pick 2–${MAX_COMPARE} profiles, permission sets or groups to see system, object, tab and app permissions side by side.`),
     listErr && h("div", {className: "insp-error"}, "Could not list permission sets: " + listErr),
     h("div", {className: "soql-save-row acc-pick-row"},
-      h("select", {
-        className: "soql-save-input",
-        value: choice,
-        "aria-label": "Profile or permission set to compare",
+      // Searchable picker (a native <select> renders its list clipped in the
+      // wide full-screen layout); picking adds it to the comparison.
+      h(SearchSelect, {
+        value: "",
+        options: (list || []).filter(p => !picked.includes(p.id)).map(p => ({
+          value: p.id, label: p.name,
+          tag: (groups.find(g => g[0] === p.kind) || [null, ""])[1].replace(/s$/, ""),
+          tagTone: p.kind === "profile" ? "info" : p.kind === "group" ? "violet" : "ok"
+        })),
+        onChange: id => { if (id && !picked.includes(id) && picked.length < MAX_COMPARE) setPicked([...picked, id]); },
+        placeholder: !list ? "Loading…" : picked.length >= MAX_COMPARE ? `Up to ${MAX_COMPARE} at a time` : "Search profiles, permission sets or groups…",
+        emptyText: "No match",
         disabled: !list || picked.length >= MAX_COMPARE,
-        onChange: e => setChoice(e.target.value)
-      },
-        h("option", {value: ""}, !list ? "Loading…" : picked.length >= MAX_COMPARE ? `Up to ${MAX_COMPARE} at a time` : "Choose a profile or permission set"),
-        list && groups.map(([kind, label]) => h("optgroup", {key: kind, label},
-          list.filter(p => p.kind === kind && !picked.includes(p.id))
-            .map(p => h("option", {key: p.id, value: p.id}, p.name))))),
-      h("button", {className: "btn btn-secondary btn-sm", disabled: !choice, onClick: add}, "Add"),
+        ariaLabel: "Profile, permission set or group to compare",
+        className: "acc-pick"
+      }),
       h("button", {
         className: "btn btn-primary btn-sm",
         disabled: picked.length < 2 || loading,
@@ -186,7 +185,7 @@ function RiskCard() {
     if (!hasValidConfig()) { setAiErr("NO_LLM_CONFIG"); return; }
     setAiBusy(true);
     try {
-      setReport({text: await logsAskLlm(SECURITY_AUDIT_SYSTEM, auditFacts(summary)), at: Date.now()});
+      setReport({text: await logsAskLlm(SECURITY_AUDIT_SYSTEM, auditFacts(summary), {feature: "Risky access summary"}), at: Date.now()});
     } catch (e) {
       setAiErr(e.message === "NO_LLM_CONFIG" ? "NO_LLM_CONFIG" : e.message);
     } finally {

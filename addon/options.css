@@ -661,3 +661,21 @@ a {
     transition: none !important;
   }
 }
+
+.opt-gh-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 2fr;
+  gap: 10px;
+}
+
+.opt-gh-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@media (max-width: 640px) {
+  .opt-gh-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,3 +1,5 @@
+import {usageFromGemini} from "../core/ai-usage.js";
+
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 export const GEMINI_DEFAULT_MODEL = "gemini-4-argon";
 
@@ -20,7 +22,8 @@ export class GeminiProvider {
     this.name = "Google Gemini";
   }
 
-  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal} = {}) {
+  // onUsage({input, output, reasoning}) reports the tokens the API counted.
+  async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal, onUsage} = {}) {
     const modelId = encodeURIComponent(model || GEMINI_DEFAULT_MODEL);
 
     let systemInstruction = null;
@@ -51,7 +54,7 @@ export class GeminiProvider {
     }
 
     if (onChunk) {
-      return this._handleStream(`${API_BASE}/models/${modelId}:streamGenerateContent?alt=sse`, apiKey, body, onChunk, signal);
+      return this._handleStream(`${API_BASE}/models/${modelId}:streamGenerateContent?alt=sse`, apiKey, body, onChunk, signal, onUsage);
     }
 
     const response = await fetch(`${API_BASE}/models/${modelId}:generateContent`, {
@@ -67,6 +70,7 @@ export class GeminiProvider {
     }
 
     const data = await response.json();
+    if (onUsage) onUsage(usageFromGemini(data.usageMetadata));
     const candidate = data.candidates?.[0];
     if (!candidate) {
       const reason = data.promptFeedback?.blockReason;
@@ -97,7 +101,7 @@ export class GeminiProvider {
     return ids;
   }
 
-  async _handleStream(url, apiKey, body, onChunk, signal) {
+  async _handleStream(url, apiKey, body, onChunk, signal, onUsage) {
     const response = await fetch(url, {
       method: "POST",
       headers: headers(apiKey),
@@ -114,6 +118,7 @@ export class GeminiProvider {
     const decoder = new TextDecoder();
     let fullText = "";
     let buffer = "";
+    let usage = null;   // each chunk repeats usageMetadata; the last is final
 
     while (true) {
       const {done, value} = await reader.read();
@@ -127,6 +132,7 @@ export class GeminiProvider {
         if (line.startsWith("data: ")) {
           try {
             const parsed = JSON.parse(line.slice(6));
+            if (parsed.usageMetadata) usage = parsed.usageMetadata;
             const text = partsText(parsed.candidates?.[0]?.content?.parts);
             if (text) {
               fullText += text;
@@ -139,6 +145,7 @@ export class GeminiProvider {
       }
     }
 
+    if (onUsage) onUsage(usageFromGemini(usage));
     return fullText;
   }
 }

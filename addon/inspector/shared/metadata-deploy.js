@@ -3,6 +3,7 @@
 // half-created bundle is deleted again so nothing is left behind.
 import {sfConn, apiVersion} from "../../inspector.js";
 import {cmdtTypeXml} from "../../core/cmdt.js";
+import {bundleCreateOrder} from "../../core/bundle-order.js";
 import {soapCreate} from "./cmdt-data.js";
 
 const toolingPath = (type, id) => `/services/data/v${apiVersion}/tooling/sobjects/${type}/${id ? encodeURIComponent(id) : ""}`;
@@ -88,7 +89,8 @@ async function deployDraft(draft) {
       if (f.exposed && f.targets && f.targets.length) meta.targets = {target: f.targets};
       const id = await create("LightningComponentBundle", {FullName: draft.name, Metadata: meta});
       try {
-        for (const file of draft.files.filter(x => !x.generated && x.role !== "apex")) {
+        // The component's own .js (its base file) must be created first.
+        for (const file of bundleCreateOrder(draft.files.filter(x => !x.generated && x.role !== "apex"), "lwc", draft.name)) {
           await create("LightningComponentResource", {LightningComponentBundleId: id, FilePath: file.path, Format: file.format, Source: file.content});
         }
       } catch (e) {
@@ -102,7 +104,8 @@ async function deployDraft(draft) {
       const id = await create("AuraDefinitionBundle", {DeveloperName: draft.name, MasterLabel: f.label || draft.name,
         Description: f.description || "", ApiVersion: ver});
       try {
-        for (const file of draft.files.filter(x => x.role !== "apex")) {
+        // The .cmp / .app (base definition) must be created first.
+        for (const file of bundleCreateOrder(draft.files.filter(x => x.role !== "apex"), "aura", draft.name)) {
           await create("AuraDefinition", {AuraDefinitionBundleId: id, DefType: file.defType, Format: file.format, Source: file.content});
         }
       } catch (e) {

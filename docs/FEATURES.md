@@ -26,9 +26,10 @@ what you can **change**, how to do it, and where the limits are.
 13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · New · package.xml
 14. [Org Info](#14-org-info)
 15. [App Tab Manager](#15-app-tab-manager)
-16. [Settings & AI providers](#16-settings--ai-providers)
-17. [Safety, privacy and limits](#17-safety-privacy-and-limits)
-18. [Quick "can I…?" answers](#18-quick-can-i-answers)
+16. [Release Center](#16-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · GitHub
+17. [Settings & AI providers](#17-settings--ai-providers)
+18. [Safety, privacy and limits](#18-safety-privacy-and-limits)
+19. [Quick "can I…?" answers](#19-quick-can-i-answers)
 
 ---
 
@@ -61,7 +62,8 @@ Design a custom object by describing it in plain English, then deploy it.
 | **Plan mode** | Edit object label, API name, sharing model and every field inline. **⚙** on a field opens its details: length, decimals, picklist values and default, global value set, controlling field with a **dependency matrix**, related object and delete behaviour, formula and return type, roll-up operation, auto-number format, help text and **track history**. |
 | **Object settings** | Track field history, reports, activities, search, Chatter feed; **validation rules**, **list views** and a **compact layout** — all created with the object. |
 | **Field access** | Who gets read/edit on the new fields: **My profile** (also gets Read/Create/Edit on the object, so its tab shows in your App Launcher), the **tab visibility profiles**, or a **new permission set** (object + field access, assigned to you). Formula, roll-up and auto-number fields get read-only access. |
-| ✎ **Edit an existing object** | Load a custom object from the org; its fields are shown read-only and new fields, rules and list views are added beside them. |
+| ✎ **Edit an existing object** | Search your custom objects by label or API name and load one. Add fields, rules and list views beside its fields, and edit the existing fields too: label, description, help text, required, length / decimals, and new picklist values (saved to the field on deploy; API name and type stay; removing picklist values is done in Setup). |
+| **Undo / Redo** | ↶ Undo and ↷ Redo every plan change, AI changes included (Ctrl+Z / Ctrl+Y outside text boxes). |
 | **Show in app** | Deployment Targets → pick a Lightning app; the new tab is added to its navigation bar (like Setup's "Add to Custom Apps"). Remembered for next time. |
 | **Your access & App Launcher check** | After deploy, SaralForce reads what Salesforce actually applies for you (tab exists, tab setting on your profile / permission sets, object access, the App Launcher list, the app) and repairs it — adding the tab setting on your profile, or an "<Object> Access" permission set — and saves the tab again with a real change (like Setup → Tabs → Edit → Save), because Salesforce only applies API-written tab visibility to the App Launcher when the tab is saved. If it still is not there, **Save in Setup ↗** opens that tab's edit page — click Save, then **Check again**; then shows a ✓/✕ checklist with **Fix it**, **Check again** and **Copy details**. |
 | **Build mode** ✏️ | Locks the plan and deploys: creates the object, the fields (controlling picklists before dependents, roll-ups last), field access, every page layout of the object, validation rules, list views, compact layout and the tab. |
@@ -165,6 +167,21 @@ A query workbench with an editor, field explorer and results grid.
 | ✨ **Ask AI About This Log** | A chat about one log. |
 
 ---
+
+### 8.1 Profile a log ⏱ ✨
+
+Open a log and switch **Lines → ⏱ Profile**:
+
+| You get | Details |
+|---|---|
+| Summary | Total time, CPU, SOQL, DML, callouts, method calls. |
+| Hot spots | The same query or DML repeated in a loop (with line and method), very large queries, slow callouts, limits over 70%, errors. |
+| Timeline | Code units, methods, queries, DML and callouts as bars on one time scale. |
+| Slowest methods | By own time or total time, with call counts. |
+| Queries / DML / Callouts | Times run, rows, time and line. |
+| ✨ How to speed this up | AI suggestions from the summary (the raw log is never sent). |
+
+The log needs timing events: Apex Code at FINE or Apex Profiling at INFO.
 
 ## 9. API Explorer
 
@@ -446,7 +463,40 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 ---
 
-## 16. Settings & AI providers
+## 16. Release Center ✏️ ✨
+
+Move changes between any two orgs you're logged into in this browser (sandbox → UAT → production, or back). No extra login: open the other org in another tab, then press ↻.
+
+| You can | Details |
+|---|---|
+| Compare orgs | Pick **Source** and **Target** and what to compare (Apex, LWC & Aura, Flows, Objects & fields, Layouts & pages, Security, Config & labels, Email & reports). Every component is **New**, **Changed**, **Only in target** or **Same**, with who changed it and when in each org. Optional "only changed since" date. |
+| See the diff | Click a row for a side-by-side line diff (target now vs incoming). |
+| Reverse deployment | **⇄** swaps source and target, e.g. bring a production hotfix back to a sandbox. |
+| Dependency check | Warns when your selection needs something the target doesn't have (new object for a field, fields on a layout or permission set, objects and classes used by Apex, MetadataComponentDependency). **Add missing** selects them. |
+| Deletes | Tick an "Only in target" item to delete it in the target (destructiveChangesPost.xml). |
+| ✨ Release notes | AI writes plain release notes from the selected changes (names and short diffs only). |
+| Changes | Everything changed in an org since Today / 7 days / 30 days / a date, filtered by person, plus the Setup audit trail. Add to the package or compare with another org. |
+| Package | The same basket as Metadata → ＋ package.xml. Add by name, paste a package.xml or destructiveChanges.xml, download package.xml / destructiveChanges.xml / a source zip. |
+| Validate | Check-only deploy with live progress, component errors (line and problem), failing tests with stack traces, and coverage under 75%. Test level: Default, No tests (sandboxes only), Specified tests (**Suggest tests** finds tests that use the changed Apex), Local tests, All tests. |
+| Quick deploy | After a passing validation, release in seconds without re-running tests. |
+| Deploy now | Sandboxes only, after a confirm. **Cancel** stops a running deploy. |
+| ✨ Explain failures | AI turns the errors and failing tests into an ordered fix plan. |
+| Manual steps | A runbook of what a deploy doesn't do, detected from what you deploy. **SaralForce does it** (after a confirm, against the target): re-save new tabs so they show in the App Launcher, activate flows, copy permission set (group) assignments and public group / queue members by username (sandbox suffix ignored), copy custom setting values, schedule Apex jobs with the source's timing, run your post-deploy Apex script. **By hand, with the Setup link**: back up data before deletes, org features the code needs (multi-currency, person accounts…), Lightning page activation, sharing recalculation, secrets and certificates, org-wide email, email deliverability. Mark done or skip; progress is saved with the release. |
+| ✨ Write the runbook | AI adds the hand steps from the source's Setup audit trail since the last release. **Download checklist** gives a Markdown list for your change ticket. |
+| History | Every validation and deploy, with a version per target org (v1, v2…), who/what/when, items, test results, ids and release notes. Filter by org; **Download** a release as a zip and **Import** it in another browser. |
+| Rollback point | Before every real deploy (Deploy now, Quick deploy, rollback, restore) the target's own copy of what will change is saved, and new items are noted as "did not exist". |
+| Roll back | Puts back what the target had before a release and deletes what it added. It opens on the Deploy step so you validate first. |
+| Snapshots | **Take snapshot** saves a point-in-time copy of an org's metadata. **Compare with now** shows drift (changed, added or removed since); **Restore picked** puts the snapshot version back. |
+| Last release | Changes → **Last release** lists what changed in an org since your last release from it. |
+| Impact | Pick an org, type and name (fields, objects, Apex, triggers, pages, LWC, Aura, flows, labels, static resources, validation rules, layouts). Shows what uses it and what it uses (Salesforce's dependency data), code that names it, how many records have data, and active flows. Verdict: ✓ No references · ⚠ Used in N places · ⛔ Not safe to delete yet. **Add to delete list** puts it in Package → deletes. ✨ **Risk summary** explains what breaks and the safe order. From Compare, **Check impact of delete** on an "Only in target" item. |
+| GitHub (optional) | Connect a repository in Settings (fine-grained token, branch, folder). **Commit to GitHub** on a release or snapshot writes the files in Salesforce DX source format (objects split into fields, rules…). The branch shows up as a **Source** in Compare and Deploy, so you can compare Git with an org and deploy from Git. |
+| Exact deploys | Only the fields, rules and parts you ticked are sent; an object file is rebuilt from the selected parts. **Download zip** shows exactly what will be sent. |
+
+History and snapshots live in this browser (IndexedDB); nothing is uploaded. Clearing site data removes them, so download releases you want to keep.
+
+Before you deploy, the checks call out profiles (they overwrite), flows (arrive inactive in production unless set otherwise), Apex still using `WITH SECURITY_ENFORCED`, and deletes.
+
+## 17. Settings & AI providers
 
 | Setting | Details |
 |---|---|
@@ -454,12 +504,13 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 | AI is optional | The Settings page opens with a note: every core tool works with just your Salesforce login; AI only adds the ✨ helpers. The AI assistant card shows **Ready** or **Not set up**. |
 | Key & model | Pick a provider tile, paste your API key (**Get a key ↗** links to the provider), pick a model; **Refresh list** loads the models your key can use. **Save settings**, **Test connection**, **Remove key**. |
 | Without a key | Everything except ✨ features works. |
+| **AI usage** | After every ✨ request a small note fades in for a few seconds (hover keeps it) with the tokens used — input, output, total — and the time. Click it, or **?** → **AI usage**, for every call of this session with the exact input (system and user messages) and output, copyable, plus today and all-time token totals. The text is kept only until the panel is closed; totals are numbers only. Turn the note off in Settings → Preferences. Tokens marked ≈ are estimated when a provider reports none. |
 | Preferences | Success celebration animation; open the Inspector in a new tab (switch). |
 | Tours | Each tour shows automatically only once; replay any of them from **?**. |
 
 ---
 
-## 17. Safety, privacy and limits
+## 18. Safety, privacy and limits
 
 - **Your data stays yours** — no accounts, analytics or tracking. Org data goes to your AI
   provider **only** when you press an ✨ button.
@@ -475,7 +526,7 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 ---
 
-## 18. Quick "can I…?" answers
+## 19. Quick "can I…?" answers
 
 | Question | Answer |
 |---|---|
