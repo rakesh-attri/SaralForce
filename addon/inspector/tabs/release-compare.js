@@ -22,15 +22,20 @@ export function keepObject(key) {
   return type !== "CustomObject" || /__/.test(fullName);
 }
 
-export async function retrieveAll(conn, keys, label, onStatus) {
+// onStatus(text, percent): percent runs from `from` to `to` across the parts
+// (Salesforce reports no counts while it retrieves, so each poll creeps on).
+export async function retrieveAll(conn, keys, label, onStatus, {from = 0, to = 100} = {}) {
   const files = new Map();
   const problems = [];
   const parts = chunkMembers(membersFromKeys(keys));
   for (let i = 0; i < parts.length; i++) {
-    onStatus(`Retrieving from ${label}${parts.length > 1 ? ` (part ${i + 1} of ${parts.length})` : ""}…`);
-    const res = await retrieve(conn, parts[i], {onProgress: s => onStatus(`Retrieving from ${label}… ${s}`)});
+    const pct = polls => Math.round(from + (to - from) * ((i + Math.min(0.92, polls * 0.08)) / parts.length));
+    let polls = 0;
+    onStatus(`Retrieving ${keys.length.toLocaleString()} component(s) from ${label}${parts.length > 1 ? ` (part ${i + 1} of ${parts.length})` : ""}…`, pct(0));
+    const res = await retrieve(conn, parts[i], {onProgress: s => onStatus(`Retrieving from ${label}${parts.length > 1 ? ` (part ${i + 1} of ${parts.length})` : ""}… ${s}`, pct(++polls))});
     mergeZipFiles(files, res.files, bytesToText);
     problems.push(...res.messages);
+    onStatus(`Retrieved part ${i + 1} of ${parts.length} from ${label}`, Math.round(from + (to - from) * ((i + 1) / parts.length)));
   }
   return {files, problems};
 }
@@ -56,18 +61,19 @@ async function dependencyEdges(conn, rows) {
 
 // A GitHub branch (source format) against an org.
 async function compareFromGit(src, tgt, {presets, onStatus, only}) {
-  const comps = await gitComponents(src, onStatus, {fresh: true});
+  onStatus(`Reading ${src.name}…`, 5);
+  const comps = await gitComponents(src, t => onStatus(t, 15), {fresh: true});
   const types = only && only.length ? [...new Set(only.map(k => splitKey(k).type))] : presetTypes(presets);
   if (!types.length) throw new Error("Pick at least one kind of metadata.");
   const want = only && only.length ? new Set(only) : null;
   const srcKeys = [...comps.keys()].filter(k => types.includes(splitKey(k).type) && keepObject(k) && (!want || want.has(k)));
-  onStatus(`Listing ${tgt.name}…`);
-  const tgtList = await listComponents(tgt.conn, types, {onProgress: (n, of) => onStatus(`Listing ${tgt.name}… ${n}/${of}`)});
+  onStatus(`Listing ${tgt.name}…`, 30);
+  const tgtList = await listComponents(tgt.conn, types, {onProgress: (n, of) => onStatus(`Listing ${tgt.name}… ${n}/${of}`, 30 + Math.round(15 * n / of))});
   for (const k of [...tgtList.keys()]) if (!keepObject(k) || (want && !want.has(k))) tgtList.delete(k);
   const sourceComps = new Map(srcKeys.map(k => [k, comps.get(k)]));
   const common = srcKeys.filter(k => tgtList.has(k));
-  const t = common.length ? await retrieveAll(tgt.conn, common, tgt.name, onStatus) : {files: new Map(), problems: []};
-  onStatus("Comparing…");
+  const t = common.length ? await retrieveAll(tgt.conn, common, tgt.name, onStatus, {from: 45, to: 92}) : {files: new Map(), problems: []};
+  onStatus("Comparing…", 95);
   const targetComps = componentsFromZip(t.files, bytesToText);
   for (const k of common) if (!targetComps.has(k)) targetComps.set(k, {...splitKey(k), files: {}, raw: {}});
   for (const k of tgtList.keys()) if (!targetComps.has(k) && !sourceComps.has(k)) targetComps.set(k, {...splitKey(k), files: {}, raw: {}});
@@ -89,7 +95,7 @@ export async function runCompare({presets, since, onStatus}) {
   let tgtList;
   if (only && only.length) {
     const types = [...new Set(only.map(k => splitKey(k).type))];
-    onStatus("Listing components in both orgs…");
+    onStatus("Listing components in both orgs…", 5);
     [srcList, tgtList] = await Promise.all([listComponents(src.conn, types), listComponents(tgt.conn, types)]);
     const want = new Set(only);
     for (const k of [...srcList.keys()]) if (!want.has(k)) srcList.delete(k);
@@ -97,10 +103,10 @@ export async function runCompare({presets, since, onStatus}) {
   } else {
     const types = presetTypes(presets);
     if (!types.length) throw new Error("Pick at least one kind of metadata.");
-    onStatus(`Listing ${types.length} metadata types in ${src.name}…`);
-    srcList = await listComponents(src.conn, types, {onProgress: (n, of) => onStatus(`Listing ${src.name}… ${n}/${of}`)});
-    onStatus(`Listing ${types.length} metadata types in ${tgt.name}…`);
-    tgtList = await listComponents(tgt.conn, types, {onProgress: (n, of) => onStatus(`Listing ${tgt.name}… ${n}/${of}`)});
+    onStatus(`Listing ${types.length} metadata types in ${src.name}…`, 1);
+    srcList = await listComponents(src.conn, types, {onProgress: (n, of) => onStatus(`Listing ${src.name}… ${n}/${of}`, Math.round(15 * n / of))});
+    onStatus(`Listing ${types.length} metadata types in ${tgt.name}…`, 15);
+    tgtList = await listComponents(tgt.conn, types, {onProgress: (n, of) => onStatus(`Listing ${tgt.name}… ${n}/${of}`, 15 + Math.round(15 * n / of))});
   }
   for (const list of [srcList, tgtList]) for (const k of [...list.keys()]) if (!keepObject(k)) list.delete(k);
   let srcKeys = [...srcList.keys()];
@@ -113,9 +119,18 @@ export async function runCompare({presets, since, onStatus}) {
   }
   const common = srcKeys.filter(k => tgtList.has(k));
   if (!srcKeys.length && !tgtList.size) throw new Error("Nothing found for the kinds you picked.");
-  const s = srcKeys.length ? await retrieveAll(src.conn, srcKeys, src.name, onStatus) : {files: new Map(), problems: []};
-  const t = common.length ? await retrieveAll(tgt.conn, common, tgt.name, onStatus) : {files: new Map(), problems: []};
-  onStatus("Comparing…");
+  // Both orgs retrieve at the same time; progress weighs each by its size.
+  const total = srcKeys.length + common.length || 1;
+  const part = {s: 0, t: 0};
+  const both = who => (text, pct) => {
+    if (pct != null) part[who] = pct / 100;
+    onStatus(text, Math.round(30 + 62 * ((part.s * srcKeys.length + part.t * common.length) / total)));
+  };
+  const [s, t] = await Promise.all([
+    srcKeys.length ? retrieveAll(src.conn, srcKeys, src.name, both("s")) : {files: new Map(), problems: []},
+    common.length ? retrieveAll(tgt.conn, common, tgt.name, both("t")) : {files: new Map(), problems: []}
+  ]);
+  onStatus("Comparing…", 94);
   const sourceComps = componentsFromZip(s.files, bytesToText);
   const targetComps = componentsFromZip(t.files, bytesToText);
   // Listed but not in a zip (e.g. empty folders): keep presence for status.
@@ -126,7 +141,7 @@ export async function runCompare({presets, since, onStatus}) {
   const rows = classifyComponents(sourceComps, targetComps, {sourceInfo: info(srcList), targetInfo: info(tgtList)});
   let edges = [];
   try {
-    onStatus("Checking dependencies…");
+    onStatus("Checking dependencies…", 97);
     edges = await dependencyEdges(src.conn, rows);
   } catch (e) { /* MetadataComponentDependency is optional */ }
   return {sourceHost: src.host, targetHost: tgt.host, rows, sourceComps, edges, at: new Date().toISOString(),
@@ -141,7 +156,14 @@ export function CompareView({goTo}) {
   const [search, setSearch] = React.useState("");
   const [open, setOpen] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
-  const [status, setStatus] = React.useState("");
+  const [status, setStatusState] = React.useState({text: "", pct: null, started: 0});
+  const setStatus = (text, pct) => setStatusState(prev => ({text, pct: pct == null ? prev.pct : Math.max(prev.pct || 0, pct), started: prev.started || Date.now()}));
+  const [, tick] = React.useState(0);
+  React.useEffect(() => {
+    if (!busy) return undefined;
+    const t = setInterval(() => tick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
   const [error, setError] = React.useState("");
   const [limit, setLimit] = React.useState(PAGE);
   const [notes, setNotes] = React.useState(null);
@@ -153,13 +175,14 @@ export function CompareView({goTo}) {
 
   const run = async () => {
     setBusy(true); setError(""); setNotes(null); setOpen(null); setLimit(PAGE);
+    setStatusState({text: "Starting…", pct: 0, started: Date.now()});
     try {
       const result = await runCompare({presets, since, onStatus: setStatus});
       setRelease({compare: result, selected: new Set(), compareOnly: null});
     } catch (e) {
       setError(e.message || String(e));
     } finally {
-      setBusy(false); setStatus("");
+      setBusy(false); setStatusState({text: "", pct: null, started: 0});
     }
   };
 
@@ -242,8 +265,12 @@ export function CompareView({goTo}) {
         h("button", {className: "btn btn-primary btn-sm", disabled: busy || !st.sourceHost || !st.targetHost, onClick: run},
           busy ? "Comparing…" : cmp ? "Compare again" : "Compare")),
       busy && h("div", {className: "tr-progress"},
-        h("div", {className: "cov-progress"}, h("div", {className: "cov-progress-fill"})),
-        h("span", {className: "insp-meta"}, status)),
+        status.pct == null
+          ? h("div", {className: "cov-progress"}, h("div", {className: "cov-progress-fill"}))
+          : h("div", {className: "limit-bar rel-cmp-bar", role: "progressbar", "aria-valuenow": status.pct, "aria-valuemin": 0, "aria-valuemax": 100},
+            h("div", {className: "limit-fill rel-cmp-fill", style: {width: status.pct + "%"}})),
+        h("span", {className: "insp-meta"}, (status.pct != null ? `${status.pct}% · ` : "") +
+          `${Math.floor((Date.now() - (status.started || Date.now())) / 60000)}:${String(Math.floor((Date.now() - (status.started || Date.now())) / 1000) % 60).padStart(2, "0")} · ${status.text}`)),
       error && h("div", {className: "insp-error"}, error)),
 
     cmp && h("div", {className: "org-card org-card-wide", "data-release-results": ""},

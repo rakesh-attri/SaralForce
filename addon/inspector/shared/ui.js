@@ -1,3 +1,5 @@
+import {friendlyError} from "../../core/friendly-error.js";
+
 const h = React.createElement;
 
 // "Show all data" field-type glyph: a plain text marker, never an emoji.
@@ -22,4 +24,16 @@ function FFBadge({kind, children}) {
   return h("span", {className: "ff-badge ff-badge-" + (kind || "info")}, children);
 }
 
-export {sadTypeGlyph, sadInfoCell, FFBadge};
+// A Salesforce error in plain words: title, what to do, raw text folded away.
+function FriendlyError({error, className = ""}) {
+  if (!error) return null;
+  const e = friendlyError(error);
+  return h("div", {className: "insp-error fe-box " + className, role: "alert"},
+    h("div", {className: "fe-title"}, "⚠️ " + e.title),
+    e.hint && h("div", {className: "fe-hint"}, e.hint),
+    e.detail && (e.hint ? h("details", {className: "fe-details"},
+      h("summary", null, "Details from Salesforce"),
+      h("code", null, e.detail)) : h("div", {className: "fe-hint"}, e.detail)));
+}
+
+export {sadTypeGlyph, sadInfoCell, FFBadge, FriendlyError};

@@ -161,6 +161,17 @@ async function validationRuleFromText(objectName, request, {current, signal} = {
   };
 }
 
+// Mistakes models make that fail at compile time (seen in real deploys).
+const APEX_PITFALLS =
+  "Never invent methods: use only real Apex System, Database, Schema, Messaging, Security and Test APIs. " +
+  "There is NO Test.getSentEmailMessages() and NO Messaging.getSentEmails(): to test email, call the code between Test.startTest() and " +
+  "Test.stopTest() and assert Limits.getEmailInvocations() inside that block, or assert the email list your code builds. " +
+  "Security.stripInaccessible(AccessType.READABLE, rows) returns an SObjectAccessDecision, so always add .getRecords() to get the list. " +
+  "SOQL clause order is SELECT … FROM … WHERE … WITH USER_MODE GROUP BY … ORDER BY … LIMIT …: WITH comes right after WHERE, never after ORDER BY or LIMIT. " +
+  "Only query fields listed in the schema given; if a field is not listed, leave it out. Owner on Case, Lead and objects owned by queues is " +
+  "polymorphic: query Owner.Name and OwnerId only, then query User separately for e-mail or other user fields. " +
+  "@AuraEnabled(cacheable=true) methods only read (no DML). Every test method asserts something. Use the API version given (56.0 or newer for WITH USER_MODE).";
+
 const LWC_RULES =
   "LWC rules: the HTML root is <template>; the JS is `import { LightningElement, api, wire } from 'lwc'` and " +
   "`export default class <ClassName> extends LightningElement`. Prefer lightning base components (lightning-card, " +
@@ -169,7 +180,7 @@ const LWC_RULES =
   "and only add Apex when a query is needed. Apex classes are `public with sharing`, methods `@AuraEnabled(cacheable=true)` " +
   "for reads, use WITH USER_MODE in SOQL (never WITH SECURITY_ENFORCED, which current API versions reject), bind variables, and LIMIT. Import Apex as `import m from '@salesforce/apex/Class.method'`. " +
   "Show errors with lightning/platformShowToastEvent. No innerHTML, eval, <script>, external libraries or hard-coded ids. " +
-  "CSS is scoped to the component (use :host). Use only field API names from the schema given.";
+  "CSS is scoped to the component (use :host). Use only field API names from the schema given. Toasts: import { ShowToastEvent } from 'lightning/platformShowToastEvent'. " + APEX_PITFALLS;
 
 const LWC_FROM_TEXT_SYSTEM =
   "You are a senior Salesforce Lightning Web Components developer. Write ONE complete, deployable component from the request. " +
@@ -185,7 +196,7 @@ const APEX_RULES =
   "no hard-coded record ids; triggers stay thin and call a handler class; test classes use @IsTest, @TestSetup data, " +
   "Test.startTest/stopTest and real asserts with messages (aim for full coverage). Visualforce pages start with <apex:page> " +
   "and use lightningStylesheets=\"true\". Aura components start with <aura:component>; controller and helper JS files are " +
-  "object literals wrapped in ({ ... }); @AuraEnabled methods are static. Use only field API names from the schema given.";
+  "object literals wrapped in ({ ... }); @AuraEnabled methods are static. Use only field API names from the schema given. " + APEX_PITFALLS;
 
 // What each kind is, for the "write it from a description" prompt.
 const CODE_KIND_BRIEF = {
@@ -239,7 +250,7 @@ async function lwcFromText(request, {name, label, object, apiVersion, targets, s
       `\nRequest: ${ask}` + (schema ? `\n\n${schema}` : ""),
     validate: o => {
       files = normalizeBundleReply(o, name);
-      const problems = checkLwcBundle(files, name);
+      const problems = checkLwcBundle(files, name, {apiVersion});
       return problems.length ? "Fix these problems: " + problems.join(" ") : null;
     },
     signal
@@ -283,7 +294,7 @@ async function codeFromText(kind, request, form = {}, {signal} = {}) {
     user: hints + (schema ? `\n\n${schema}` : ""),
     validate: o => {
       files = normalizeCodeReply(kind, o, name);
-      const problems = checkCodeBundle(kind, files, name, {object: kind === "triggers" ? object : null});
+      const problems = checkCodeBundle(kind, files, name, {object: kind === "triggers" ? object : null, apiVersion: form.apiVersion});
       return problems.length ? "Fix these problems: " + problems.join(" ") : null;
     },
     signal
@@ -302,13 +313,23 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
   const ask = String(instruction || "").trim();
   if (!ask && !error) throw new Error("Describe the change first.");
   const editable = new Set(draft.files.filter(x => !x.generated && !x.readOnly).map(x => x.path));
+  // Schema of the objects the code queries, so field errors can be fixed with real names.
+  const used = new Set();
+  for (const f of draft.files) for (const m of String(f.content || "").matchAll(/\bFROM\s+([A-Za-z][\w]*)/gi)) used.add(m[1]);
+  if ((draft.form || {}).object) used.add(draft.form.object);
+  const schemaParts = [];
+  for (const n of [...used].slice(0, 3)) {
+    try { schemaParts.push(describeForPrompt(await ffDescribeObject(n))); } catch (e) { /* not an object */ }
+  }
+  const schema = schemaParts.join("\n\n");
   let merged = draft;
   let changed = [];
   const parsed = await askAiJson({
     feature: "Change draft",
     system: DRAFT_REVISE_SYSTEM,
-    user: `Kind: ${draft.kind}\nName: ${draft.name}\n` +
-      (ask ? `Request: ${ask}\n` : "") + (error ? `Salesforce deploy error to fix: ${error}\n` : "") +
+    user: `Kind: ${draft.kind}\nName: ${draft.name}\nAPI version: ${(draft.form || {}).apiVersion || "latest"}\n` +
+      (ask ? `Request: ${ask}\n` : "") + (error ? `Salesforce compile/deploy errors to fix (fix ALL of them):\n${error}\n` : "") +
+      (schema ? `\n${schema}\n` : "") +
       `\nCurrent files:\n${bundleForPrompt(draft.files)}`.slice(0, 60000),
     validate: o => {
       const files = o && o.files && typeof o.files === "object" ? o.files : null;
@@ -319,9 +340,10 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
         return !before || before.content !== x.content;
       }).map(x => x.path).filter(p => editable.has(p) || !draft.files.some(y => y.path === p));
       if (!changed.length) return "None of the returned files changed an editable file of this draft; use the exact paths given.";
-      const problems = draft.kind === "lwc" ? checkLwcBundle(merged.files, draft.name, {orgApex: draft.mode === "edit"})
+      const ver = (draft.form || {}).apiVersion;
+      const problems = draft.kind === "lwc" ? checkLwcBundle(merged.files, draft.name, {orgApex: draft.mode === "edit", apiVersion: ver})
         : AI_CODE_KINDS.includes(draft.kind)
-        ? checkCodeBundle(draft.kind, merged.files, draft.name, {object: draft.kind === "triggers" ? (draft.form || {}).object : null})
+        ? checkCodeBundle(draft.kind, merged.files, draft.name, {object: draft.kind === "triggers" ? (draft.form || {}).object : null, apiVersion: ver})
         : [];
       if (problems.length) return "The result still has problems: " + problems.join(" ");
       return null;

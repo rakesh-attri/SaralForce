@@ -16,7 +16,7 @@ import {auditDelete, sourceMemberDeletes, buildChanges, changeCounts} from "../.
 import {FFBadge} from "../shared/ui.js";
 import {CardHead, PresetPicker, orgOptions, OrgTag} from "./release-ui.js";
 import {CompareView} from "./release-compare.js";
-import {DeployView} from "./release-deploy.js";
+import {DeployView, resumeDeploy} from "./release-deploy.js";
 import {HistoryView} from "./release-history.js";
 import {ManualView} from "./release-manual.js";
 import {ImpactView} from "./release-impact.js";
@@ -353,8 +353,18 @@ function PackageView({goTo}) {
 
 export function ReleaseTab() {
   const [view, setView] = useFfSession("release", "view", "compare");
+  const st = useRelease();
+  // A deploy restored after minimize keeps being watched on any sub-tab.
+  React.useEffect(() => {
+    if (!st.orgs && !st.orgsBusy) loadOrgs();
+    resumeDeploy();
+  }, [st.orgs, st.deploy && st.deploy.id]);
   const cur = RELEASE_VIEWS.find(v => v.id === view) || RELEASE_VIEWS[0];
+  // Deploy opens on what you came from: Compare → compare selection,
+  // Package / Changes → package, History → the rollback / restore plan.
+  const FROM = {compare: "compare", package: "package", changes: "package", history: "plan"};
   const goTo = id => {
+    if (id === "deploy" && FROM[cur.id]) setRelease({deployFrom: {mode: FROM[cur.id], view: cur.id}});
     setView(id);
     const body = document.querySelector(".inspector-body");
     if (body) body.scrollTop = 0;

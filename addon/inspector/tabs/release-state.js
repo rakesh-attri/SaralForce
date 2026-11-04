@@ -2,6 +2,7 @@
 // sidebar snapshot: compare results hold whole files), so switching
 // between Compare / Changes / Package / Deploy keeps the work.
 import {listOrgs} from "../shared/deploy-api.js";
+import {putSession, getSession, pruneSessions} from "../shared/release-store.js";
 import {githubConfig, readBranch} from "../shared/github.js";
 import {componentsFromSource} from "../../core/source-format.js";
 import {bytesToText} from "../../core/zip.js";
@@ -32,6 +33,35 @@ const state = {
 
 const subs = new Set();
 
+// ── Kept across minimize / maximize (same Salesforce page load) ──
+const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
+const BOOT = params.get("hostBoot") || "";
+const SESSION_ID = BOOT ? `release:${params.get("host") || ""}:${BOOT}` : "";
+const PERSIST = ["compare", "compareOnly", "selected", "deploy", "validation", "pendingPlan", "releaseNotes", "gitBranch", "runbook", "deployFrom"];
+let saveTimer = null;
+let restoring = !!SESSION_ID;
+
+function persistSoon() {
+  if (!SESSION_ID || restoring) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const value = {};
+    for (const k of PERSIST) value[k] = state[k];
+    putSession(SESSION_ID, value).catch(() => { /* storage full: work stays in memory */ });
+  }, 300);
+}
+
+// Restore once per document, before anything new is computed.
+export const sessionRestored = !SESSION_ID ? Promise.resolve(false) : getSession(SESSION_ID).then(value => {
+  restoring = false;
+  pruneSessions().catch(() => {});
+  if (!value) return false;
+  const patch = {};
+  for (const k of PERSIST) if (value[k] != null && state[k] == null || (k === "selected" && value[k] && value[k].size)) patch[k] = value[k];
+  if (Object.keys(patch).length) setRelease({...patch, restored: true});
+  return true;
+}).catch(() => { restoring = false; return false; });
+
 export function releaseState() {
   return state;
 }
@@ -39,6 +69,7 @@ export function releaseState() {
 export function setRelease(patch) {
   const p = typeof patch === "function" ? patch(state) : patch;
   Object.assign(state, p);
+  if (PERSIST.some(k => k in p)) persistSoon();
   if ("sourceHost" in p || "targetHost" in p) {
     try { localStorage.setItem(ORGS_KEY, JSON.stringify({sourceHost: state.sourceHost, targetHost: state.targetHost})); } catch (e) { /* quota */ }
   }

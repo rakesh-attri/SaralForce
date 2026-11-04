@@ -67,7 +67,7 @@ function AiWriteBox({kind, form, onResult}) {
 }
 
 // Draft editor: change the files by instruction, or fix a deploy error.
-function DraftAiBar({draft, onChange, deployError}) {
+function DraftAiBar({draft, onChange, deployError, onRecheck}) {
   const [ask, setAsk] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [note, setNote] = React.useState(null);
@@ -83,8 +83,13 @@ function DraftAiBar({draft, onChange, deployError}) {
       const r = await reviseDraftFromText(draft, opts.error ? "" : ask, opts);
       setUndo(draft);
       onChange(r.draft);
-      setNote(`${r.explanation || "Done."} Changed: ${r.changed.map(p => p.split("/").pop()).join(", ")}.`);
+      setNote(`${r.explanation || "Done."} Changed: ${r.changed.map(p => p.split("/").pop()).join(", ")}.` +
+        (opts.error && onRecheck ? " Checking it compiles…" : ""));
       setAsk("");
+      if (opts.error && onRecheck) {
+        const okNow = await onRecheck(r.draft);
+        setNote(n => (n || "").replace(" Checking it compiles…", okNow ? " It compiles now." : " Still failing: see the errors below; Fix with AI again or edit by hand."));
+      }
     } catch (e) { setError(aiError(e)); }
     finally { setBusy(false); }
   };
@@ -96,7 +101,7 @@ function DraftAiBar({draft, onChange, deployError}) {
       h("button", {className: "btn btn-primary btn-sm", disabled: !ask.trim() || busy, onClick: () => run({})},
         busy ? "Working…" : "✨ Apply"),
       deployError && h("button", {className: "btn btn-secondary btn-sm", disabled: busy, onClick: () => run({error: deployError}),
-        title: "Send the deploy error to the AI and apply its fix"}, "✨ Fix with AI"),
+        title: "Send all compile errors to the AI, apply its fix and check again"}, "✨ Fix with AI"),
       undo && h("button", {className: "btn btn-secondary btn-sm", disabled: busy,
         onClick: () => { onChange(undo); setUndo(null); setNote("AI change undone."); }}, "Undo AI change")),
     note && h("div", {className: "insp-fix-why mdv-ai-note"}, "✨ " + note),
@@ -407,7 +412,7 @@ function escHtml(s) {
 
 // Edit generated files before deploying. Highlighted mirror under a
 // transparent textarea, the same technique as the SOQL editor.
-function DraftEditor({draft, onChange, onDeploy, onDiscard, onCheck, busy, error, progress}) {
+function DraftEditor({draft, onChange, onDeploy, onDiscard, onCheck, onRecheck, busy, error, progress}) {
   const editing = draft.mode === "edit";
   const [active, setActive] = React.useState(0);
   const hlRef = React.useRef(null);
@@ -442,7 +447,7 @@ function DraftEditor({draft, onChange, onDeploy, onDiscard, onCheck, busy, error
         editing && (draft.kind === "apex" || draft.kind === "triggers") && h("div", {className: "insp-hint-strip mdn-ro"},
           "ℹ️ Note: Apex classes and triggers can only be changed this way in sandboxes and developer orgs. " +
           "In production, deploy the change with a change set, VS Code or the Metadata API."),
-        draft.files.some(x => !x.readOnly && !x.generated) && h(DraftAiBar, {draft, onChange, deployError: error}),
+        draft.files.some(x => !x.readOnly && !x.generated) && h(DraftAiBar, {draft, onChange, deployError: error, onRecheck}),
         file.readOnly && h("div", {className: "insp-hint-strip mdn-ro"}, editing
           ? "Read-only here: targets, exposure and label are bundle settings; change them in VS Code or the Metadata API."
           : "Generated from the form (isExposed, targets, label, API version) and set by Salesforce on deploy."),
@@ -476,14 +481,14 @@ function DraftEditor({draft, onChange, onDeploy, onDiscard, onCheck, busy, error
       h("span", null, `${legacySecurity.map(f => f.path.split("/").pop()).join(", ")} use${legacySecurity.length === 1 ? "s" : ""} WITH SECURITY_ENFORCED, ` +
         "which current Salesforce API versions reject. WITH USER_MODE enforces the same user access."),
       h("button", {className: "btn btn-primary btn-sm", disabled: busy, onClick: fixSecurity}, "Quick fix: use WITH USER_MODE")),
-    error && h("div", {className: "insp-error"}, error),
+    error && h("div", {className: "insp-error mdn-errors"}, error.split("\n").map((l, i) => h("div", {key: i}, l))),
     h("div", {className: "mdn-foot"},
       h("span", {className: "insp-meta"}, progress || `${changed} changed · ${editing ? "Not saved to the org yet" : "Draft saved locally"}`),
       h("div", {className: "mdn-foot-btns"},
         h("button", {className: "btn btn-secondary btn-sm", disabled: busy, onClick: onDiscard,
           title: editing ? "Close the editor and forget these changes; the org copy is untouched" : ""}, editing ? "Discard changes" : "Discard"),
-        editing && onCheck && h("button", {className: "btn btn-secondary btn-sm", disabled: busy || !changed, onClick: onCheck,
-          title: "Ask Salesforce to compile the change without saving it"}, "Check compile"),
+        onCheck && h("button", {className: "btn btn-secondary btn-sm", disabled: busy || (editing && !changed), onClick: onCheck,
+          title: "Ask Salesforce to compile every file of this draft together, without saving anything"}, "Check compile"),
         editing
           ? h("button", {className: "btn btn-primary btn-sm", disabled: busy || !changed, onClick: onDeploy}, busy ? "Saving…" : "💾 Save to org")
           : h("button", {className: "btn btn-primary btn-sm", disabled: busy, onClick: onDeploy}, busy ? "Deploying…" : "✓ Deploy"))));

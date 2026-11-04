@@ -1,3 +1,4 @@
+import {lintFiles, lintText} from "./apex-lint.js";
 // Pure helpers for AI-written Apex classes, triggers, Visualforce pages and
 // Aura components (LWC has its own in lwc-ai.js): which files a kind may
 // contain, mapping the model's JSON to draft files, and pre-deploy checks.
@@ -118,6 +119,9 @@ export function checkCodeBundle(kind, files, name, form = {}) {
     if (!balanced(main.content)) problems.push(`${short(main.path)} has unbalanced braces.`);
   }
   if (main && kind === "pages" && !/^\s*(<!--[\s\S]*?-->\s*)*<apex:page[\s>]/.test(main.content)) problems.push("The page must start with <apex:page>.");
+  // Known compile mistakes (methods that don't exist, SOQL clause order…).
+  const lint = lintFiles(files, {apiVersion: form.apiVersion});
+  if (lint.length) problems.push(lintText(lint));
   if (main && kind === "aura") {
     if (!/^\s*(<!--[\s\S]*?-->\s*)*<aura:component[\s>]/.test(main.content)) problems.push("The .cmp must start with <aura:component>.");
     const ctrl = /\bcontroller\s*=\s*"([A-Za-z0-9_]+)"/.exec(main.content);

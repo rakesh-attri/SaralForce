@@ -423,13 +423,15 @@ the **draft editor** (nothing is saved to the org yet); **✓ Deploy** creates i
 | Edit files | File tree with type icons and a NEW badge; highlighted editor; Tab inserts spaces; changed files marked ●. |
 | Drafts are kept | Saved in this browser until deployed or discarded ("Draft saved locally"). |
 | ✨ **Ask AI to change** | Describe a change in plain English (e.g. *"add a search box above the table"*); the AI edits the draft's files. |
-| ✨ **Fix with AI** | Appears after a failed deploy: sends Salesforce's error to the AI and applies its fix. |
+| **Known-mistake check** | Before anything is sent, Apex and LWC files are checked for mistakes that never compile: methods that don't exist (e.g. Test.getSentEmailMessages), `Security.stripInaccessible` used without `.getRecords()`, `WITH USER_MODE` in the wrong place or on an old API version, DML in cacheable methods, tests without asserts, missing toast imports. The AI's own drafts must pass it too. |
+| **Check compile** | Salesforce compiles every file of the draft together (Apex class + its test, trigger + handler, LWC/Aura + Apex controller) as a check-only deploy. Nothing is saved; each error shows its file and line. In production the draft's own test classes run too. |
+| ✨ **Fix with AI** | Appears after a failed check or deploy: sends **all** the errors (with lines) and the schema of the objects used to the AI, applies its fix and **checks again automatically**. |
 | **Undo AI change** | Puts the draft back as it was before the last AI edit. |
-| **✓ Deploy** | Creates everything through the Tooling API (custom metadata through the Metadata API). Apex the component needs is created first; if a bundle step fails, the half-created bundle is removed. |
+| **✓ Deploy** | Apex classes, triggers, Visualforce, LWC and Aura go as **one Metadata API package**: everything is saved, or nothing is (no half-created class, test or bundle). Production runs the draft's test classes. Flows, validation rules and custom metadata types are created as before. |
 | **Discard** | Throws the draft away. |
 
-> Salesforce only allows creating **Apex classes and triggers** this way in **sandboxes and
-> developer orgs**; in production it refuses and the message says so (use a change set).
+> In **production**, Apex deploys run tests: include a test class in the draft (the AI writes one)
+> so only that test runs; otherwise all local tests run.
 
 ### 13.12 package.xml basket
 
@@ -498,6 +500,7 @@ Move changes between any two orgs you're logged into in this browser (sandbox �
 | Drafts | Save a compare selection or package and load it later (Package → Drafts). |
 | Deploy to another org | History → a release → the exact deployed package to the next org (UAT → production). **Compare again** re-runs a release's items between any two orgs. |
 | Partial rollback | Tick which items to restore or remove before rolling back. |
+| Progress and minimize | Compare shows a percentage and elapsed time; both orgs are retrieved at the same time. Minimize / maximize keeps the Release tab, compare results, selection and a running deploy (it resumes watching). A deploy queued behind another one says so, with **Check status** and a link to Deployment Status. Rollbacks show **Validate (RB)** / **Deploy now (RB)**. |
 | Check status | A deploy SaralForce lost track of (closed screen, network) stays in History; **Check status** reads its result and it can still be rolled back. |
 | All deployments in an org | Salesforce's own deployment list (change sets, CLI, other tools, SaralForce) for any logged-in org. |
 | Pull requests | History → **Open pull request** commits a release to a release/… branch and opens a PR. Deletes are removed from Git; snapshot commits mirror the org. Any branch can be the source. |

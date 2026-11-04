@@ -578,11 +578,12 @@ function mockCode(user) {
 function mockRevision(user) {
   const name = (/\nName: ([A-Za-z0-9_]+)/.exec("\n" + user) || [])[1] || "c";
   const fixing = /deploy error to fix/.test(user);
-  // Code drafts: fix the first file (drop a COMPILE_ERROR line, else add a note).
+  // Code drafts: fix the file with the reported error (drop COMPILE_ERROR / Missing_Field__c lines), else the first.
   if (!/^Kind: lwc$/m.test(user)) {
-    const m = /=== ([^\n]+?) ===\n([\s\S]*?)(?=\n=== |$)/.exec(user);
+    const blocks = [...user.matchAll(/=== ([^\n]+?) ===\n([\s\S]*?)(?=\n=== |$)/g)];
+    const m = blocks.find(b => /COMPILE_ERROR|Missing_Field__c/.test(b[2])) || blocks[0];
     if (m && !/\.css$/.test(m[1])) {
-      const fixed = m[2].split("\n").filter(l => !l.includes("COMPILE_ERROR")).join("\n");
+      const fixed = m[2].split("\n").filter(l => !/COMPILE_ERROR|Missing_Field__c/.test(l)).join("\n");
       const content = fixed !== m[2] ? fixed : m[2].replace(/\{/, "{\n    // Reviewed by AI: null-safe and bulk-safe.");
       return JSON.stringify({files: {[m[1]]: content},
         explanation: fixed !== m[2] ? "Removed the line that referenced an undefined variable." : "Added a review note; the logic already looked bulk-safe."});
