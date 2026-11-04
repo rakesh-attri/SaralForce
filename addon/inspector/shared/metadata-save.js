@@ -3,6 +3,7 @@
 // MetadataContainer (compiled by Salesforce, like the Developer Console);
 // LWC and Aura files are updated one by one. Apex can only be saved this
 // way in sandboxes and developer orgs.
+import {lintFiles, lintText} from "../../core/apex-lint.js";
 import {sfConn, apiVersion} from "../../inspector.js";
 import {escapeSoqlString} from "../../core/soql.js";
 import {
@@ -108,6 +109,9 @@ async function saveViaContainer(draft, {checkOnly, onProgress}) {
 async function saveEditDraft(draft, {checkOnly = false, force = false, onProgress} = {}) {
   const changed = changedFiles(draft);
   if (!changed.length) throw new Error("Nothing changed yet.");
+  // Known compile mistakes, caught before Salesforce is asked.
+  const lint = lintFiles(changed, {apiVersion: (draft.form || {}).apiVersion});
+  if (lint.length) throw new Error(lintText(lint));
   try {
     if (!force && !checkOnly && draft.existing.lastModified) {
       const now = await orgLastModified(draft.kind, draft);

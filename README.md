@@ -281,6 +281,11 @@ debug-log analysis.
 ## What's New
 
 ### v2.3.0
+- **Release** keeps its work across minimize/maximize, shows compare progress in %, retrieves both orgs at once,
+  resumes a running deploy and explains a queued one
+- **Reliable code deploys** — AI-written and template Apex, triggers, Visualforce, LWC and Aura pass a
+  known-mistake check, then **Check compile** (Salesforce compiles the whole draft, saves nothing) and an
+  all-or-nothing **Deploy** as one package; ✨ Fix with AI sends every compile error and rechecks
 - **Release Center** (new tab) — compare any two orgs you're logged into and deploy either way:
   side-by-side diffs, dependency check with **Add missing**, deletes, a change tracker by date and
   person, package.xml / destructiveChanges.xml, **Validate**, **Quick deploy**, **Deploy now** and

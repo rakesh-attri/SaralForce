@@ -242,7 +242,9 @@ function deployResultXml(d) {
   const total = d.count;
   const tests = d.testLevel && d.testLevel !== "NoTestRun" ? 1 : 0;
   let details = "";
-  if (done && failC) {
+  if (done && d.compileErrors && d.compileErrors.length) {
+    details += d.compileErrors.map(e => `<componentFailures><componentType>${e.type}</componentType><fileName>${e.file}</fileName><fullName>${e.name}</fullName><lineNumber>${e.line}</lineNumber><columnNumber>9</columnNumber><problem>${e.problem}</problem><problemType>Error</problemType></componentFailures>`).join("");
+  } else if (done && failC) {
     details += `<componentFailures><componentType>ApexClass</componentType><fileName>classes/InvoiceService.cls</fileName><fullName>InvoiceService</fullName><lineNumber>11</lineNumber><problem>Variable does not exist: InvoiceTax</problem><problemType>Error</problemType></componentFailures>`;
   }
   if (tests) {
@@ -252,9 +254,24 @@ function deployResultXml(d) {
       "<codeCoverage><name>InvoiceService</name><numLocations>10</numLocations><numLocationsNotCovered>1</numLocationsNotCovered></codeCoverage><numTestsRun>1</numTestsRun></runTestResult>";
   }
   return env(`<checkDeployStatusResponse><result><checkOnly>${d.checkOnly}</checkOnly><details>${details}</details><done>${done}</done><id>${d.id}</id>` +
-    `<numberComponentErrors>${done && failC ? 1 : 0}</numberComponentErrors><numberComponentsDeployed>${done ? total - (failC ? 1 : 0) : Math.floor(total / 2)}</numberComponentsDeployed><numberComponentsTotal>${total}</numberComponentsTotal>` +
+    `<numberComponentErrors>${done && failC ? (d.compileErrors && d.compileErrors.length) || 1 : 0}</numberComponentErrors><numberComponentsDeployed>${done ? total - (failC ? 1 : 0) : Math.floor(total / 2)}</numberComponentsDeployed><numberComponentsTotal>${total}</numberComponentsTotal>` +
     `<numberTestErrors>${done && failT ? 1 : 0}</numberTestErrors><numberTestsCompleted>${done ? tests - (failT ? 1 : 0) : 0}</numberTestsCompleted><numberTestsTotal>${tests}</numberTestsTotal>` +
     `${done ? "" : "<stateDetail>Running tests in UAT…</stateDetail>"}<status>${status}</status><success>${success}</success></result></checkDeployStatusResponse>`);
+}
+
+function mockCompile(files) {
+  const out = [];
+  for (const [path, bytes] of files) {
+    if (!/\.(cls|trigger|js|cmp|html)$/.test(path)) continue;
+    const lines = bytesToText(bytes).split("\n");
+    lines.forEach((l, i) => {
+      const name = path.split("/").pop().replace(/\.[^.]+$/, "");
+      const type = path.startsWith("classes/") ? "ApexClass" : path.startsWith("triggers/") ? "ApexTrigger" : path.startsWith("lwc/") ? "LightningComponentBundle" : "AuraDefinitionBundle";
+      if (/COMPILE_ERROR/.test(l)) out.push({file: path, name, type, line: i + 1, problem: "Variable does not exist: COMPILE_ERROR"});
+      if (/Missing_Field__c/.test(l)) out.push({file: path, name, type, line: i + 1, problem: "No such column 'Missing_Field__c' on entity 'Account'. If you are attempting to use a custom field, be sure to append the '__c' after the custom field name."});
+    });
+  }
+  return out;
 }
 
 // Returns true when the request was answered here.
@@ -292,8 +309,10 @@ export async function releaseSoap(raw, res) {
     const testLevel = tag(raw, "testLevel") || (org === orgs.target ? "NoTestRun" : "");
     const hasTax = files.has("classes/InvoiceTax.cls") || !!org.ApexClass.InvoiceTax;
     const d = {id: "0Af" + String(++seq).padStart(12, "0"), calls: 0, checkOnly, testLevel, count, files, org,
-      failComponent: failMode === "component" || (files.has("classes/InvoiceService.cls") && !hasTax),
+      compileErrors: mockCompile(files),
+      failComponent: failMode === "component" || (files.has("classes/InvoiceService.cls") && !hasTax && !!org.ApexClass.InvoiceService),
       failTest: failMode === "test" && testLevel !== "NoTestRun"};
+    if (d.compileErrors.length) d.failComponent = true;
     deploys.set(d.id, d);
     lastDeployPaths = [...files.keys()];
     send(env(`<deployResponse><result><done>false</done><id>${d.id}</id><state>Queued</state></result></deployResponse>`));

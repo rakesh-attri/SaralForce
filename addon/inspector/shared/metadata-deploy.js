@@ -5,6 +5,62 @@ import {sfConn, apiVersion} from "../../inspector.js";
 import {cmdtTypeXml} from "../../core/cmdt.js";
 import {bundleCreateOrder} from "../../core/bundle-order.js";
 import {soapCreate} from "./cmdt-data.js";
+import {draftPackage, draftTestOptions, compileErrorText, PACKAGE_KINDS} from "../../core/draft-package.js";
+import {lintFiles, lintText} from "../../core/apex-lint.js";
+import {currentOrgConn, startDeploy, waitForDeploy} from "./deploy-api.js";
+
+let sandboxCache = null;
+async function isSandboxOrg() {
+  if (sandboxCache != null) return sandboxCache;
+  try {
+    const r = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=${encodeURIComponent("SELECT IsSandbox FROM Organization")}`, {useCache: false});
+    sandboxCache = !!(r.records && r.records[0] && r.records[0].IsSandbox);
+  } catch (e) { sandboxCache = false; }
+  return sandboxCache;
+}
+
+const ID_QUERY = {
+  ApexClass: n => `SELECT Id FROM ApexClass WHERE Name = '${n}' AND NamespacePrefix = null`,
+  ApexTrigger: n => `SELECT Id FROM ApexTrigger WHERE Name = '${n}' AND NamespacePrefix = null`,
+  ApexPage: n => `SELECT Id FROM ApexPage WHERE Name = '${n}' AND NamespacePrefix = null`,
+  LightningComponentBundle: n => `SELECT Id FROM LightningComponentBundle WHERE DeveloperName = '${n}' AND NamespacePrefix = null`,
+  AuraDefinitionBundle: n => `SELECT Id FROM AuraDefinitionBundle WHERE DeveloperName = '${n}' AND NamespacePrefix = null`
+};
+
+// Apex, triggers, Visualforce, LWC and Aura go as ONE Metadata API package:
+// Salesforce compiles every file together and saves all of them or none.
+// checkOnly = compile (and in production run the draft's tests) without saving.
+async function deployDraftPackage(draft, {checkOnly = false, onProgress = () => {}} = {}) {
+  // 1. Known mistakes, caught without a round trip.
+  const lint = lintFiles(draft.files, {apiVersion: (draft.form || {}).apiVersion || apiVersion});
+  if (lint.length) {
+    const err = new Error(lintText(lint));
+    err.code = "LINT";
+    throw err;
+  }
+  // 2. Compile (and deploy) the whole draft at once.
+  const pkg = draftPackage(draft, apiVersion);
+  const isSandbox = await isSandboxOrg();
+  const opts = draftTestOptions({isSandbox, hasApex: !!(pkg.members.ApexClass || pkg.members.ApexTrigger), tests: pkg.tests});
+  onProgress(checkOnly ? "Compiling…" : "Deploying…");
+  const conn = currentOrgConn();
+  const id = await startDeploy(conn, pkg.entries, {checkOnly, ...opts});
+  const summary = await waitForDeploy(conn, id, {onUpdate: x => onProgress(`${checkOnly ? "Compiling" : "Deploying"}… ${x.stateDetail || x.status}` +
+    (x.tests.total ? ` · tests ${x.tests.completed}/${x.tests.total}` : ""))});
+  if (!summary.success) {
+    const err = new Error(compileErrorText(summary, draft));
+    err.code = "COMPILE";
+    err.summary = summary;
+    throw err;
+  }
+  if (checkOnly) return {checked: true, name: draft.name, tests: opts.testLevel};
+  let newId = "";
+  try {
+    const r = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=${encodeURIComponent(ID_QUERY[pkg.main.type](draft.name))}`, {useCache: false});
+    newId = r.records && r.records[0] ? r.records[0].Id : "";
+  } catch (e) { /* the list refresh finds it anyway */ }
+  return {type: pkg.main.type, name: draft.name, id: newId};
+}
 
 const toolingPath = (type, id) => `/services/data/v${apiVersion}/tooling/sobjects/${type}/${id ? encodeURIComponent(id) : ""}`;
 
@@ -60,7 +116,8 @@ async function createExtras(draft, ver) {
 }
 
 // Deploy one draft. Returns {type, id, name} of the main component.
-async function deployDraft(draft) {
+async function deployDraft(draft, opts = {}) {
+  if (PACKAGE_KINDS.includes(draft.kind)) return deployDraftPackage(draft, opts);
   const f = draft.form || {};
   const ver = Number(f.apiVersion) || Number(apiVersion);
   try {
@@ -139,4 +196,4 @@ async function deployDraft(draft) {
   }
 }
 
-export {deployDraft, orgApiVersions};
+export {deployDraft, orgApiVersions, PACKAGE_KINDS};

@@ -3411,7 +3411,9 @@ if (!sfHost) {
       if (e.data.type === "sfoc-save-state") {
         if (window.__sfocApp) {
           window.__sfocApp._saveState();
-          saveInspectorState(sfHost, window.__sfocApp.state);
+          // Same page load id + the tools' state, or reopening can't restore them.
+          saveInspectorState(sfHost, window.__sfocApp.state,
+            {hostBoot: urlParams.get("hostBoot"), takeSnapshot: ffTakeSnapshot});
         }
       }
       if (e.data.type === "sfoc-api-names-state" && window.__sfocApp) {

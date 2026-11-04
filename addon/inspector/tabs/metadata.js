@@ -17,7 +17,7 @@ import {fmtDateTime} from "../shared/format.js";
 import {FFBadge} from "../shared/ui.js";
 import {ffIcon, FF_I_DB} from "../shared/icons.js";
 import {useFfSession, ffLoadJson, ffSaveJson} from "../shared/session-state.js";
-import {deployDraft, orgApiVersions} from "../shared/metadata-deploy.js";
+import {deployDraft, orgApiVersions, PACKAGE_KINDS} from "../shared/metadata-deploy.js";
 import {loadEditDraft, saveEditDraft} from "../shared/metadata-save.js";
 import {EDITABLE_KINDS, SANDBOX_ONLY_NOTE, changedFiles} from "../../core/edit-draft.js";
 import {confirmDialog} from "../../ui/confirm.js";
@@ -635,22 +635,42 @@ function MetadataTab() {
   };
 
   // Deploy a draft (from the dialog or the editor), then show it in the list.
+  // Compile a new draft without saving it (whole bundle at once).
+  const checkNew = async (draft) => {
+    setBusy(true);
+    setDeployErr(null);
+    setNotice(null);
+    try {
+      const r = await deployDraft(draft, {checkOnly: true, onProgress: setProgress});
+      setNotice(`${draft.name} compiles cleanly${r.tests && r.tests !== "NoTestRun" ? " and its tests pass" : ""}. Nothing was saved yet.`);
+      return true;
+    } catch (e) {
+      setDeployErr(e.message);
+      return false;
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+
   const deploy = async (draft, fromDialog) => {
     setBusy(true);
     setDeployErr(null);
     setNotice(null);
     try {
-      const res = await deployDraft(draft);
+      const res = await deployDraft(draft, {onProgress: setProgress});
+      setProgress(null);
       setDrafts(drafts.filter(d => d.id !== draft.id));
       setNewOpen(false);
       setDraftId(null);
-      setNotice(`Deployed ${res.name}.` + (draft.kind === "flows" ? " It is saved as a draft version; activate it in Flow Builder." : ""));
+      setNotice(`Deployed ${res.name}${PACKAGE_KINDS.includes(draft.kind) && draft.files.filter(f => /^classes\//.test(f.path)).length ? " with its Apex classes" : ""}.` + (draft.kind === "flows" ? " It is saved as a draft version; activate it in Flow Builder." : ""));
       setLists(l => ({...l, [draft.kind]: undefined}));
       setErrors(x => ({...x, [draft.kind]: undefined}));
       setKindId(draft.kind);
       setSelId(res.id);
     } catch (e) {
       setDeployErr(e.message);
+      setProgress(null);
       // A failed deploy from the dialog keeps the work as a draft.
       if (fromDialog) {
         const d = withOriginals(draft);
@@ -757,7 +777,10 @@ function MetadataTab() {
                   onChange: d => setDrafts(drafts.map(x => (x.id === d.id ? d : x))),
                   onDeploy: () => (draft.mode === "edit" ? saveEdit(draft) : deploy(draft, false)),
                   onCheck: draft.mode === "edit" && ["apex", "triggers", "pages"].includes(draft.kind)
-                    ? () => saveEdit(draft, {checkOnly: true}) : null,
+                    ? () => saveEdit(draft, {checkOnly: true})
+                    : draft.mode !== "edit" && PACKAGE_KINDS.includes(draft.kind) ? () => checkNew(draft) : null,
+                  // After an AI fix of compile errors, check again straight away.
+                  onRecheck: draft.mode !== "edit" && PACKAGE_KINDS.includes(draft.kind) ? d => checkNew(d) : null,
                   onDiscard: () => { setDrafts(drafts.filter(x => x.id !== draft.id)); setDraftId(null); setDeployErr(null); }
                 })
               : sel

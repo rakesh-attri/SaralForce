@@ -5,7 +5,7 @@ import {writeZip, readZip, textToBytes, bytesToText} from "../../core/zip.js";
 import {componentsFromZip} from "../../core/deploy.js";
 
 const DB = "saralforce-release";
-const VERSION = 2;
+const VERSION = 3;
 let dbPromise = null;
 
 function openDb() {
@@ -18,6 +18,7 @@ function openDb() {
       if (!db.objectStoreNames.contains("snapshots")) db.createObjectStore("snapshots", {keyPath: "id"});
       if (!db.objectStoreNames.contains("blobs")) db.createObjectStore("blobs", {keyPath: "id"});
       if (!db.objectStoreNames.contains("drafts")) db.createObjectStore("drafts", {keyPath: "id"});
+      if (!db.objectStoreNames.contains("session")) db.createObjectStore("session", {keyPath: "id"});
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => { dbPromise = null; reject(req.error || new Error("Could not open release history")); };
@@ -152,4 +153,22 @@ export function putDraft(d) {
 
 export function deleteDraft(id) {
   return tx("drafts", "readwrite", st => st.delete(id));
+}
+
+// The Release tab's working state (compare results, selection, running
+// deploy…) for one page load, so minimize / maximize brings it back.
+export function putSession(id, value) {
+  return tx("session", "readwrite", st => st.put({id, value, at: Date.now()}));
+}
+
+export async function getSession(id) {
+  const row = await tx("session", "readonly", st => st.get(id));
+  return row ? row.value : null;
+}
+
+// Old page loads' state is useless: keep only the newest few.
+export async function pruneSessions(keep = 3) {
+  const all = await tx("session", "readonly", st => st.getAll());
+  const old = (all || []).sort((a, b) => b.at - a.at).slice(keep);
+  for (const r of old) await tx("session", "readwrite", st => st.delete(r.id));
 }

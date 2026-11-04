@@ -8676,13 +8676,14 @@ html[data-theme="dark"] .covdash-tab-t {
 }
 
 .x-subnav-ico {
-  flex: 0 0 34px;
-  height: 34px;
+  flex: 0 0 44px;
+  height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 9px;
+  border-radius: 11px;
   background: var(--cf-page);
-  font-size: 17px;
+  font-size: 26px;
+  line-height: 1;
 }
 
 .x-subnav-btn.active .x-subnav-ico {
@@ -12327,13 +12328,80 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
 }
 
 .rel-modes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.rel-mode-opt {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--cf-card);
+  border: 2px solid var(--cf-border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.rel-mode-opt:hover {
+  border-color: var(--cf-blue);
+}
+
+.rel-mode-opt.active {
+  border-color: var(--cf-purple);
+  background: rgba(99, 91, 255, 0.07);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12);
+}
+
+.rel-mode-opt:focus-within {
+  outline: 2px solid var(--cf-blue);
+  outline-offset: 2px;
+}
+
+.rel-mode-opt input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--cf-purple);
+  cursor: inherit;
+}
+
+.rel-mode-ico {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.rel-mode-tx {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rel-mode-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.rel-mode-opt.active .rel-mode-title {
+  color: var(--cf-purple);
+}
+
+.rel-mode-sub {
+  font-size: 12px;
+  color: var(--cf-text-2);
 }
 
 .rel-modes .disabled {
   opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.rel-modes .disabled:hover {
+  border-color: var(--cf-border);
 }
 
 .rel-plan {
@@ -12910,4 +12978,51 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
 
 .rel-relname .soql-save-input {
   flex: 1 1 320px;
+}
+
+
+.rel-cmp-bar {
+  height: 8px;
+  margin-bottom: 4px;
+}
+
+.limit-fill.rel-cmp-fill,
+.rel-subnav ~ * .cov-progress-fill {
+  background: #2e844a;
+}
+
+.rel-back {
+  display: inline-block;
+  margin: -4px 0 8px;
+  font-weight: 600;
+}
+
+/* Friendly error: plain title + what to do, raw text under "Details". */
+.fe-box {
+  white-space: normal;
+}
+
+.fe-title {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.fe-hint {
+  margin-top: 3px;
+}
+
+.fe-details {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.fe-details summary {
+  cursor: pointer;
+}
+
+.fe-details code {
+  display: block;
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }

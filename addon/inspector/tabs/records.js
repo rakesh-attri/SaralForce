@@ -4,7 +4,7 @@ import {parseSfInstant, formatSfDate, formatSfInstantForInput, parseSfWallInputT
 import {toCsv, downloadText} from "../shared/csv.js";
 import {ffIsSfId, openRecordInSf} from "../shared/record-links.js";
 import {kickSfTzFetch, useSfTimeZoneTick, ffFmtRelative, fmtSfCell} from "../shared/format.js";
-import {sadTypeGlyph, sadInfoCell} from "../shared/ui.js";
+import {sadTypeGlyph, sadInfoCell, FriendlyError} from "../shared/ui.js";
 import {useFfSession} from "../shared/session-state.js";
 import {ffApiPath, ffAutoApi, ffApiModeOf, ffDescribeObject} from "../shared/describe.js";
 import {RelatedPanel, HistoryPanel} from "../shared/record-nav-ui.js";
@@ -411,7 +411,7 @@ function RecordDetailCore({detail, loading, onBack, onSave, nav}) {
         key: id, role: "tab", "aria-selected": view === id, className: "sq3-pill" + (view === id ? " active" : ""),
         onClick: () => nav.setView(id)
       }, label))),
-    nav && nav.error && h("div", {className: "insp-error"}, nav.error),
+    nav && nav.error && h(FriendlyError, {error: nav.error}),
     detail && view === "related" && h("div", {className: "ff-modal-body"}, nav.related),
     detail && view === "history" && h("div", {className: "ff-modal-body"}, nav.history),
     detail && view === "fields" && h("div", {className: "ff-modal-body"},
@@ -1072,7 +1072,7 @@ function RecordsTab() {
               disabled: !objInput.trim() || ctxLoading,
               onClick: loadManualObject
             }, "Load Object"))))),
-    error && h("div", {className: "insp-error"}, error),
+    error && h(FriendlyError, {error}),
     (detailLoading || detail) && h(RecordDetailPanel, {
       detail,
       loading: detailLoading,

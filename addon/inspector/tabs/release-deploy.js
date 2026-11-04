@@ -9,7 +9,7 @@ import {packageCount} from "../../core/metadata.js";
 import {hasSecurityEnforced} from "../../core/bundle-order.js";
 import {bytesToText, writeZip, writeZipCompressed} from "../../core/zip.js";
 import {apiVersion} from "../../inspector.js";
-import {retrieve, startDeploy, waitForDeploy, quickDeploy, cancelDeploy, queryAll, setupUrl, listComponents} from "../shared/deploy-api.js";
+import {retrieve, startDeploy, waitForDeploy, quickDeploy, cancelDeploy, queryAll, setupUrl, listComponents, deployStatus} from "../shared/deploy-api.js";
 import {analyzePlan, sizeProblems, overwriteRisks} from "../../core/analyzers.js";
 import {listReleases, putRelease, saveSnapshot, saveBytes, newId} from "../shared/release-store.js";
 import {nextVersion, trimSummary} from "../../core/release-history.js";
@@ -114,6 +114,53 @@ async function recordRelease(rec, entries) {
   return r;
 }
 
+// Deploys this document is polling. A deploy restored after minimize is
+// not in here, so resumeDeploy() picks it up again.
+const watching = new Set();
+
+export async function resumeDeploy() {
+  const d = releaseState().deploy;
+  if (!d || d.finished || !d.id || watching.has(d.id)) return;
+  const org = orgByHost(d.targetHost);
+  if (!org || !org.conn) return;
+  watching.add(d.id);
+  try {
+    const summary = await waitForDeploy(org.conn, d.id, {
+      onUpdate: x => setRelease(prev => ({deploy: {...prev.deploy, summary: x, status: x.stateDetail || x.status}}))
+    });
+    setRelease(prev => ({
+      deploy: {...prev.deploy, summary, finished: true, status: summary.status},
+      ...(d.checkOnly && summary.canQuickDeploy && d.info
+        ? {validation: {id: d.id, targetHost: d.targetHost, at: Date.now(), items: d.items, info: d.info, entries: d.entries, noTests: !summary.tests.total && d.level !== "Default"}} : {}),
+      ...(!d.checkOnly && summary.success ? staleCompare(prev, d.targetHost) : {}),
+      ...(!d.checkOnly && summary.success && d.info && d.info.kind !== "deploy" ? {pendingPlan: null} : {})
+    }));
+    if (d.recordId) {
+      const r = (await listReleases()).find(x => x.id === d.recordId);
+      if (r) await finishRelease(r, {success: summary.success, status: summary.status, summary: trimSummary(summary)});
+    }
+  } catch (e) {
+    setRelease(prev => ({deploy: {...prev.deploy, status: "Lost contact with Salesforce: " + (e.message || e) + " Use Check status."}}));
+  } finally {
+    watching.delete(d.id);
+  }
+}
+
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// Re-render every second while something runs (elapsed time, hints).
+function useTick(on) {
+  const [, setN] = React.useState(0);
+  React.useEffect(() => {
+    if (!on) return undefined;
+    const t = setInterval(() => setN(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [on]);
+}
+
 // Highest API version the org supports (deploys of newer metadata fail).
 const apiCache = new Map();
 function useTargetApi(target) {
@@ -166,6 +213,17 @@ async function retrieveAllMembers(source, members, onStatus) {
   return {files};
 }
 
+// One "What to deploy" choice: a large, clickable card with a radio inside.
+function ModeOption({id, plan, running, setMode, disabled = false, icon, title, sub}) {
+  const on = plan.mode === id;
+  return h("label", {className: "rel-mode-opt" + (on ? " active" : "") + (disabled || running ? " disabled" : "")},
+    h("input", {type: "radio", name: "rel-mode", value: id, checked: on, disabled: disabled || running, onChange: () => setMode(id)}),
+    h("span", {className: "rel-mode-ico", "aria-hidden": "true"}, icon),
+    h("span", {className: "rel-mode-tx"},
+      h("span", {className: "rel-mode-title"}, title),
+      h("span", {className: "rel-mode-sub"}, sub)));
+}
+
 export function DeployView({goTo}) {
   const st = useRelease();
   const [relName, setRelName] = useFfSession("release", "relName", "");
@@ -174,13 +232,19 @@ export function DeployView({goTo}) {
   const [destructivePkg] = useFfSession("release", "destructive", {});
   const cmpReady = !!(st.compare && st.selected.size);
   const pending = st.pendingPlan;
-  const [mode, setMode] = React.useState(pending ? "plan" : cmpReady ? "compare" : "package");
+  const from = st.deployFrom || null;
+  const usable = m => m === "plan" ? !!pending : m === "compare" ? cmpReady : m === "package";
+  const [mode, setMode] = React.useState(() => from && usable(from.mode) ? from.mode : pending ? "plan" : cmpReady ? "compare" : "package");
+  // A new rollback / restore / promote plan opens itself.
+  const lastPlan = React.useRef(pending);
   React.useEffect(() => {
-    if (pending) {
-      setMode("plan");
-      if (pending.targetHost && st.targetHost !== pending.targetHost) setRelease({targetHost: pending.targetHost});
-    }
+    if (pending && pending !== lastPlan.current) setMode("plan");
+    lastPlan.current = pending;
   }, [pending]);
+  React.useEffect(() => {
+    if (mode === "plan" && pending && pending.targetHost && st.targetHost !== pending.targetHost) setRelease({targetHost: pending.targetHost});
+  }, [mode, pending]);
+  const BACK = {compare: "Compare", package: "Package", changes: "Changes", history: "History"};
   const plan = usePlan(mode, pkg, destructivePkg);
   const source = orgByHost(st.sourceHost);
   const target = orgByHost(st.targetHost);
@@ -196,6 +260,25 @@ export function DeployView({goTo}) {
   const [aiErr, setAiErr] = React.useState("");
   const d = st.deploy;
   const running = !!(d && !d.finished);
+  useTick(running);
+  React.useEffect(() => { resumeDeploy(); }, [st.orgs, d && d.id, d && d.finished]);
+  const [checking, setChecking] = React.useState(false);
+  const checkNow = async () => {
+    const org = d && orgByHost(d.targetHost);
+    if (!org) return;
+    setChecking(true);
+    try {
+      const x = await deployStatus(org.conn, d.id);
+      setRelease(prev => ({deploy: {...prev.deploy, summary: x, status: x.stateDetail || x.status}}));
+      resumeDeploy();
+    } catch (e) {
+      setRelease(prev => ({deploy: {...prev.deploy, status: "Could not read the status: " + e.message}}));
+    } finally {
+      setChecking(false);
+    }
+  };
+  const elapsed = d && d.startedAt ? Date.now() - d.startedAt : 0;
+  const pendingLong = running && d.id && (!d.summary || /Pending/.test(d.summary.status)) && elapsed > 20000;
   const count = plan.keys.length;
   const delCount = keysFromMembers(plan.destructive).length;
   const targetApi = useTargetApi(target);
@@ -295,6 +378,8 @@ export function DeployView({goTo}) {
       // In History from the start: a deploy that outlives this screen can still be checked and rolled back.
       record = await recordRelease({...info, kind: checkOnly ? "validation" : info.kind, deployId: id, success: false,
         status: "InProgress", summary: null, snapshotId}, checkOnly ? null : entries).catch(() => null);
+      setRelease(prev => ({deploy: {...prev.deploy, recordId: record ? record.id : "", info, level: preset ? "NoTestRun" : level}}));
+      watching.add(id);
       const summary = await waitForDeploy(target.conn, id, {
         onUpdate: s => setRelease(prev => ({deploy: {...prev.deploy, summary: s, status: s.stateDetail || s.status}}))
       });
@@ -309,6 +394,9 @@ export function DeployView({goTo}) {
     } catch (e) {
       if (record) await finishRelease(record, {status: "Unknown", error: e.message || String(e)}).catch(() => {});
       setRelease(prev => ({deploy: {...(prev.deploy || base), finished: true, error: e.message || String(e)}}));
+    } finally {
+      const d = releaseState().deploy;
+      if (d && d.id) watching.delete(d.id);
     }
   };
 
@@ -346,6 +434,8 @@ export function DeployView({goTo}) {
       setRelease({deploy: {...base, id, status: "Queued in Salesforce…"}});
       record = await recordRelease({...info, kind: info.kind === "deploy" ? "quick" : info.kind, deployId: id, validationId: validation.id,
         success: false, status: "InProgress", summary: null, snapshotId}, validation.entries).catch(() => null);
+      setRelease(prev => ({deploy: {...prev.deploy, recordId: record ? record.id : "", info}}));
+      watching.add(id);
       const summary = await waitForDeploy(target.conn, id, {
         onUpdate: s => setRelease(prev => ({deploy: {...prev.deploy, summary: s, status: s.stateDetail || s.status}}))
       });
@@ -357,6 +447,9 @@ export function DeployView({goTo}) {
     } catch (e) {
       if (record) await finishRelease(record, {status: "Unknown", error: e.message || String(e)}).catch(() => {});
       setRelease(prev => ({deploy: {...(prev.deploy || base), finished: true, error: e.message || String(e)}}));
+    } finally {
+      const d = releaseState().deploy;
+      if (d && d.id) watching.delete(d.id);
     }
   };
 
@@ -413,21 +506,22 @@ export function DeployView({goTo}) {
   return h("div", {className: "org-grid"},
     h("div", {className: "org-card org-card-wide"},
       h(CardHead, {icon: "🚀", title: "Validate & deploy"}),
+      from && BACK[from.view] && h("button", {className: "field-action-btn rel-back", onClick: () => goTo(from.view)}, `← Back to ${BACK[from.view]}`),
       h(OrgBar, {disabled: running}),
-      h("div", {className: "rel-label"}, "What to deploy"),
-      pending && h("div", {className: "insp-warn rel-planbar"},
+      h("div", {className: "rel-label", id: "rel-mode-label"}, "What to deploy"),
+      h("div", {className: "rel-modes", role: "radiogroup", "aria-labelledby": "rel-mode-label"},
+        pending && h(ModeOption, {id: "plan", plan, running, setMode,
+          icon: pending.kind === "rollback" ? "⏪" : pending.kind === "promote" ? "📤" : "♻️",
+          title: pending.kind === "rollback" ? "Rollback" : pending.kind === "promote" ? "Release package" : "Restore",
+          sub: `${pending.keys.length} to ${pending.kind === "promote" ? "deploy" : "restore"}${keysFromMembers(pending.destructive).length ? `, ${keysFromMembers(pending.destructive).length} to delete` : ""}`}),
+        h(ModeOption, {id: "compare", plan, running, setMode, disabled: !cmpReady, icon: "⚖️", title: "Compare selection",
+          sub: cmpReady ? `${st.selected.size} selected` : "Nothing compared yet"}),
+        h(ModeOption, {id: "package", plan, running, setMode, icon: "📦", title: "Package",
+          sub: `${packageCount(pkg)} item(s)${keysFromMembers(destructivePkg).length ? `, ${keysFromMembers(destructivePkg).length} to delete` : ""}`})),
+      // The plan's warning only while that plan is the one being deployed.
+      pending && plan.mode === "plan" && h("div", {className: "insp-warn rel-planbar"},
         h("b", null, pending.title), h("div", null, pending.detail),
         h("button", {className: "field-action-btn", disabled: running, onClick: () => { setRelease({pendingPlan: null}); setMode(cmpReady ? "compare" : "package"); }}, pending.kind === "rollback" ? "Cancel this rollback" : pending.kind === "promote" ? "Cancel" : "Cancel this restore")),
-      h("div", {className: "rel-modes", role: "radiogroup"},
-        pending && h("label", {className: "sq3-check"},
-          h("input", {type: "radio", name: "rel-mode", checked: plan.mode === "plan", disabled: running, onChange: () => setMode("plan")}),
-          ` ${pending.kind === "rollback" ? "Rollback" : pending.kind === "promote" ? "Release package" : "Restore"} (${pending.keys.length} to ${pending.kind === "promote" ? "deploy" : "restore"}${keysFromMembers(pending.destructive).length ? `, ${keysFromMembers(pending.destructive).length} to delete` : ""})`),
-        h("label", {className: "sq3-check" + (cmpReady ? "" : " disabled")},
-          h("input", {type: "radio", name: "rel-mode", checked: plan.mode === "compare", disabled: !cmpReady || running, onChange: () => setMode("compare")}),
-          ` Compare selection (${st.selected.size})`),
-        h("label", {className: "sq3-check"},
-          h("input", {type: "radio", name: "rel-mode", checked: plan.mode === "package", disabled: running, onChange: () => setMode("package")}),
-          ` Package (${packageCount(pkg)} item(s)${keysFromMembers(destructivePkg).length ? `, ${keysFromMembers(destructivePkg).length} to delete` : ""})`)),
       !count && !delCount && h("div", {className: "insp-hint-strip"},
         "Nothing selected yet. ",
         h("button", {className: "field-action-btn", onClick: () => goTo("compare")}, "Compare orgs"), " or ",
@@ -465,18 +559,25 @@ export function DeployView({goTo}) {
         h("button", {className: "btn btn-secondary btn-sm", disabled: running || (!count && !delCount), onClick: downloadZip,
           title: "Download the exact zip that will be sent"}, "Download zip"),
         target && target.isSandbox && h("button", {className: "btn btn-secondary btn-sm", disabled: running || blocked || (!count && !delCount) || (!source && plan.mode !== "plan"),
-          onClick: () => run(false)}, "Deploy now"),
+          onClick: () => run(false)}, plan.mode === "plan" && pending && pending.kind === "rollback" ? "Deploy now (RB)" : "Deploy now"),
         h("button", {className: "btn btn-primary btn-sm", disabled: running || blocked || (!count && !delCount) || (!source && plan.mode !== "plan") || !target,
-          onClick: () => run(true), title: "Check-only deploy: nothing changes in the target"}, running && d.checkOnly ? "Validating…" : "Validate"))),
+          onClick: () => run(true), title: "Check-only deploy: nothing changes in the target"},
+          running && d.checkOnly ? "Validating…" : plan.mode === "plan" && pending && pending.kind === "rollback" ? "Validate (RB)" : "Validate"))),
 
     d && h("div", {className: "org-card org-card-wide", "data-release-deploy": ""},
       h(CardHead, {icon: d.checkOnly ? "🧪" : "📦", title: `${d.label || "Deploy"} · ${target && d.targetHost === target.host ? orgLabel(target) : d.targetHost || ""}`},
+        running && d.id && h("button", {className: "btn btn-secondary btn-sm", disabled: checking, onClick: checkNow,
+          title: "Ask Salesforce for the current status now"}, checking ? "Checking…" : "Check status"),
         running && d.id && h("button", {className: "btn btn-secondary btn-sm", onClick: cancel}, "Cancel"),
         d.finished && h("button", {className: "btn btn-secondary btn-sm", onClick: () => setRelease({deploy: null})}, "Close")),
       !d.finished && h("div", {className: "tr-progress"},
         s ? h("div", {className: "limit-bar"}, h("div", {className: "limit-fill" + (s.components.errors || s.tests.errors ? " crit" : ""), style: {width: s.progress + "%"}}))
           : h("div", {className: "cov-progress"}, h("div", {className: "cov-progress-fill"})),
-        h("span", {className: "insp-meta"}, d.status || "Working…")),
+        h("span", {className: "insp-meta"}, `${d.status || "Working…"}${s && s.progress ? ` · ${s.progress}%` : ""} · ${fmtElapsed(elapsed)}`)),
+      pendingLong && h("div", {className: "insp-hint-strip"},
+        `Salesforce has queued this ${d.checkOnly ? "validation" : "deploy"} but not started it yet. That usually means another deployment or test run is busy in ${orgByHost(d.targetHost) ? orgByHost(d.targetHost).name : "the target"}; it starts by itself when that finishes. `,
+        orgByHost(d.targetHost) && h("a", {href: setupUrl(orgByHost(d.targetHost).conn, "/lightning/setup/DeployStatus/home"), target: "_blank", rel: "noopener"}, "See what's running"),
+        " · or Cancel and try again later."),
       s && h("div", {className: "tr-summary"},
         h("span", {className: "tr-stat"}, `Components ${s.components.deployed}/${s.components.total}`),
         s.components.errors > 0 && h("span", {className: "tr-stat bad"}, `✗ ${s.components.errors} error(s)`),

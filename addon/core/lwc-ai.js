@@ -1,3 +1,4 @@
+import {lintFiles, lintText} from "./apex-lint.js";
 // Pure helpers for AI-written Lightning Web Components: map the model's
 // JSON reply to draft files, check the bundle before showing it, and turn
 // a draft into prompt text for edit requests. No chrome/window/DOM access.
@@ -77,6 +78,8 @@ export function checkLwcBundle(files, name, opts = {}) {
   for (const a of files.filter(x => x.role === "apex")) {
     if (!new RegExp(`\\bclass\\s+${a.name}\\b`).test(a.content)) problems.push(`Apex file ${a.name}.cls does not declare class ${a.name}.`);
   }
+  const lint = lintFiles(files, {apiVersion: opts.apiVersion});
+  if (lint.length) problems.push(lintText(lint));
   return problems;
 }
 
