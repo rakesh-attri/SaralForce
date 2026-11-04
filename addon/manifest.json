@@ -1,6 +1,6 @@
 {
   "name": "SaralForce",
-  "description": "AI-powered Salesforce toolkit: SOQL/Apex runner, custom objects, CSV import/export and org info. OpenAI, Claude, Gemini, OpenRouter",
+  "description": "AI-powered Salesforce toolkit: Smart SOQL, Apex runner, deploy & rollback, metadata, custom objects, CSV import/export, org info",
   "version": "2.3.0",
   "version_name": "2.3.0",
   "icons": {
