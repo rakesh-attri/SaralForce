@@ -73,11 +73,16 @@ export function describeToProposal(describe) {
       if (!type) return null;
       const out = {
         label: f.label, name: f.name, type, existing: true,
-        required: !f.nillable && !f.defaultedOnCreate && type !== "Checkbox", description: f.inlineHelpText || ""
+        required: !f.nillable && !f.defaultedOnCreate && type !== "Checkbox", description: "",
+        inlineHelpText: f.inlineHelpText || ""
       };
       if (type === "Picklist" || type === "MultiselectPicklist") out.values = (f.picklistValues || []).map(p => p.value);
       if (type === "Lookup" || type === "MasterDetail") out.relatedTo = (f.referenceTo || [])[0] || "";
       if (type === "Formula") out.formula = f.calculatedFormula;
+      if (["Text", "TextArea", "LongTextArea", "Html", "EncryptedText"].includes(type) && f.length) out.length = f.length;
+      if (["Number", "Currency", "Percent"].includes(type)) { out.precision = f.precision; out.scale = f.scale; }
+      // What the org has now: edits are compared against this before deploy.
+      out._orig = snapshotEditable(out);
       return out;
     })
     .filter(Boolean);
@@ -138,4 +143,29 @@ export function fieldDetailSummary(field) {
     default:
       return null;
   }
+}
+
+// Settings of a field that already exists in the org that the plan can change
+// (API name and type stay as they are). Picklist values can only be added.
+export const EXISTING_EDITABLE = ["label", "description", "inlineHelpText", "required", "length", "precision", "scale", "visibleLines"];
+
+export function snapshotEditable(f) {
+  const o = {};
+  for (const k of EXISTING_EDITABLE) if (f[k] !== undefined) o[k] = f[k];
+  if (Array.isArray(f.values)) o.values = f.values.slice();
+  return o;
+}
+
+const same = (a, b) => String(a == null ? "" : a).trim() === String(b == null ? "" : b).trim();
+
+// {props, addedValues, removedValues} when an existing field was edited, else null.
+export function existingFieldChanges(field) {
+  if (!field || !field.existing || !field._orig) return null;
+  const o = field._orig;
+  const props = EXISTING_EDITABLE.filter(k => (k === "required" ? !!field[k] !== !!o[k] : !same(field[k], o[k])));
+  const now = (field.values || []).map(v => String(v).trim()).filter(Boolean);
+  const before = (o.values || []).map(v => String(v).trim());
+  const addedValues = now.filter(v => !before.includes(v));
+  const removedValues = before.filter(v => !now.includes(v));
+  return props.length || addedValues.length || removedValues.length ? {props, addedValues, removedValues} : null;
 }

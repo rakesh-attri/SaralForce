@@ -13,6 +13,7 @@ import {excerptLog} from "../../core/llm.js";
 import {AnalysisReport} from "../shared/analysis-report.js";
 import {useFfSession} from "../shared/session-state.js";
 import {appTabsResolveCurrentUserId, usersEnsureDebugLevel, parseApexLog} from "../shared/apex-debug.js";
+import {LogProfileView} from "../shared/log-profile-ui.js";
 
 const h = React.createElement;
 
@@ -237,6 +238,7 @@ function LogsTab() {
   const [openLog, setOpenLog] = useFfSession("logs", "openLog", null);
   const [logFilter, setLogFilter] = useFfSession("logs", "logFilter", "");
   const [debugOnly, setDebugOnly] = useFfSession("logs", "debugOnly", false);
+  const [logView, setLogView] = useFfSession("logs", "logView", "lines");
   const [selId, setSelId] = useFfSession("logs", "selId", null);
   const [analyses, setAnalyses] = useFfSession("logs", "analyses", {});
   const [analyzingId, setAnalyzingId] = React.useState(null);
@@ -1072,7 +1074,14 @@ function LogsTab() {
           h("div", {className: "insp-toolbar insp-toolbar-wrap"},
             h("span", {className: "insp-meta"},
               `Log ${openLog.name} · ${allRows.length} lines`),
-            h("label", {className: "insp-check", title: "Show only USER_DEBUG lines (your System.debug output)"},
+            h("div", {className: "lp-seg", role: "tablist", "aria-label": "Log view"},
+              [["lines", "Lines"], ["profile", "⏱ Profile"]].map(([id, label]) => h("button", {
+                key: id, role: "tab", "aria-selected": logView === id,
+                className: "insp-chip rel-chip" + (logView === id ? " on" : ""),
+                title: id === "profile" ? "Where the time went: slow methods, queries in loops, limits" : "Every log line",
+                onClick: () => setLogView(id)
+              }, label))),
+            logView === "lines" && h("label", {className: "insp-check", title: "Show only USER_DEBUG lines (your System.debug output)"},
               h("input", {
                 type: "checkbox",
                 checked: debugOnly,
@@ -1086,7 +1095,7 @@ function LogsTab() {
               }),
               h("span", null, "Debug Only")
             ),
-            h("label", {className: "insp-field"},
+            logView === "lines" && h("label", {className: "insp-field"},
               h("span", null, "Event"),
               h("select", {value: logFilter && !events.includes(logFilter) ? "" : logFilter,
                 onChange: e => setLogFilter(e.target.value)},
@@ -1096,7 +1105,7 @@ function LogsTab() {
                     `${ev} (${allRows.filter(r => r.event === ev).length})`))
               )
             ),
-            h("label", {className: "insp-field insp-field-grow"},
+            logView === "lines" && h("label", {className: "insp-field insp-field-grow"},
               h("span", null, "Filter"),
               h("input", {
                 value: logFilter,
@@ -1104,7 +1113,7 @@ function LogsTab() {
                 onChange: e => setLogFilter(e.target.value)
               })
             ),
-            h("span", {className: "insp-meta"}, `${shown.length}/${allRows.length} lines`),
+            logView === "lines" && h("span", {className: "insp-meta"}, `${shown.length}/${allRows.length} lines`),
             h("button", {
               className: "btn btn-secondary btn-sm",
               onClick: () => downloadText(`${openLog.name}.log`, openLog.text, "text/plain")
@@ -1114,7 +1123,7 @@ function LogsTab() {
               onClick: () => setOpenLog(null)
             }, "Close")
           ),
-          h(ResultTable, {
+          logView === "profile" ? h(LogProfileView, {text: openLog.text}) : h(ResultTable, {
             columns: ["Timestamp", "Event", "Details"],
             rows: shown.map(r => ({Timestamp: r.ts, Event: r.event, Details: r.details})),
             maxRows: 2000,

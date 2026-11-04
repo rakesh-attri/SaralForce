@@ -14,9 +14,14 @@ const SOQL_FIX_SYSTEM =
   '{"explanation": "<plain simple words, 1-2 sentences, no jargon>", "fixedQuery": "<corrected SOQL, single line>"}';
 
 const APEX_CHECK_SYSTEM =
-  "You are a Salesforce Apex expert helping a beginner. " +
-  "Find compile errors: missing semicolons, unbalanced braces, unknown methods or variables, " +
-  "wrong types, bad SOQL syntax. " +
+  "You are a Salesforce Apex expert helping a beginner. Salesforce has just reported the error given for this " +
+  "anonymous Apex; fix THAT error with the smallest possible change. " +
+  "Rules: keep every statement, comment, record id and value the user wrote unless it is the direct cause of the error; " +
+  "never delete or rewrite working code; never remove code because an object, field or class looks unfamiliar — " +
+  "custom objects (__c), managed packages and industry clouds (Education Cloud AcademicOrder, Health Cloud, Financial " +
+  "Services and so on) are valid in the user's org. If the error comes from data or org setup (a missing required field " +
+  "value, a validation rule, a bad id, a permission) and not from the code, set ok to false, explain it, and leave fixedCode empty. " +
+  "Typical code fixes: missing semicolons, unbalanced braces, wrong types, misspelled methods or variables, bad SOQL syntax. " +
   "Reply with ONLY a JSON object: " +
   '{"ok": true, "error": "", "line": null, "explanation": "", "fixedCode": ""} when the code is fine, ' +
   'or {"ok": false, "error": "<the compile error in plain words>", "line": <number or null>, ' +
@@ -162,7 +167,7 @@ const LWC_RULES =
   "lightning-datatable, lightning-record-form, lightning-input, lightning-button) and SLDS utility classes. On record pages " +
   "use `@api recordId` and `@api objectApiName`. Read single records with lightning/uiRecordApi (getRecord, getFieldValue) " +
   "and only add Apex when a query is needed. Apex classes are `public with sharing`, methods `@AuraEnabled(cacheable=true)` " +
-  "for reads, use WITH SECURITY_ENFORCED, bind variables, and LIMIT. Import Apex as `import m from '@salesforce/apex/Class.method'`. " +
+  "for reads, use WITH USER_MODE in SOQL (never WITH SECURITY_ENFORCED, which current API versions reject), bind variables, and LIMIT. Import Apex as `import m from '@salesforce/apex/Class.method'`. " +
   "Show errors with lightning/platformShowToastEvent. No innerHTML, eval, <script>, external libraries or hard-coded ids. " +
   "CSS is scoped to the component (use :host). Use only field API names from the schema given.";
 
@@ -176,7 +181,7 @@ const LWC_FROM_TEXT_SYSTEM =
 
 const APEX_RULES =
   "Apex rules: classes are `with sharing` unless the request needs otherwise; bulkify (no SOQL or DML inside loops, work on " +
-  "collections); use WITH SECURITY_ENFORCED or Security.stripInaccessible for user-facing reads, bind variables, and LIMIT; " +
+  "collections); use WITH USER_MODE in SOQL (never WITH SECURITY_ENFORCED, which current API versions reject) or Security.stripInaccessible for user-facing reads, bind variables, and LIMIT; " +
   "no hard-coded record ids; triggers stay thin and call a handler class; test classes use @IsTest, @TestSetup data, " +
   "Test.startTest/stopTest and real asserts with messages (aim for full coverage). Visualforce pages start with <apex:page> " +
   "and use lightningStylesheets=\"true\". Aura components start with <aura:component>; controller and helper JS files are " +
@@ -387,4 +392,73 @@ function logsAskLlm(systemPrompt, userText, {signal, feature = "Log analysis"} =
   return askAi({system: systemPrompt, user: userText, signal, feature});
 }
 
-export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm};
+const RELEASE_NOTES_SYSTEM =
+  "You are a Salesforce release manager. From the metadata changes given, write short release notes for admins and business users. " +
+  "Group by area (Data model, Automation, Code, UI, Security). One bullet per real change, in plain words; say what changed and why it matters. " +
+  "Then a 'Watch out' section listing risks: deletes, profile or permission changes, flows that need activation, data that needs loading. " +
+  "No code, no markdown tables, at most 25 bullets.";
+
+const DEPLOY_FAILURE_SYSTEM =
+  "You are a senior Salesforce developer fixing a failed deployment or validation. " +
+  "For each problem give: what is wrong (plain words), the likely cause, and the exact fix (which component to add, change or remove; " +
+  "which test to fix and how). Mention missing dependencies to add to the package. Order the fixes so the next validation passes. " +
+  "Be concise: numbered list, no greetings.";
+
+// Plain release notes from a compare selection (component names and short diffs only).
+function releaseNotesFromChanges(changesText, {source, target, signal} = {}) {
+  return askAi({
+    feature: "Release notes",
+    system: RELEASE_NOTES_SYSTEM,
+    user: `Release from ${source || "source org"} to ${target || "target org"}.
+
+${changesText}`,
+    signal
+  });
+}
+
+// Fix plan for deploy errors and failing tests.
+function explainDeployFailures(failuresText, {signal} = {}) {
+  return askAi({feature: "Explain deploy failure", system: DEPLOY_FAILURE_SYSTEM, user: failuresText, signal});
+}
+
+const RUNBOOK_SYSTEM =
+  "You are a Salesforce release manager writing the manual runbook for a deployment. " +
+  "You get the steps SaralForce detected and the Setup audit trail of the source org. " +
+  "Add only what a person must do by hand that is NOT already in the detected steps: settings changed in Setup (from the audit trail), " +
+  "data to load, users to notify, things to check after the deploy. Order them as they should be done. " +
+  'Reply with ONLY JSON: {"steps": [{"phase": "pre" | "post", "title": "<short imperative>", "detail": "<1-2 plain sentences>", "setupPath": "<optional /lightning/setup/... path>"}]}. At most 15 steps.';
+
+// Extra manual steps for a release (detected steps + audit trail as text).
+async function runbookFromSteps(text, {signal} = {}) {
+  const parsed = await askAiJson({
+    feature: "Release runbook",
+    system: RUNBOOK_SYSTEM,
+    user: text,
+    validate: o => (Array.isArray(o.steps) ? null : "The JSON has no steps array."),
+    signal
+  });
+  return parsed.steps;
+}
+
+const LOG_PROFILE_SYSTEM =
+  "You are a senior Salesforce developer tuning Apex performance. You get a profile summary of one transaction " +
+  "(hot spots, slowest methods, queries, DML, limits). Give the 3-6 changes that save the most time or limits, most important first: " +
+  "what to change, where (method or line), and a short Apex pattern when it helps (bulkify, Map lookups, one DML on a list, selective filters, async). " +
+  "Plain words, numbered list, no greetings.";
+
+// Speed-up advice from a profile summary (core/log-profile.js profileForPrompt).
+function explainLogProfile(summary, {signal} = {}) {
+  return askAi({feature: "Log profile", system: LOG_PROFILE_SYSTEM, user: summary, signal});
+}
+
+const IMPACT_SYSTEM =
+  "You are a senior Salesforce architect reviewing whether a component can be changed or deleted safely. " +
+  "From the dependencies given, explain in plain words what would break, who would notice, and the safe order of changes " +
+  "(for example: update the flow, deploy the Apex change, back up data, then delete the field). Numbered list, at most 8 points.";
+
+// Risk summary for Impact analysis (names and counts only).
+function explainImpact(summary, {signal} = {}) {
+  return askAi({feature: "Impact analysis", system: IMPACT_SYSTEM, user: summary, signal});
+}
+
+export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};

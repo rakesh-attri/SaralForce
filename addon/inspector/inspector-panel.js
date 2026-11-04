@@ -14,6 +14,7 @@ import {CoverageTab} from "./tabs/coverage.js";
 import {AccessTab} from "./tabs/access.js";
 import {MetadataTab} from "./tabs/metadata.js";
 import {ApiTab} from "./tabs/api.js";
+import {ReleaseTab} from "./tabs/release.js";
 import {metadataTargetFromUrl} from "./shared/inspector-tab.js";
 
 const h = React.createElement;
@@ -33,11 +34,12 @@ export const INSPECTOR_TABS = [
   {id: "metadata", label: "Metadata", icon: "🧩", component: MetadataTab},
   {id: "org", label: "Org Info", icon: "🏢", component: OrgTab},
   {id: "apptabs", label: "App Tab Manager", icon: "📑", component: AppTabManager},
+  {id: "release", label: "Release", icon: "🚀", component: ReleaseTab},
   {id: "coverage", label: "Code Coverage", icon: "</>", component: CoverageTab}
 ];
 
 // Second row of the tab bar: admin tools, then Code Coverage last.
-const TAB_ROW2 = new Set(["access", "metadata", "org", "apptabs", "coverage"]);
+const TAB_ROW2 = new Set(["access", "metadata", "org", "apptabs", "release", "coverage"]);
 
 export function InspectorPanel() {
   useSfTimeZoneTick();

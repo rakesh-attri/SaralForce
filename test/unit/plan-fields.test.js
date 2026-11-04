@@ -60,3 +60,22 @@ test("fieldDetailSummary describes the settings that matter", async () => {
   assert.equal(fieldDetailSummary({type: "Lookup", relatedTo: "Account"}), "→ Account");
   assert.equal(fieldDetailSummary({type: "Text"}), null);
 });
+
+test("existingFieldChanges reports edits to fields already in the org", async () => {
+  const {existingFieldChanges} = await import("../../addon/core/plan-fields.js");
+  const p = describeToProposal({name: "Inv__c", label: "Inv", fields: [
+    {name: "Status__c", label: "Status", type: "picklist", custom: true, nillable: true, inlineHelpText: "Where it is", picklistValues: [{value: "New"}, {value: "Paid"}]},
+    {name: "Amount__c", label: "Amount", type: "currency", custom: true, nillable: true, precision: 18, scale: 2}
+  ]});
+  const [status, amount] = p.fields;
+  assert.equal(status.inlineHelpText, "Where it is");
+  assert.equal(status.description, "");
+  assert.equal(existingFieldChanges(status), null);
+  status.label = "Invoice Status";
+  status.values = ["New", "Paid", "Overdue"];
+  assert.deepEqual(existingFieldChanges(status), {props: ["label"], addedValues: ["Overdue"], removedValues: []});
+  amount.scale = 0;
+  amount.required = true;
+  assert.deepEqual(existingFieldChanges(amount).props, ["required", "scale"]);
+  assert.equal(existingFieldChanges({name: "X__c", label: "X"}), null);
+});

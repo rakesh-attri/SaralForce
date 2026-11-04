@@ -1,5 +1,6 @@
 // Metadata tab → New: a form per kind, a draft editor for the generated
 // files, and deploy. Drafts stay in this browser until deployed or discarded.
+import {hasSecurityEnforced, securityEnforcedToUserMode} from "../../core/bundle-order.js";
 import {
   APEX_TEMPLATES, TRIGGER_EVENTS, LWC_TARGETS, AURA_INTERFACES, FLOW_KINDS, validateForm, buildDraft,
   LWC_TEMPLATES, AURA_TEMPLATES, TEMPLATES_NEEDING_OBJECT, LWC_TEMPLATE_TARGETS
@@ -416,6 +417,10 @@ function DraftEditor({draft, onChange, onDeploy, onDiscard, onCheck, busy, error
   const update = text => onChange({...draft, files: draft.files.map((f, i) => (f === file ? {...f, content: text} : f))});
   const html = file.lang === "apex" || file.lang === "js" ? apexHighlight(file.content) : escHtml(file.content);
   const folder = draft.files[0].path.split("/").slice(0, -1).join("/");
+  // Current API versions reject WITH SECURITY_ENFORCED; WITH USER_MODE means the same for reads.
+  const legacySecurity = draft.files.filter(f => !f.readOnly && hasSecurityEnforced(f.content));
+  const fixSecurity = () => onChange({...draft, files: draft.files.map(f =>
+    (f.readOnly ? f : {...f, content: securityEnforcedToUserMode(f.content).code}))});
   return h("div", {className: "sq3-card mdn-editor"},
     h("div", {className: "sq3-card-h"},
       h("span", {className: "sq3-card-t"}, draft.title),
@@ -467,6 +472,10 @@ function DraftEditor({draft, onChange, onDeploy, onDiscard, onCheck, busy, error
                   }
                 }
             })))))),
+    legacySecurity.length > 0 && h("div", {className: "insp-warn mdn-quickfix"},
+      h("span", null, `${legacySecurity.map(f => f.path.split("/").pop()).join(", ")} use${legacySecurity.length === 1 ? "s" : ""} WITH SECURITY_ENFORCED, ` +
+        "which current Salesforce API versions reject. WITH USER_MODE enforces the same user access."),
+      h("button", {className: "btn btn-primary btn-sm", disabled: busy, onClick: fixSecurity}, "Quick fix: use WITH USER_MODE")),
     error && h("div", {className: "insp-error"}, error),
     h("div", {className: "mdn-foot"},
       h("span", {className: "insp-meta"}, progress || `${changed} changed · ${editing ? "Not saved to the org yet" : "Draft saved locally"}`),

@@ -7,7 +7,7 @@
 // moved here on first run and then removed from localStorage.
 
 export const SETTING_KEYS = ["llmConfig", "llmModelCache", "sfoc_celebrate", "sfoc_open_inspector_tab", "sfoc_tours",
-  "sfoc_ai_usage_totals", "sfoc_ai_usage_toast"];
+  "sfoc_ai_usage_totals", "sfoc_ai_usage_toast", "githubConfig"];
 
 const cache = new Map();
 let ready = false;

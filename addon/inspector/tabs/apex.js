@@ -4,6 +4,7 @@ import {downloadText} from "../shared/csv.js";
 import {useSfTimeZoneTick, ffFmtRelative} from "../shared/format.js";
 import {ffIcon, FF_I_CLOCK, FF_I_BOOKMARK, FF_I_DOC, FF_I_ZAP} from "../shared/icons.js";
 import {apexAiCheck} from "../shared/ai.js";
+import {apexErrorForAi, fixSummary, fixDropsCode} from "../../core/apex-ai.js";
 import {ffLoadJson, ffSaveJson, useFfSession} from "../shared/session-state.js";
 import {Celebrate} from "../shared/celebrate.js";
 import {apexHighlight} from "../shared/highlight.js";
@@ -188,7 +189,6 @@ function ApexTab() {
   const [aiCheck, setAiCheck] = React.useState(null);
   const [aiNote, setAiNote] = React.useState(null);
   const runningRef = React.useRef(false);
-  const [lastSnippet, setLastSnippet] = React.useState(null);
 
   const pushHistory = (snippet, ok) => {
     setHistory(prev => {
@@ -281,7 +281,6 @@ function ApexTab() {
   const run = async (snippetOverride, opts) => {
     // A second Ctrl+Enter while a run is in flight must not run it twice.
     if (runningRef.current) return;
-    const skipAiCheck = !!(opts && opts.skipAiCheck);
     const lineOffset = (opts && opts.lineOffset) || 0;
     const snippet = String(snippetOverride == null ? (code || "") : snippetOverride);
     if (!snippet.trim()) { setError("Enter some Apex code first"); return; }
@@ -292,7 +291,6 @@ function ApexTab() {
     }
     runningRef.current = true;
     setRunning(true);
-    setLastSnippet(snippet);
     setError(null);
     setExec(null);
     setLog(null);
@@ -303,24 +301,9 @@ function ApexTab() {
     const startedAt = new Date().toISOString();
     const startMs = Date.now();
     try {
-      // Pre-flight: with "Use AI" on, let the model scan for compile errors
-      // first — a detected problem BLOCKS the run and shows a suggested fix.
-      if (useAi && !skipAiCheck) {
-        setAiBusy(true);
-        try {
-          const chk = await apexAiCheck(snippet, null);
-          if (!chk.ok) {
-            setAiCheck(Object.assign({stage: "preflight", lineOffset}, chk));
-            return;
-          }
-        } catch (e) {
-          setAiNote(e.message === "NO_LLM_CONFIG"
-            ? "AI check skipped — set a provider + API key in Options."
-            : "AI check failed: " + e.message);
-        } finally {
-          setAiBusy(false);
-        }
-      }
+      // The code always runs exactly as written: Salesforce's compiler knows
+      // the org (custom and industry objects such as AcademicOrder), the AI
+      // does not. "Use AI" only steps in after Salesforce reports an error.
       let r = await apexExecuteSoap(snippet, {timeoutMs, level: openLog ? logLevel : null});
       if (!r) {
         // Fallback: REST Tooling GET (script in the URL) + TraceFlag + log polling.
@@ -343,12 +326,22 @@ function ApexTab() {
       // Celebration only on a real success (compiled AND executed OK) —
       // compile problems, runtime failures and errors never trigger it.
       if (r && r.compiled && r.success) setCeleb(c => c + 1);
-      // On-error: Salesforce still rejected it → offer an AI fix when enabled.
-      if (useAi && !(r.compiled && r.success) && r.compileProblem) {
+      // Salesforce reported a compile or runtime error → offer a minimal AI
+      // fix (never applied automatically). A clean run never calls the AI.
+      const failure = useAi ? apexErrorForAi(r) : null;
+      if (failure) {
         setAiBusy(true);
         try {
-          const chk = await apexAiCheck(snippet, r.compileProblem);
-          if (!chk.ok) setAiCheck(Object.assign({stage: "server", lineOffset}, chk));
+          const chk = await apexAiCheck(snippet, failure.text);
+          const fixed = String(chk.fixedCode || "").trim();
+          const summary = fixed ? fixSummary(snippet, fixed) : null;
+          if (summary && summary.changed) {
+            setAiCheck(Object.assign({}, chk, {stage: failure.stage, lineOffset, summary, original: snippet}));
+          } else {
+            setAiNote(chk.explanation
+              ? `✨ AI: ${chk.explanation}`
+              : "✨ AI found no code change to suggest; the error is probably in the data or org setup.");
+          }
         } catch (e) {
           if (e.message !== "NO_LLM_CONFIG") setAiNote("AI fix unavailable: " + e.message);
         } finally {
@@ -576,8 +569,8 @@ function ApexTab() {
                   if (!v) { setAiCheck(null); setAiNote(null); }
                 },
                 title: useAi
-                  ? "AI pre-check is ON — code is scanned before each run; compile errors get a suggested fix"
-                  : "Turn on to let AI scan your code before each run and fix compile errors",
+                  ? "AI is ON — your code always runs exactly as written; only if Salesforce reports a compile or runtime error does the AI suggest a fix, which you can apply or ignore"
+                  : "Turn on to get an AI fix suggestion when Salesforce reports a compile or runtime error (your code is never changed without you)",
                 "aria-checked": useAi ? "true" : "false",
                 "aria-pressed": useAi ? "true" : "false"
               },
@@ -678,36 +671,39 @@ function ApexTab() {
         )
     ),
     aiNote && h("div", {className: "insp-warn"}, aiNote),
-    aiBusy && h("div", {className: "insp-meta"}, "✨ AI is checking your code…"),
+    aiBusy && h("div", {className: "insp-meta"}, "✨ Salesforce reported an error — AI is suggesting a fix…"),
     aiCheck && h("div", {className: "insp-fix"},
-      h("div", {className: "insp-fix-title"}, "✨ AI suggested fix"),
+      h("div", {className: "insp-fix-title"}, "✨ AI suggested fix — your code was not changed"),
       h("div", {className: "insp-fix-why"},
-        (aiCheck.stage === "server"
-          ? `Salesforce compile error: ${aiCheck.error || exec?.compileProblem || "rejected the code"}`
-          : `Likely compile error${aiCheck.line ? ` (line ${editorLine(aiCheck.line, aiCheck.lineOffset)})` : ""}: ${aiCheck.error || "problem found"}`),
+        (aiCheck.stage === "runtime"
+          ? `Salesforce runtime error: ${exec?.exceptionMessage || aiCheck.error || "the code failed while running"}`
+          : `Salesforce compile error: ${exec?.compileProblem || aiCheck.error || "rejected the code"}`),
         aiCheck.explanation ? ` — ${aiCheck.explanation}` : ""),
+      aiCheck.summary && h("div", {className: "insp-meta apex-fix-summary"},
+        `The fix changes ${aiCheck.summary.removed.length} line(s) and adds ${aiCheck.summary.added.length}; ` +
+        `${aiCheck.summary.kept} line(s) stay the same.`),
+      aiCheck.summary && fixDropsCode(aiCheck.summary) && h("div", {className: "insp-warn"},
+        `⚠ This fix removes ${aiCheck.summary.removed.length} line(s) of your code (for example "${aiCheck.summary.removed[0].slice(0, 60)}"). ` +
+        "Check nothing you need was dropped before applying it."),
       aiCheck.fixedCode && h("div", {className: "insp-fix-query"}, aiCheck.fixedCode),
       h("div", {className: "insp-toolbar", style: {marginBottom: "0", marginTop: "8px"}},
         h("button", {
           className: "btn btn-primary btn-sm",
           disabled: running || !aiCheck.fixedCode,
+          title: "Replace the editor code with the fix and run it",
           onClick: () => {
             const fixed = aiCheck.fixedCode;
             setAiCheck(null);
             setCode(fixed);
-            run(fixed, {skipAiCheck: true});
+            run(fixed);
           }
         }, running ? "Running…" : "Apply & Run"),
-        aiCheck.stage === "preflight" && lastSnippet && h("button", {
+        h("button", {
           className: "btn btn-secondary btn-sm",
           disabled: running,
-          title: "The AI can be wrong — run the code exactly as written",
-          onClick: () => {
-            const offset = aiCheck.lineOffset;
-            setAiCheck(null);
-            run(lastSnippet, {skipAiCheck: true, lineOffset: offset});
-          }
-        }, "Run anyway"),
+          title: "Close the suggestion and keep your code exactly as it is",
+          onClick: () => setAiCheck(null)
+        }, "Keep my code"),
         aiCheck.line && h("button", {
           className: "btn btn-secondary btn-sm",
           onClick: () => goToLine(editorLine(aiCheck.line, aiCheck.lineOffset))

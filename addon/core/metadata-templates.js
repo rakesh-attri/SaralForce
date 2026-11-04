@@ -63,7 +63,7 @@ export function apexClassSource(name, template = "empty") {
         return [
             SELECT Id, Name, CreatedDate
             FROM Account
-            WITH SECURITY_ENFORCED
+            WITH USER_MODE
             ORDER BY CreatedDate DESC
             LIMIT :maxRows
         ];
@@ -158,7 +158,7 @@ global with sharing class ${name} {
             SELECT Id, Name
             FROM Account
             WHERE Name LIKE :key
-            WITH SECURITY_ENFORCED
+            WITH USER_MODE
             ORDER BY Name
             LIMIT 50
         ];
@@ -302,13 +302,13 @@ ${search ? `        String key = '%' + String.escapeSingleQuotes(searchKey == nu
             SELECT ${select}
             FROM ${object}
             WHERE ${search} LIKE :key
-            WITH SECURITY_ENFORCED
+            WITH USER_MODE
             ORDER BY ${search}
             LIMIT 200
         ];` : `        return [
             SELECT ${select}
             FROM ${object}
-            WITH SECURITY_ENFORCED
+            WITH USER_MODE
             ORDER BY CreatedDate DESC
             LIMIT 200
         ];`}

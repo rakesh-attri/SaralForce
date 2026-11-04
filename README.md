@@ -93,8 +93,10 @@ a plain-English explanation of what went wrong plus the corrected query, with
 Execute anonymous Apex with a terminal-style editor: line numbers, syntax highlighting,
 **Quick Templates**, and saved/recent script chips. Choose the **Log Level** and
 **Timeout**, then **Execute** (or Ctrl+Enter) — or select a snippet and **Execute
-Highlighted**. Toggle **Use AI** to pre-check code before each run; compile errors get a
-suggested fix you can apply in one click. After a run, the **Execution Results** panel
+Highlighted**. Your code always runs exactly as written. With **Use AI** on, the AI steps in
+only when Salesforce reports a compile or runtime error: it suggests the smallest fix, shows
+how many lines it changes (and warns if it would remove code), and nothing changes until you
+click **Apply & Run**; **Keep my code** dismisses it. After a run, the **Execution Results** panel
 shows the debug log with event filters, a Debug-Only view, and the raw trace.
 
 <img src="docs/screenshots/ai-run-apex.png" alt="Run Apex editor with execution results and debug log" width="720">
@@ -277,6 +279,29 @@ debug-log analysis.
 - **Models**: the Options page always lists the currently supported models
 
 ## What's New
+
+### v2.3.0
+- **Release Center** (new tab) — compare any two orgs you're logged into and deploy either way:
+  side-by-side diffs, dependency check with **Add missing**, deletes, a change tracker by date and
+  person, package.xml / destructiveChanges.xml, **Validate**, **Quick deploy**, **Deploy now** and
+  Cancel; ✨ AI release notes and ✨ Explain failures
+- **Release history & rollback** — versions per target org, a rollback point saved before every
+  deploy, one-click **Roll back**, org snapshots with drift compare and restore, export/import
+- **Manual steps** — a runbook of what a deploy doesn't do: SaralForce activates flows, copies
+  permission set assignments, group members and custom setting values, schedules Apex jobs,
+  re-saves tabs and runs post-deploy scripts; guided Setup links for the rest; ✨ AI runbook
+- **Impact analysis** — what uses a field, class or flow, its data and active flows, with a
+  safe-to-delete verdict and ✨ risk summary
+- **GitHub** (optional) — commit releases and snapshots in source format, compare and deploy
+  from a branch
+- **Log profiler** — Logs → ⏱ Profile: timeline, slowest methods, queries and DML in loops,
+  limits, ✨ speed-up tips
+- **Deploy fixes** — Apex and trigger templates and AI use `WITH USER_MODE` (current API versions
+  reject `WITH SECURITY_ENFORCED`), with a one-click **Quick fix** for drafts that still have it;
+  LWC and Aura bundles create their base file first (fixes "No base file for markup://…")
+- **Compare** uses a searchable picker (the list now shows in full screen too)
+- **Edit an existing object** — search objects by name, edit existing fields (label, description,
+  help text, required, length, new picklist values), and **Undo / Redo** every plan change
 
 ### v2.2.0
 - **New objects show up in the App Launcher** — after deploying, the Object Builder checks

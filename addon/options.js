@@ -5,6 +5,7 @@ import {showUsageToast, setShowUsageToast} from "./core/ai-usage.js";
 import {openInspectorInNewTab, setOpenInspectorInNewTab} from "./core/preferences.js";
 import {startTour} from "./ui/tour.js";
 import {SETTINGS_TOUR} from "./ui/tour-content.js";
+import {GitHubCard} from "./ui/github-settings.js";
 import {shouldAutoStart, markTourDone} from "./core/tours.js";
 
 let h = React.createElement;
@@ -487,6 +488,8 @@ class OptionsApp extends React.Component {
                 onChange: (e) => { setShowUsageToast(e.target.checked); this.setState({showUsage: e.target.checked}); }
               }),
               h("span", {className: "opt-switch-track", "aria-hidden": "true"})))),
+
+        h(GitHubCard, null),
 
         // ── About ──
         h("section", {className: "opt-card opt-about"},

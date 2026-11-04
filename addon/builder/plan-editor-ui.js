@@ -159,7 +159,44 @@ function Dependencies({field, controller, onChange}) {
           h("input", {type: "checkbox", className: "field-checkbox", checked: (deps[cv] || []).includes(v), onChange: () => toggle(cv, v)}))))))));
 }
 
+// A field that already exists in the org: only what can be changed in place.
+function ExistingFieldDetails({field, onChange}) {
+  const type = normalizeFieldType(field.type);
+  const set = (k) => (v) => onChange({[k]: v});
+  const rows = [];
+  if (["Text", "EncryptedText"].includes(type)) {
+    rows.push(h(Input, {key: "len", label: type === "Text" ? "Length (1-255)" : "Length (1-175)", type: "number", value: field.length, onChange: set("length")}));
+  }
+  if (["LongTextArea", "Html"].includes(type)) {
+    rows.push(h(Input, {key: "len", label: "Length", type: "number", value: field.length, onChange: set("length")}));
+    rows.push(h(Input, {key: "vl", label: "Visible lines", type: "number", value: field.visibleLines, onChange: set("visibleLines")}));
+  }
+  if (["Number", "Currency", "Percent"].includes(type)) {
+    rows.push(h(Input, {key: "p", label: "Precision (total digits)", type: "number", value: field.precision, onChange: set("precision")}));
+    rows.push(h(Input, {key: "s", label: "Decimal places", type: "number", value: field.scale, onChange: set("scale")}));
+  }
+  if (type === "Picklist" || type === "MultiselectPicklist") {
+    if (field.globalValueSet) {
+      rows.push(h("p", {key: "gvs", className: "app-section-hint"}, `Values come from the global value set ${field.globalValueSet}; change them in Setup.`));
+    } else {
+      rows.push(h("label", {key: "vals", className: "insp-field insp-field-grow"},
+        h("span", null, "Values (one per line — add new ones at the end)"),
+        h(LazyText, {
+          multiline: true, className: "plan-cell-input plan-values",
+          value: (field.values || []).join("\n"),
+          onCommit: t => onChange({values: t.split("\n").map(x => x.trim()).filter(Boolean)})
+        })));
+    }
+  }
+  rows.push(h(Input, {key: "help", label: "Help text (hover tip)", grow: true, value: field.inlineHelpText, onChange: set("inlineHelpText")}));
+  rows.push(h("p", {key: "note", className: "app-section-hint plan-detail-wide"},
+    "Already in the org: the API name and type stay as they are. Changes here are saved to the field on deploy; " +
+    "removing picklist values is done in Setup."));
+  return h("div", {className: "plan-details"}, rows);
+}
+
 export function FieldDetails({field, fields, objectHistory, onChange, suggest}) {
+  if (field.existing) return h(ExistingFieldDetails, {field, onChange});
   const type = normalizeFieldType(field.type);
   const set = (k) => (v) => onChange({[k]: v});
   const rows = [];
