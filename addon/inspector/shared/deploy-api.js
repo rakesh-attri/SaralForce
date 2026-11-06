@@ -1,7 +1,7 @@
 // Release Center transport: Metadata API listMetadata / retrieve / deploy /
 // quick deploy / cancel against ANY Salesforce org with a session in this
 // browser (source and target can differ from the org the panel is on).
-import {sfConn, apiVersion} from "../../inspector.js";
+import {sfConn, apiVersion, reportSessionExpired} from "../../inspector.js";
 import {createSfClient} from "../../core/sf-client.js";
 import {soapPostDom} from "../../builder/metadata-soap.js";
 import {escXml} from "../../builder/metadata-xml.js";
@@ -18,9 +18,19 @@ function sendMessage(msg) {
 }
 
 // ── Orgs ──────────────────────────────────────────────────────────────
+// Re-read the org's session cookie (after logging in again). True if new.
+async function renewConn(conn) {
+  if (conn.isCurrent) return sfConn.renewSession();
+  const session = await sendMessage({message: "getSession", sfHost: conn.host});
+  if (!session || !session.key || session.key === conn.sessionId) return false;
+  conn.sessionId = session.key;
+  return true;
+}
+
 function connFor(host, sessionId) {
   const conn = {host, sessionId, apiVersion};
-  conn.client = createSfClient({getHost: () => host, getSessionId: () => conn.sessionId, getApiVersion: () => apiVersion});
+  conn.client = createSfClient({getHost: () => host, getSessionId: () => conn.sessionId, getApiVersion: () => apiVersion,
+    renewSession: () => renewConn(conn)});
   return conn;
 }
 
@@ -28,7 +38,11 @@ const orgCache = new Map();
 
 // The org the panel runs on, as a connection.
 export function currentOrgConn() {
-  return connFor(sfConn.instanceHostname, sfConn.sessionId);
+  const conn = connFor(sfConn.instanceHostname, sfConn.sessionId);
+  conn.isCurrent = true;
+  // Always the panel's live session, so a renewed one is used everywhere.
+  Object.defineProperty(conn, "sessionId", {get: () => sfConn.sessionId, set: () => {}, enumerable: true});
+  return conn;
 }
 
 async function describeOrg(conn, isCurrent) {
@@ -75,7 +89,15 @@ function ctxFor(conn, {signal} = {}) {
 }
 
 async function mdCall(conn, inner, opts) {
-  return soapPostDom(ctxFor(conn, opts), inner);
+  const used = conn.sessionId;
+  try {
+    return await soapPostDom(ctxFor(conn, opts), inner);
+  } catch (e) {
+    if (!/INVALID_SESSION_ID|Session expired or invalid/i.test(e.message || "")) throw e;
+    if (conn.sessionId !== used || await renewConn(conn)) return soapPostDom(ctxFor(conn, opts), inner);
+    if (conn.isCurrent) reportSessionExpired();
+    throw e;
+  }
 }
 
 // DOM element → plain object (repeated children become arrays).

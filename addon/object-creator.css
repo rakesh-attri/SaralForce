@@ -12991,6 +12991,39 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
   background: #2e844a;
 }
 
+.insp-session-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: #fff4e5;
+  border: 1px solid #fe9339;
+  border-radius: 10px;
+  color: #6b3a00;
+  font-size: 13px;
+}
+
+.insp-session-tx {
+  flex: 1 1 260px;
+}
+
+.insp-session-msg {
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+.insp-session-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.insp-session-actions a.btn {
+  text-decoration: none;
+}
+
 .rel-back {
   display: inline-block;
   margin: -4px 0 8px;
