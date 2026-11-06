@@ -659,18 +659,26 @@ sf-object-creator/
 
 ## Security
 
-- API keys are stored locally in your browser (`localStorage`) and never sent anywhere except the LLM provider you configured
-- The extension communicates directly with Salesforce APIs using your existing session
-- Only your natural language descriptions are sent to LLM providers - object/field data stays in your org unless you paste it into the chat
+- AI provider keys and the optional GitHub token are stored in the extension's own storage
+  (`chrome.storage.local`, never in Salesforce pages) and sent only to the AI provider you
+  configured and to `api.github.com`
+- The extension communicates directly with Salesforce APIs using your existing session; there
+  is no SaralForce server in between
+- AI requests carry only what the feature needs (your description, the relevant schema or code,
+  or error text); record data stays in your org unless you paste it in
+- Deploys, deletes, rollbacks and data changes ask first and name the target org; AI-written code
+  must pass a lint and a Salesforce compile check before it can be deployed
 - Signs in with OAuth2 PKCE or your existing Salesforce session cookie
 
 ## Permissions
 
 - `cookies`: Read Salesforce session cookies for API authentication
+- `storage`: Keep settings, AI keys and the GitHub connection in the extension's storage
 - Host permissions for Salesforce domains (needed to inject the inspector on your pages)
 - **Optional** host permission for `https://*/*`: requested only when you save an AI
   provider in Settings — it covers the chosen AI endpoint (or a custom OpenAI-compatible
-  URL). Without it, everything except AI calls works as before
+  URL) — or connect GitHub (`api.github.com`). Without it, everything except AI and GitHub
+  calls works as before
 
 ## Development
 
