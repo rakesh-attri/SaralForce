@@ -13006,6 +13006,12 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
   font-size: 13px;
 }
 
+.insp-session-bar.ok {
+  background: #e3fcef;
+  border-color: #2e844a;
+  color: #1b5b3a;
+}
+
 .insp-session-tx {
   flex: 1 1 260px;
 }

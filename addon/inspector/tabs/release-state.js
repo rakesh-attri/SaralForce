@@ -56,6 +56,11 @@ export const sessionRestored = !SESSION_ID ? Promise.resolve(false) : getSession
   restoring = false;
   pruneSessions().catch(() => {});
   if (!value) return false;
+  // Closed while still preparing (nothing sent to Salesforce yet): don't
+  // restore it as running, or the Deploy screen would stay locked.
+  if (value.deploy && !value.deploy.finished && !value.deploy.id) {
+    value.deploy = {...value.deploy, finished: true, error: "Interrupted before it reached Salesforce (the panel was closed). Nothing was deployed; run it again."};
+  }
   const patch = {};
   for (const k of PERSIST) if (value[k] != null && state[k] == null || (k === "selected" && value[k] && value[k].size)) patch[k] = value[k];
   if (Object.keys(patch).length) setRelease({...patch, restored: true});

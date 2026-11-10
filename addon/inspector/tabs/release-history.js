@@ -337,7 +337,7 @@ export function HistoryView({goTo}) {
     const branch = `release/${r.version || "v"}-${slug}`;
     const body = [`Deployed to **${r.targetName}** from ${r.sourceName || "?"} on ${new Date(r.at).toLocaleString()}${r.by ? " by " + r.by : ""}.`,
       `${(r.items || []).length} item(s)` + ((r.deletes || []).length ? `; deleted: ${r.deletes.join(", ")}` : ""), r.notes ? "\n" + r.notes : "",
-      "\nOpened by SaralForce Release Center."].filter(Boolean).join("\n");
+      "\nOpened by SaralForce SandShift."].filter(Boolean).join("\n");
     const pr = await openPullRequest(cfg, files, {branch, title: `${r.version}${r.name ? ": " + r.name : ""} → ${r.targetName}`, body, onStatus: setStatus, deletePaths: await deletedPaths(r)});
     await putRelease({...r, pr: {url: pr.url, number: pr.number}});
     setMsg(pr.existing ? `Updated pull request #${pr.number}.` : `Opened pull request #${pr.number}.`);

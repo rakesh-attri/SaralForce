@@ -374,12 +374,12 @@ export function DeployView({goTo}) {
         }
       }
       const id = await startDeploy(target.conn, entries, {checkOnly, testLevel: preset ? "NoTestRun" : level, runTests: tests});
+      watching.add(id);
       setRelease({deploy: {...base, entries, id, status: "Queued in Salesforce…"}});
       // In History from the start: a deploy that outlives this screen can still be checked and rolled back.
       record = await recordRelease({...info, kind: checkOnly ? "validation" : info.kind, deployId: id, success: false,
         status: "InProgress", summary: null, snapshotId}, checkOnly ? null : entries).catch(() => null);
       setRelease(prev => ({deploy: {...prev.deploy, recordId: record ? record.id : "", info, level: preset ? "NoTestRun" : level}}));
-      watching.add(id);
       const summary = await waitForDeploy(target.conn, id, {
         onUpdate: s => setRelease(prev => ({deploy: {...prev.deploy, summary: s, status: s.stateDetail || s.status}}))
       });
@@ -431,11 +431,11 @@ export function DeployView({goTo}) {
         if (!go) throw new Error("Stopped: no rollback point was saved.");
       }
       const id = await quickDeploy(target.conn, validation.id);
+      watching.add(id);
       setRelease({deploy: {...base, id, status: "Queued in Salesforce…"}});
       record = await recordRelease({...info, kind: info.kind === "deploy" ? "quick" : info.kind, deployId: id, validationId: validation.id,
         success: false, status: "InProgress", summary: null, snapshotId}, validation.entries).catch(() => null);
       setRelease(prev => ({deploy: {...prev.deploy, recordId: record ? record.id : "", info}}));
-      watching.add(id);
       const summary = await waitForDeploy(target.conn, id, {
         onUpdate: s => setRelease(prev => ({deploy: {...prev.deploy, summary: s, status: s.stateDetail || s.status}}))
       });

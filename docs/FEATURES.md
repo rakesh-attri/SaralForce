@@ -26,7 +26,7 @@ what you can **change**, how to do it, and where the limits are.
 13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · New · package.xml
 14. [Org Info](#14-org-info)
 15. [App Tab Manager](#15-app-tab-manager)
-16. [Release Center](#16-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · GitHub
+16. [SandShift (release center)](#16-sandshift-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · GitHub
 17. [Settings & AI providers](#17-settings--ai-providers)
 18. [Safety, privacy and limits](#18-safety-privacy-and-limits)
 19. [Quick "can I…?" answers](#19-quick-can-i-answers)
@@ -465,7 +465,7 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 ---
 
-## 16. Release Center ✏️ ✨
+## 16. SandShift (release center) ✏️ ✨
 
 Move changes between any two orgs you're logged into in this browser (sandbox → UAT → production, or back). No extra login: open the other org in another tab, then press ↻.
 
@@ -500,7 +500,7 @@ Move changes between any two orgs you're logged into in this browser (sandbox �
 | Drafts | Save a compare selection or package and load it later (Package → Drafts). |
 | Deploy to another org | History → a release → the exact deployed package to the next org (UAT → production). **Compare again** re-runs a release's items between any two orgs. |
 | Partial rollback | Tick which items to restore or remove before rolling back. |
-| Progress and minimize | Compare shows a percentage and elapsed time; both orgs are retrieved at the same time. Minimize / maximize keeps the Release tab, compare results, selection and a running deploy (it resumes watching). A deploy queued behind another one says so, with **Check status** and a link to Deployment Status. Rollbacks show **Validate (RB)** / **Deploy now (RB)**. |
+| Progress and minimize | Compare shows a percentage and elapsed time; both orgs are retrieved at the same time. Minimize / maximize keeps the SandShift tab, compare results, selection and a running deploy (it resumes watching). A deploy queued behind another one says so, with **Check status** and a link to Deployment Status. Rollbacks show **Validate (RB)** / **Deploy now (RB)**. |
 | Check status | A deploy SaralForce lost track of (closed screen, network) stays in History; **Check status** reads its result and it can still be rolled back. |
 | All deployments in an org | Salesforce's own deployment list (change sets, CLI, other tools, SaralForce) for any logged-in org. |
 | Pull requests | History → **Open pull request** commits a release to a release/… branch and opens a PR. Deletes are removed from Git; snapshot commits mirror the org. Any branch can be the source. |

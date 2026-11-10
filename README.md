@@ -280,13 +280,26 @@ debug-log analysis.
 
 ## What's New
 
+### v2.3.1
+- **SandShift** — the Release tab has a new name
+- **Session expiry handled** — an expired session is renewed from your new login automatically; when you are
+  logged out, a banner offers **Reconnect** and **Log in to Salesforce**, then **Reload this tool**
+- **Smarter code checks** — fewer false alarms on valid Apex (stripInaccessible, assertEquals chains,
+  queryWithBinds, sub-queries, mocks without asserts, lightning/toast); **Check with Salesforce anyway** when
+  a check looks wrong; edits only flag problems they add
+- **SandShift fixes** — Deploy opens on the screen you came from with a Back link, "What to deploy" cards,
+  rollback warning only in rollback mode, green progress bar, no double polling, an interrupted deploy no longer
+  locks the screen
+- **Plain-language errors** in Records (validation, required field, duplicate, not found, session, access)
+- Larger sub-tab icons; store description updated
+
 ### v2.3.0
 - **Release** keeps its work across minimize/maximize, shows compare progress in %, retrieves both orgs at once,
   resumes a running deploy and explains a queued one
 - **Reliable code deploys** — AI-written and template Apex, triggers, Visualforce, LWC and Aura pass a
   known-mistake check, then **Check compile** (Salesforce compiles the whole draft, saves nothing) and an
   all-or-nothing **Deploy** as one package; ✨ Fix with AI sends every compile error and rechecks
-- **Release Center** (new tab) — compare any two orgs you're logged into and deploy either way:
+- **SandShift** (new tab, release center) — compare any two orgs you're logged into and deploy either way:
   side-by-side diffs, dependency check with **Add missing**, deletes, a change tracker by date and
   person, package.xml / destructiveChanges.xml, **Validate**, **Quick deploy**, **Deploy now** and
   Cancel; ✨ AI release notes and ✨ Explain failures

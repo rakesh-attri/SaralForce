@@ -12,3 +12,8 @@ test("raw Salesforce errors become plain titles with next steps", () => {
   assert.equal(friendlyError("weird").title, "Something went wrong");
   assert.equal(cleanDetail("A | Tooling API: B"), "A · B");
 });
+
+test("a validation message that mentions 'offline' stays a validation error", () => {
+  assert.equal(friendlyError("FIELD_CUSTOM_VALIDATION_EXCEPTION: Offline orders need a PO").title, "A validation rule blocked the save");
+  assert.equal(friendlyError("INVALID_TYPE: sObject type 'Foo' is not supported.").title, "This object can't be used here");
+});

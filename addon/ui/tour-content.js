@@ -40,7 +40,7 @@ const TAB_TOURS = {
   logs: ["Debug logs", "Turn on logging for a user, load recent logs, and use AI Quick Analysis for a plain-English summary. Ask AI lets you ask questions about one log. Open a log and switch to ⏱ Profile to see where the time went."],
   org: ["Org info", "Storage, API limits, recent setup changes and login history at a glance, plus an optional AI hygiene check."],
   apptabs: ["App tabs", "Pick an app, add a tab from one search box, reorder or remove tabs, and choose which profiles or permission sets can see each tab."],
-  release: ["Release", "Compare any two orgs you're logged into in this browser and see what is new, changed or only in the target, with side-by-side diffs. ⇄ swaps them for a reverse deployment. Pick items (Add missing fills in what they depend on), then Validate, Quick deploy or Deploy now. Changes lists what changed since a date; Package builds package.xml and deletes. Manual steps runs what a deploy can't (flow activation, assignments, scheduled jobs) and links the rest. History keeps every release with a rollback point, plus snapshots to spot drift. Impact tells you what uses a component before you change or delete it."],
+  release: ["SandShift", "SandShift compares any two orgs you're logged into in this browser and shows what is new, changed or only in the target, with side-by-side diffs. ⇄ swaps them for a reverse deployment. Pick items (Add missing fills in what they depend on), then Validate, Quick deploy or Deploy now. Changes lists what changed since a date; Package builds package.xml and deletes. Manual steps runs what a deploy can't (flow activation, assignments, scheduled jobs) and links the rest. History keeps every release with a rollback point, plus snapshots to spot drift. Impact tells you what uses a component before you change or delete it."],
   coverage: ["Code coverage", "Coverage per Apex class, with a filter for test classes. Lines shows which lines are covered. Run tests to see live progress and each failure, and ask AI to explain a failing test."]
 };
 
@@ -70,10 +70,21 @@ export const SETTINGS_TOUR = {
 // Highlights per release, shown once after an update (newest first).
 export const RELEASE_NOTES = [
   {
+    version: "2.3.1",
+    title: "What's new in SaralForce 2.3.1",
+    items: [
+      "The Release tab is now called SandShift.",
+      "Session expired? SaralForce picks up your new login by itself, or shows Reconnect and Log in buttons. Nothing you were working on is lost.",
+      "AI-written Apex, triggers, LWC and Aura are checked and compiled before they deploy. If a check looks wrong, you can let Salesforce decide.",
+      "SandShift: Deploy opens on the screen you came from, clearer “What to deploy” choices, a green progress bar, and deploys keep running after you minimize.",
+      "Plain-language error messages in Records, and bigger sub-tab icons."
+    ]
+  },
+  {
     version: "2.3.0",
     title: "What's new in SaralForce 2.3",
     items: [
-      "New Release tab: compare any two orgs you're logged into, see side-by-side diffs, add missing dependencies, then Validate and Quick deploy (forward or reverse).",
+      "New SandShift tab (releases): compare any two orgs you're logged into, see side-by-side diffs, add missing dependencies, then Validate and Quick deploy (forward or reverse).",
       "Every deploy gets a version and a rollback point; History can roll it back, take snapshots and show drift.",
       "Manual steps: SaralForce activates flows, copies permission set assignments, group members and custom settings, schedules Apex jobs, and links the rest to Setup.",
       "Impact: see what uses a field, class or flow before you change or delete it.",

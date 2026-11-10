@@ -1,8 +1,8 @@
 {
   "name": "SaralForce",
   "description": "AI-powered Salesforce toolkit: Smart SOQL, Apex runner, deploy & rollback, metadata, custom objects, CSV import/export, org info",
-  "version": "2.3.0",
-  "version_name": "2.3.0",
+  "version": "2.3.1",
+  "version_name": "2.3.1",
   "icons": {
     "16": "icon16.png",
     "32": "icon32.png",

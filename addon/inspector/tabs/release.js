@@ -370,7 +370,7 @@ export function ReleaseTab() {
     if (body) body.scrollTop = 0;
   };
   return h("div", {className: "insp-panel"},
-    h("div", {className: "x-subnav rel-subnav", role: "tablist", "aria-label": "Release tools"},
+    h("div", {className: "x-subnav rel-subnav", role: "tablist", "aria-label": "SandShift tools"},
       RELEASE_VIEWS.map(v => h("button", {
         key: v.id, role: "tab", "aria-selected": cur.id === v.id,
         className: "x-subnav-btn" + (cur.id === v.id ? " active" : ""),
