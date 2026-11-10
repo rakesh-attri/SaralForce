@@ -29,6 +29,7 @@ export const LLM_PROVIDERS = {
       "claude-sonnet-5-5",
       "claude-opus-5-5",
       "claude-haiku-5-5",
+      "claude-fable-5-2",
       "claude-fable-5-1",
       "claude-sonnet-5",
       "claude-opus-5",

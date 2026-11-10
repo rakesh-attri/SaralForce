@@ -8,7 +8,7 @@ import {parsePackageXml, splitParentFile, pathToComponent} from "../addon/core/d
 export const ORG2_SESSION = "FAKE_SESSION_2";
 const day = 86400e3;
 const when = ago => new Date(Date.now() - ago).toISOString();
-const meta = (type, extra = "") => `<?xml version="1.0" encoding="UTF-8"?>\n<${type} xmlns="http://soap.sforce.com/2006/04/metadata">\n    <apiVersion>67.0</apiVersion>${extra}\n    <status>Active</status>\n</${type}>\n`;
+const meta = (type, extra = "") => `<?xml version="1.0" encoding="UTF-8"?>\n<${type} xmlns="http://soap.sforce.com/2006/04/metadata">\n    <apiVersion>68.0</apiVersion>${extra}\n    <status>Active</status>\n</${type}>\n`;
 const field = (name, type, extra = "") => `<fields>\n        <fullName>${name}</fullName>\n        <label>${name.replace(/__c$/, "").replace(/_/g, " ")}</label>\n${extra}        <type>${type}</type>\n    </fields>`;
 
 const INVOICE_V1 = `public with sharing class InvoiceService {
@@ -60,14 +60,14 @@ function makeOrgs() {
       InvoiceReminderJob: comp("Priya Nair", 1 * day, {"classes/InvoiceReminderJob.cls": "public class InvoiceReminderJob implements Schedulable {\n    public void execute(SchedulableContext sc) {}\n}\n", "classes/InvoiceReminderJob.cls-meta.xml": meta("ApexClass")})
     },
     NamedCredential: {
-      Payment_Gateway: comp("Shivam Ojha", 0.1 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v2</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+      Payment_Gateway: comp("Shivam Ojha", 0.1 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v2</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
     RemoteSiteSetting: {
-      PayGateway_Sandbox: comp("Shivam Ojha", 0.05 * day, {"remoteSiteSettings/PayGateway_Sandbox.remoteSite": meta("RemoteSiteSetting", "\n    <isActive>true</isActive>\n    <url>https://sandbox.pay.example.com</url>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")}, 0.05 * day)
+      PayGateway_Sandbox: comp("Shivam Ojha", 0.05 * day, {"remoteSiteSettings/PayGateway_Sandbox.remoteSite": meta("RemoteSiteSetting", "\n    <isActive>true</isActive>\n    <url>https://sandbox.pay.example.com</url>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")}, 0.05 * day)
     },
     ExternalDataSource: {},
     PermissionSet: {
-      Invoice_Manager: comp("Rakesh Sharma", 1 * day, {"permissionsets/Invoice_Manager.permissionset": meta("PermissionSet", "\n    <label>Invoice Manager</label>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+      Invoice_Manager: comp("Rakesh Sharma", 1 * day, {"permissionsets/Invoice_Manager.permissionset": meta("PermissionSet", "\n    <label>Invoice Manager</label>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
     ApexTrigger: {
       InvoiceTrigger: comp("Priya Nair", 40 * day, {"triggers/InvoiceTrigger.trigger": TRIGGER, "triggers/InvoiceTrigger.trigger-meta.xml": meta("ApexTrigger")})
@@ -89,7 +89,7 @@ function makeOrgs() {
       }, {Positive_Amount: "<validationRules>\n        <fullName>Positive_Amount</fullName>\n        <active>true</active>\n        <errorConditionFormula>Amount__c &lt; 0</errorConditionFormula>\n        <errorMessage>Amount must be positive</errorMessage>\n    </validationRules>"}))
     },
     Layout: {
-      "Invoice__c-Invoice Layout": comp("Rakesh Sharma", 2 * day, {"layouts/Invoice__c-Invoice Layout.layout": meta("Layout", "\n    <layoutSections>\n        <layoutColumns>\n            <layoutItems>\n                <field>Amount__c</field>\n            </layoutItems>\n            <layoutItems>\n                <field>Status__c</field>\n            </layoutItems>\n        </layoutColumns>\n    </layoutSections>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+      "Invoice__c-Invoice Layout": comp("Rakesh Sharma", 2 * day, {"layouts/Invoice__c-Invoice Layout.layout": meta("Layout", "\n    <layoutSections>\n        <layoutColumns>\n            <layoutItems>\n                <field>Amount__c</field>\n            </layoutItems>\n            <layoutItems>\n                <field>Status__c</field>\n            </layoutItems>\n        </layoutColumns>\n    </layoutSections>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")})
     }
   };
   const target = {
@@ -112,7 +112,7 @@ function makeOrgs() {
     },
     Layout: {},
     NamedCredential: {
-      Payment_Gateway: comp("Deploy User", 30 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v1</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+      Payment_Gateway: comp("Deploy User", 30 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v1</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
     RemoteSiteSetting: {},
     ExternalDataSource: {}
@@ -187,7 +187,7 @@ function retrieveZip(org, members) {
     files.set(`objects/${name}.object`, objectXml(org.CustomObject[name].files, [...e.fields], [...e.rules], e.parent));
   }
   const pkgTypes = Object.entries(members).map(([t, ns]) => `<types>${ns.map(m => `<members>${m}</members>`).join("")}<name>${t}</name></types>`).join("");
-  files.set("package.xml", `<?xml version="1.0" encoding="UTF-8"?><Package xmlns="http://soap.sforce.com/2006/04/metadata">${pkgTypes}<version>67.0</version></Package>`);
+  files.set("package.xml", `<?xml version="1.0" encoding="UTF-8"?><Package xmlns="http://soap.sforce.com/2006/04/metadata">${pkgTypes}<version>68.0</version></Package>`);
   return bytesToBase64(writeZip(files));
 }
 

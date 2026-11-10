@@ -14,7 +14,7 @@ function seed() {
   const entries = [
     {path: "README.md", type: "blob", sha: put("# Salesforce source\n")},
     {path: "force-app/main/default/classes/GitOnlyHelper.cls", type: "blob", sha: put("public class GitOnlyHelper {\n    public static String hello() { return 'from git'; }\n}\n")},
-    {path: "force-app/main/default/classes/GitOnlyHelper.cls-meta.xml", type: "blob", sha: put('<?xml version="1.0" encoding="UTF-8"?>\n<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">\n    <apiVersion>67.0</apiVersion>\n    <status>Active</status>\n</ApexClass>\n')}
+    {path: "force-app/main/default/classes/GitOnlyHelper.cls-meta.xml", type: "blob", sha: put('<?xml version="1.0" encoding="UTF-8"?>\n<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">\n    <apiVersion>68.0</apiVersion>\n    <status>Active</status>\n</ApexClass>\n')}
   ];
   const treeSha = sha("tree" + JSON.stringify(entries));
   trees.set(treeSha, entries);

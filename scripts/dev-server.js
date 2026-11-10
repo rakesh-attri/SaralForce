@@ -76,7 +76,7 @@ const LOG_BODY = (() => {
   // A realistic transaction: a query and an update inside a loop (N+1),
   // a slow callout, limit usage, then the original NullPointerException.
   const t = (ms, rest) => `12:00:${String(Math.floor(ms / 1000)).padStart(2, "0")}.${ms % 1000} (${Math.round(ms * 1e6)})|${rest}`;
-  const lines = ["67.0 APEX_CODE,FINE;APEX_PROFILING,INFO", t(0, "EXECUTION_STARTED"),
+  const lines = ["68.0 APEX_CODE,FINE;APEX_PROFILING,INFO", t(0, "EXECUTION_STARTED"),
     t(1, "CODE_UNIT_STARTED|[EXTERNAL]|01pdN000000000AAA|PaymentGateway.run"),
     t(2, "USER_DEBUG|[12]|DEBUG|Charging invoice INV-0042"),
     t(3, "METHOD_ENTRY|[14]|01pdN000000000AAA|PaymentGateway.applyCredits(List<Invoice__c>)")];
@@ -217,7 +217,7 @@ function soqlPage(q, records, offset, type) {
   const page = records.slice(offset, offset + PAGE).map(r => ({attributes: {type}, ...r}));
   const more = offset + PAGE < records.length;
   return {totalSize: records.length, done: !more, records: page,
-    ...(more ? {nextRecordsUrl: "/services/data/v67.0/query/mock-" + (offset + PAGE) + "?q=" + encodeURIComponent(q)} : {})};
+    ...(more ? {nextRecordsUrl: "/services/data/v68.0/query/mock-" + (offset + PAGE) + "?q=" + encodeURIComponent(q)} : {})};
 }
 
 function limitsBody() {
@@ -246,7 +246,7 @@ function mockExecuteAnonymous(req, res) {
     const bad = /oops/.test(code);
     const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const log = [
-      "67.0 APEX_CODE,DEBUG;APEX_PROFILING,INFO",
+      "68.0 APEX_CODE,DEBUG;APEX_PROFILING,INFO",
       "12:00:00.0 (100)|EXECUTION_STARTED",
       "12:00:00.0 (200)|USER_DEBUG|[1]|DEBUG|Hello from the mock org",
       "12:00:00.0 (300)|SOQL_EXECUTE_BEGIN|[2]|Aggregations:0|SELECT Id FROM Account",

@@ -4,7 +4,7 @@ import {parseProfile, normalizeQuery, profileForPrompt} from "../../addon/core/l
 
 const t = (ns, rest) => `12:00:00.0 (${ns})|${rest}`;
 function sampleLog() {
-  const lines = ["67.0 APEX_CODE,DEBUG", t(0, "EXECUTION_STARTED"), t(100, "CODE_UNIT_STARTED|[EXTERNAL]|01p|InvoiceService.run"),
+  const lines = ["68.0 APEX_CODE,DEBUG", t(0, "EXECUTION_STARTED"), t(100, "CODE_UNIT_STARTED|[EXTERNAL]|01p|InvoiceService.run"),
     t(200, "METHOD_ENTRY|[3]|01p|InvoiceService.total(List<Invoice__c>)")];
   let ns = 300;
   for (let i = 0; i < 5; i++) {
