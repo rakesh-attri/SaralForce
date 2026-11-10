@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {groupRefs, codeMentions, impactVerdict, impactForPrompt} from "../../addon/core/impact.js";
+import {groupRefs, codeMentions, impactVerdict, impactForPrompt, flowDeleteReport} from "../../addon/core/impact.js";
 
 const used = groupRefs([
   {MetadataComponentId: "1", MetadataComponentName: "InvoiceService", MetadataComponentType: "ApexClass"},
@@ -32,4 +32,22 @@ test("verdicts: block on data or active flows, warn on references, safe otherwis
   assert.equal(s.level, "safe");
   assert.match(s.reasons[0], /no data/);
   assert.match(impactForPrompt({type: "CustomField", name: "A.B__c", org: "UAT", usedBy: used, uses: [], codeMatches: [], dataCount: 3, activeFlows: [], verdict: w}), /ApexClass InvoiceService/);
+});
+
+test("flow delete report: what blocks it and what is clear", () => {
+  const base = {found: true, versions: [{number: 1, status: "Obsolete"}], active: 0, interviews: [], interviewsGuessed: false, usedBy: [], notes: []};
+  const r = flowDeleteReport([
+    {...base, name: "Gone", found: false, versions: []},
+    {...base, name: "Paused", interviews: [{label: "Paused 10/11", status: "Paused"}]},
+    {...base, name: "Called", usedBy: [{type: "Flow", name: "Parent_Flow"}]},
+    {...base, name: "Active", active: 2},
+    {...base, name: "Old_Routing", notes: ["Could not check what uses it: x"]}
+  ]);
+  assert.deepEqual(r.blocked, ["Paused", "Called", "Active"]);
+  assert.deepEqual(r.clear, ["Old_Routing"]);
+  assert.match(r.text, /Gone: not in the target/);
+  assert.match(r.text, /Paused \[1 version\(s\): v1 Obsolete\]: 1 paused or waiting run/);
+  assert.match(r.text, /used by Flow Parent_Flow/);
+  assert.match(r.text, /version 2 is active/);
+  assert.match(r.text, /Old_Routing.*nothing found blocking it[\s\S]*Could not check what uses it/);
 });

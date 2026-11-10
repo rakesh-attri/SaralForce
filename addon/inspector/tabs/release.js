@@ -1,20 +1,20 @@
 // Release Center: compare orgs, track changes, build a package, validate
 // and deploy (forward or reverse) to any org you're logged into.
 import {
-  presetTypes, typeLabel, membersFromKeys, keysFromMembers, mergeMembers, parsePackageXml,
-  METADATA_TYPES
+  typeLabel, membersFromKeys, keysFromMembers, mergeMembers, parsePackageXml,
+  METADATA_TYPES, allTypes
 } from "../../core/deploy.js";
 import {buildPackageXml, packageCount} from "../../core/metadata.js";
 import {writeZip} from "../../core/zip.js";
 import {apiVersion} from "../../inspector.js";
-import {listComponents, retrieve, queryAll} from "../shared/deploy-api.js";
+import {listComponents, retrieve, queryAll, loadCatalog} from "../shared/deploy-api.js";
 import {downloadText} from "../shared/csv.js";
 import {useFfSession} from "../shared/session-state.js";
 import {SearchSelect} from "../shared/combo.js";
 import {useRelease, setRelease, orgByHost, loadOrgs, fmtWhen, downloadBytes, orgDaysAgo, orgDayStart, orgDate} from "./release-state.js";
-import {auditDelete, sourceMemberDeletes, buildChanges, changeCounts} from "../../core/changes.js";
+import {auditDelete, auditPermissionEdits, sourceMemberDeletes, buildChanges, changeCounts} from "../../core/changes.js";
 import {FFBadge} from "../shared/ui.js";
-import {CardHead, PresetPicker, orgOptions, OrgTag} from "./release-ui.js";
+import {CardHead, orgOptions, OrgTag} from "./release-ui.js";
 import {CompareView} from "./release-compare.js";
 import {DeployView, resumeDeploy} from "./release-deploy.js";
 import {HistoryView} from "./release-history.js";
@@ -74,17 +74,47 @@ async function findDeletes(conn, sinceIso, onStatus) {
   return {deleted: out, audit, tracking};
 }
 
+// Profile / permission set edits listMetadata's date misses: their record's
+// LastModifiedDate, and the audit trail's "Changed profile X: …" lines.
+async function permissionEdits(conn, list, sinceIso, audit) {
+  const out = [];
+  const byId = new Map();
+  for (const r of list.values()) if ((r.type === "Profile" || r.type === "PermissionSet") && r.id) byId.set(r.id.slice(0, 15), r);
+  const [profiles, sets] = await Promise.all([
+    queryAll(conn, "SELECT Id, Name, LastModifiedDate, LastModifiedBy.Name FROM Profile").catch(() => []),
+    queryAll(conn, "SELECT Id, Name, Label, LastModifiedDate, LastModifiedBy.Name FROM PermissionSet WHERE IsOwnedByProfile = false AND NamespacePrefix = null").catch(() => [])
+  ]);
+  const byLabel = {Profile: new Map(), PermissionSet: new Map()};
+  for (const [type, recs] of [["Profile", profiles], ["PermissionSet", sets]]) {
+    for (const p of recs) {
+      const r = byId.get(String(p.Id).slice(0, 15));
+      const fullName = r ? r.fullName : type === "PermissionSet" ? p.Name : "";
+      if (!fullName) continue;
+      byLabel[type].set(String(type === "Profile" ? p.Name : p.Label || p.Name).toLowerCase(), fullName);
+      if (p.LastModifiedDate && new Date(p.LastModifiedDate) >= new Date(sinceIso)) {
+        out.push({type, fullName, by: p.LastModifiedBy ? p.LastModifiedBy.Name : "", at: p.LastModifiedDate});
+      }
+    }
+  }
+  for (const e of auditPermissionEdits(audit)) {
+    const fullName = byLabel[e.type].get(e.label.toLowerCase());
+    if (fullName) out.push({type: e.type, fullName, by: e.by, at: e.at});
+  }
+  return out;
+}
+
 // ─── Changes: what changed in one org since a date ─────────────────────
 function ChangesView({goTo}) {
   const st = useRelease();
   React.useEffect(() => { if (!st.orgs && !st.orgsBusy) loadOrgs(); }, []);
   const [host, setHost] = useFfSession("release", "changesHost", "");
-  const [presets, setPresets] = useFfSession("release", "changesPresets", ["apex", "ui", "flows", "objects", "pages", "security", "config", "integrations"]);
   const [since, setSince] = useFfSession("release", "changesSince", () => orgDaysAgo(7));
+  const [until, setUntil] = useFfSession("release", "changesUntil", "");
   const [statusFilter, setStatusFilter] = React.useState({new: true, updated: true, deleted: true});
   const [destructive, setDestructive] = useFfSession("release", "destructive", {});
   const [tracking, setTracking] = React.useState(null);
   const [by, setBy] = React.useState("");
+  const [typeFilter, setTypeFilter] = React.useState("");
   const [rows, setRows] = React.useState(null);
   const [audit, setAudit] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -106,12 +136,15 @@ function ChangesView({goTo}) {
     if (!org) return;
     setBusy(true); setError(""); setRows(null); setAudit(null); setSel(new Set());
     try {
-      const types = presetTypes(presets);
-      if (!types.length) throw new Error("Pick at least one kind of metadata.");
+      await loadCatalog(org.conn);
+      const types = allTypes();
       const t = orgDayStart(since || orgDaysAgo(7));
-      const list = await listComponents(org.conn, types, {onProgress: (n, of) => setStatus(`Listing ${org.name}… ${n}/${of}`)});
-      const del = await findDeletes(org.conn, new Date(t).toISOString(), setStatus);
-      setRows(buildChanges([...list.values()], del.deleted, t, types));
+      const list = await listComponents(org.conn, types, {onProgress: (n, of) => setStatus(`Listing ${types.length} metadata types in ${org.name}… ${n}/${of}`)});
+      const sinceIso = new Date(t).toISOString();
+      const del = await findDeletes(org.conn, sinceIso, setStatus);
+      setStatus("Checking profiles and permission sets…");
+      const touched = await permissionEdits(org.conn, list, sinceIso, del.audit).catch(() => []);
+      setRows(buildChanges([...list.values()], del.deleted, t, types, touched, until ? orgDayStart(until) + 864e5 : 0));
       setAudit(del.audit);
       setTracking(del.tracking);
     } catch (e) {
@@ -124,7 +157,9 @@ function ChangesView({goTo}) {
   const people = rows ? [...new Set(rows.map(r => r.by).filter(Boolean))].sort() : [];
   const counts = changeCounts(rows || []);
   const q = search.trim().toLowerCase();
-  const shown = (rows || []).filter(r => statusFilter[r.status] && (!by || r.by === by) &&
+  const typeCounts = [...(rows || []).reduce((m, r) => m.set(r.type, (m.get(r.type) || 0) + 1), new Map()).entries()]
+    .sort((a, b) => typeLabel(a[0]).localeCompare(typeLabel(b[0])));
+  const shown = (rows || []).filter(r => statusFilter[r.status] && (!by || r.by === by) && (!typeFilter || r.type === typeFilter) &&
     (!q || (r.fullName + " " + typeLabel(r.type)).toLowerCase().includes(q)));
   const toggle = key => {
     const next = new Set(sel);
@@ -138,7 +173,7 @@ function ChangesView({goTo}) {
   return h("div", {className: "org-grid"},
     h("div", {className: "org-card org-card-wide"},
       h(CardHead, {icon: "🕘", title: "What changed?"}),
-      h("div", {className: "sq3-card-sub"}, "Every component changed in an org since a date, newest first. Pick what belongs in your release."),
+      h("div", {className: "sq3-card-sub"}, "Every component of every metadata type changed in an org since a date, newest first. Filter by type or person, then pick what belongs in your release."),
       h("div", {className: "rel-orgbar"},
         h("div", {className: "rel-org"},
           h("span", {className: "rel-org-l"}, "Org"),
@@ -146,8 +181,6 @@ function ChangesView({goTo}) {
             ariaLabel: "Org to check", placeholder: st.orgsBusy ? "Finding your orgs…" : "Pick an org"}),
           h(OrgTag, {org})),
         h("button", {className: "btn btn-secondary btn-sm", disabled: st.orgsBusy, onClick: () => loadOrgs(true), title: "Look again for orgs"}, st.orgsBusy ? "…" : "↻")),
-      h("div", {className: "rel-label"}, "What to look at"),
-      h(PresetPicker, {value: presets, onChange: setPresets, disabled: busy}),
       h("div", {className: "soql-save-row rel-run-row"},
         h("span", {className: "rel-org-l"}, "Changed since"),
         SINCE_PICKS.map(p => h("button", {key: p.id, type: "button", disabled: busy,
@@ -156,8 +189,11 @@ function ChangesView({goTo}) {
         lastAt && h("button", {type: "button", disabled: busy, title: "Since the last release deployed from this org",
           className: "insp-chip rel-chip" + (since === orgDate(lastAt) ? " on" : ""),
           onClick: () => setSince(orgDate(lastAt))}, "Last release"),
-        h("input", {type: "date", className: "soql-save-input", value: since, disabled: busy,
+        h("input", {type: "date", className: "soql-save-input", value: since, disabled: busy, max: until || undefined,
           onChange: e => setSince(e.target.value), "aria-label": "Changed since"}),
+        h("span", {className: "rel-org-l"}, "to"),
+        h("input", {type: "date", className: "soql-save-input", value: until, disabled: busy, min: since || undefined,
+          onChange: e => setUntil(e.target.value), "aria-label": "Changed until (empty: today)", title: "Leave empty for up to now"}),
         h("button", {className: "btn btn-primary btn-sm", disabled: busy || !org, onClick: run}, busy ? "Looking…" : "Find changes")),
       busy && h("div", {className: "tr-progress"},
         h("div", {className: "cov-progress"}, h("div", {className: "cov-progress-fill"})),
@@ -165,13 +201,16 @@ function ChangesView({goTo}) {
       error && h("div", {className: "insp-error"}, error)),
 
     rows && h("div", {className: "org-card org-card-wide"},
-      h(CardHead, {icon: "📋", title: `${rows.length} change(s) in ${org ? org.name : ""} since ${since}`}),
+      h(CardHead, {icon: "📋", title: `${rows.length} change(s) in ${org ? org.name : ""} since ${since}${until ? " to " + until : ""}`}),
       h("div", {className: "rel-filters"},
         ["new", "updated", "deleted"].map(k => h("button", {
           key: k, type: "button", "aria-pressed": statusFilter[k],
           className: "insp-chip rel-chip rel-st-" + ({new: "new", updated: "changed", deleted: "deleted"})[k] + (statusFilter[k] ? " on" : ""),
           onClick: () => setStatusFilter({...statusFilter, [k]: !statusFilter[k]})
         }, `${CHANGE_BADGE[k].label} · ${counts[k]}`)),
+        h(SearchSelect, {value: typeFilter, className: "rel-type", ariaLabel: "Metadata type",
+          options: [{value: "", label: "All metadata types"}, ...typeCounts.map(([t, n]) => ({value: t, label: `${typeLabel(t)} (${n})`}))],
+          onChange: setTypeFilter}),
         h(SearchSelect, {
           value: by, className: "rel-by",
           options: [{value: "", label: "Anyone"}, ...people.map(p => ({value: p, label: p}))],
@@ -243,8 +282,21 @@ function removeMember(members, type, name) {
   return next;
 }
 
-const TYPE_OPTIONS = METADATA_TYPES.filter(t => !t.hidden).map(t => ({value: t.name, label: t.label, sub: t.name}))
+// Every type the org can deploy (built-in + describeMetadata).
+const typeOptions = () => METADATA_TYPES.filter(t => !t.hidden).map(t => ({value: t.name, label: t.label, sub: t.name}))
   .sort((a, b) => a.label.localeCompare(b.label));
+
+// What the source org has of one type, for the Package search (cached).
+const orgTypeCache = new Map();
+function orgComponents(org, type) {
+  const key = org.host + "|" + type;
+  if (!orgTypeCache.has(key)) {
+    orgTypeCache.set(key, loadCatalog(org.conn).then(() => listComponents(org.conn, [type]))
+      .then(list => [...list.values()].filter(c => !c.isFolder || type.endsWith("Folder")).map(c => c.fullName).sort((a, b) => a.localeCompare(b)))
+      .catch(e => { orgTypeCache.delete(key); throw e; }));
+  }
+  return orgTypeCache.get(key);
+}
 
 function PackageView({goTo}) {
   const st = useRelease();
@@ -259,6 +311,16 @@ function PackageView({goTo}) {
   const [msg, setMsg] = React.useState("");
   const [err, setErr] = React.useState("");
   const source = orgByHost(st.sourceHost);
+  // Search: everything of the chosen type in the source org.
+  const [found, setFound] = React.useState({type: "", names: null, err: "", busy: false});
+  React.useEffect(() => {
+    if (!source || source.isGit || !type) { setFound({type, names: null, err: "", busy: false}); return undefined; }
+    let stale = false;
+    setFound({type, names: null, err: "", busy: true});
+    orgComponents(source, type).then(names => { if (!stale) setFound({type, names, err: "", busy: false}); })
+      .catch(e => { if (!stale) setFound({type, names: null, err: e.message || String(e), busy: false}); });
+    return () => { stale = true; };
+  }, [type, source && source.host]);
   const count = packageCount(pkg);
   const [relName] = useFfSession("release", "relName", "");
   const [drafts, setDrafts] = React.useState([]);
@@ -285,6 +347,14 @@ function PackageView({goTo}) {
     if (toDelete) setDestructive(mergeMembers(destructive, m)); else setPkg(mergeMembers(pkg, m));
     setName("");
   };
+  const term = name.split(",").pop().trim().toLowerCase();
+  const inPkg = n => ((toDelete ? destructive : pkg)[type] || []).includes(n);
+  const matches = (found.names || []).filter(n => !term || n.toLowerCase().includes(term));
+  const addNames = list => {
+    const m = {[type]: list};
+    if (toDelete) setDestructive(mergeMembers(destructive, m)); else setPkg(mergeMembers(pkg, m));
+  };
+
   const load = (asDelete) => {
     const m = parsePackageXml(paste);
     if (!Object.keys(m).length) { setErr("No <types> found in the pasted XML."); return; }
@@ -320,11 +390,25 @@ function PackageView({goTo}) {
       delCount > 0 && h(MemberList, {members: destructive, del: true, onRemove: (t, m) => setDestructive(removeMember(destructive, t, m))}),
       h("div", {className: "rel-label"}, "Add by name"),
       h("div", {className: "soql-save-row"},
-        h(SearchSelect, {value: type, options: TYPE_OPTIONS, onChange: setType, ariaLabel: "Metadata type", className: "rel-type"}),
-        h("input", {className: "soql-save-input", placeholder: "API name(s), comma separated (Object.Field__c for fields)", value: name,
+        h(SearchSelect, {value: type, options: typeOptions(), onChange: setType, ariaLabel: "Metadata type", className: "rel-type"}),
+        h("input", {className: "soql-save-input", placeholder: "Search or type API name(s), comma separated (Object.Field__c for fields)", value: name,
           onChange: e => setName(e.target.value), onKeyDown: e => { if (e.key === "Enter") add(); }, "aria-label": "Component API name"}),
         h("label", {className: "sq3-check"}, h("input", {type: "checkbox", checked: toDelete, onChange: e => setToDelete(e.target.checked)}), " delete"),
         h("button", {className: "btn btn-secondary btn-sm", disabled: !name.trim(), onClick: add}, "Add")),
+      source && !source.isGit && h("div", {className: "rel-found"},
+        h("div", {className: "insp-meta"},
+          found.busy ? `Looking up ${typeLabel(type)} in ${source.name}…`
+            : found.err ? `Could not list ${typeLabel(type)} in ${source.name}: ${found.err}`
+              : found.names ? `${typeLabel(type)} in ${source.name}: ${found.names.length} item${found.names.length === 1 ? "" : "s"}${term ? ` · ${matches.length} matching “${term}”` : ""}${matches.length ? `. Click to add${toDelete ? " as deletes" : ""}.` : ""}` : ""),
+        matches.length > 0 && h("div", {className: "rel-found-list"},
+          matches.slice(0, 60).map(n => h("button", {
+            key: n, type: "button", disabled: inPkg(n),
+            className: "insp-chip rel-chip" + (inPkg(n) ? " on" : "") + (toDelete ? " rel-chip-del" : ""),
+            onClick: () => addNames([n])
+          }, (inPkg(n) ? "✓ " : "＋ ") + n)),
+          matches.length > 60 && h("span", {className: "insp-meta"}, `+${matches.length - 60} more · type to narrow`),
+          matches.filter(n => !inPkg(n)).length > 1 && h("button", {className: "field-action-btn", onClick: () => addNames(matches.filter(n => !inPkg(n)))},
+            `Add all ${matches.filter(n => !inPkg(n)).length}`))),
       h("details", {className: "rel-paste"},
         h("summary", null, "Paste a package.xml or destructiveChanges.xml"),
         h("textarea", {className: "soql-save-input rel-textarea", rows: 6, value: paste, onChange: e => setPaste(e.target.value),

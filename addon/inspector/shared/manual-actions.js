@@ -90,6 +90,117 @@ async function activateFlows({target, targets}) {
   return log.join("\n");
 }
 
+// Flows can only be deleted when no version is active.
+export async function activeFlows(conn, names) {
+  if (!names.length) return [];
+  const defs = await query(conn, "SELECT Id, DeveloperName, ActiveVersion.VersionNumber " +
+    `FROM FlowDefinition WHERE DeveloperName IN (${inList(names)})`, true);
+  return defs.filter(d => d.ActiveVersion && d.ActiveVersion.VersionNumber);
+}
+
+export async function deactivateFlows({target, targets}) {
+  const active = await activeFlows(target.conn, targets);
+  const log = targets.filter(n => !active.some(d => d.DeveloperName === n)).map(n => `✓ ${n}: not active in ${target.name}`);
+  for (const d of active) {
+    try {
+      await rest(target.conn, `/tooling/sobjects/FlowDefinition/${d.Id}`, {method: "PATCH", body: {Metadata: {activeVersionNumber: 0}}});
+      log.push(`✓ ${d.DeveloperName}: deactivated (version ${d.ActiveVersion.VersionNumber} was active)`);
+    } catch (e) {
+      log.push(`✗ ${d.DeveloperName}: ${e.message}`);
+    }
+  }
+  return log.join("\n");
+}
+
+// What can stop a flow delete in an org: active version, paused/waiting runs,
+// metadata using it. Feeds flowDeleteReport (core/impact.js).
+export async function flowDeleteBlockers(conn, names) {
+  if (!names.length) return [];
+  const [versions, defs] = await Promise.all([
+    query(conn, "SELECT Id, VersionNumber, Status, MasterLabel, Definition.DeveloperName FROM Flow " +
+      `WHERE Definition.DeveloperName IN (${inList(names)})`, true),
+    query(conn, `SELECT Id, DeveloperName, ActiveVersion.VersionNumber FROM FlowDefinition WHERE DeveloperName IN (${inList(names)})`, true)
+  ]);
+  const out = names.map(name => {
+    const def = defs.find(d => d.DeveloperName === name);
+    const vs = versions.filter(v => v.Definition && v.Definition.DeveloperName === name)
+      .map(v => ({id: v.Id, number: v.VersionNumber, status: v.Status, label: v.MasterLabel})).sort((a, b) => a.number - b.number);
+    return {name, found: !!def || vs.length > 0, defId: def && def.Id, versions: vs,
+      active: def && def.ActiveVersion && def.ActiveVersion.VersionNumber || 0,
+      interviews: [], interviewsGuessed: false, usedBy: [], notes: []};
+  });
+  const live = out.filter(f => f.found);
+  if (!live.length) return out;
+  // Paused or waiting runs keep their version in use.
+  try {
+    const rows = await query(conn, "SELECT Id, InterviewLabel, InterviewStatus, FlowVersionView.FlowDefinitionView.ApiName FROM FlowInterview " +
+      `WHERE FlowVersionView.FlowDefinitionView.ApiName IN (${inList(live.map(f => f.name))})`);
+    for (const r of rows) {
+      const api = r.FlowVersionView && r.FlowVersionView.FlowDefinitionView && r.FlowVersionView.FlowDefinitionView.ApiName;
+      const f = live.find(x => x.name === api);
+      if (f) f.interviews.push({label: r.InterviewLabel || r.Id, status: r.InterviewStatus || ""});
+    }
+  } catch {
+    // Older orgs: no link from the run to the flow; match on the label.
+    try {
+      const rows = await query(conn, "SELECT Id, InterviewLabel FROM FlowInterview");
+      for (const f of live) {
+        const labels = [...new Set(f.versions.map(v => v.label).filter(Boolean))];
+        f.interviews = rows.filter(r => labels.some(l => String(r.InterviewLabel || "").startsWith(l))).map(r => ({label: r.InterviewLabel || r.Id, status: ""}));
+        f.interviewsGuessed = f.interviews.length > 0;
+      }
+    } catch (e) {
+      for (const f of live) f.notes.push(`Could not check paused runs: ${e.message}`);
+    }
+  }
+  // Metadata that still uses a version or the definition.
+  const ids = new Map();
+  for (const f of live) {
+    if (f.defId) ids.set(f.defId.slice(0, 15), f);
+    for (const v of f.versions) ids.set(v.id.slice(0, 15), f);
+  }
+  try {
+    const keys = [...ids.keys()];
+    for (let i = 0; i < keys.length; i += 100) {
+      const rows = await query(conn, "SELECT MetadataComponentName, MetadataComponentType, RefMetadataComponentId FROM MetadataComponentDependency " +
+        `WHERE RefMetadataComponentId IN (${inList(keys.slice(i, i + 100))})`, true);
+      for (const r of rows) {
+        const f = ids.get(String(r.RefMetadataComponentId || "").slice(0, 15));
+        if (!f || (r.MetadataComponentType === "Flow" && r.MetadataComponentName === f.name)) continue;
+        if (!f.usedBy.some(u => u.type === r.MetadataComponentType && u.name === r.MetadataComponentName)) {
+          f.usedBy.push({type: r.MetadataComponentType, name: r.MetadataComponentName});
+        }
+      }
+    }
+  } catch (e) {
+    for (const f of live) f.notes.push(`Could not check what uses it: ${e.message}`);
+  }
+  return out;
+}
+
+// Delete flows through the Tooling API, one version at a time (the last
+// version removes the flow). Used when the Metadata API delete fails.
+export async function deleteFlowsTooling({target, targets}) {
+  const found = await flowDeleteBlockers(target.conn, targets);
+  const log = [];
+  for (const f of found) {
+    if (!f.found) { log.push(`✓ ${f.name}: not in ${target.name}`); continue; }
+    if (f.active) { log.push(`✗ ${f.name}: version ${f.active} is active; deactivate it first`); continue; }
+    let ok = 0;
+    for (const v of [...f.versions].reverse()) {
+      try {
+        await rest(target.conn, `/tooling/sobjects/Flow/${v.id}`, {method: "DELETE"});
+        ok++;
+      } catch (e) {
+        log.push(`✗ ${f.name} v${v.number}: ${e.message}`);
+      }
+    }
+    if (ok === f.versions.length) log.push(`✓ ${f.name}: deleted (${ok} version(s))`);
+    else if (ok) log.push(`· ${f.name}: ${ok} of ${f.versions.length} version(s) deleted`);
+  }
+  return log.join("\n");
+}
+
 async function userMap(conn) {
   const users = await query(conn, "SELECT Id, Username FROM User WHERE IsActive = true");
   const exact = new Map(users.map(u => [String(u.Username).toLowerCase(), u.Id]));
@@ -256,6 +367,27 @@ async function scheduleJobs({source, target, targets}) {
   return log.join("\n");
 }
 
+// Before a deploy: stop the target's scheduled jobs of these classes.
+async function pauseJobs({target, targets}) {
+  const jobs = await query(target.conn, "SELECT ApexClass.Name, CronTriggerId FROM AsyncApexJob WHERE JobType = 'ScheduledApex' " +
+    `AND Status = 'Queued' AND ApexClass.Name IN (${inList(targets)})`);
+  const cronIds = [...new Set(jobs.map(j => j.CronTriggerId).filter(Boolean))];
+  if (!cronIds.length) return `✓ No scheduled jobs for ${targets.join(", ")} in ${target.name}; nothing to pause.`;
+  const crons = await query(target.conn, `SELECT Id, CronExpression, CronJobDetail.Name FROM CronTrigger WHERE Id IN (${inList(cronIds)})`);
+  const log = [];
+  for (const c of crons) {
+    const name = c.CronJobDetail && c.CronJobDetail.Name || c.Id;
+    try {
+      await executeAnonymous(target.conn, `System.abortJob(${q(c.Id)});`);
+      log.push(`✓ ${name}: stopped (was ${c.CronExpression})`);
+    } catch (e) {
+      log.push(`✗ ${name}: ${e.message}`);
+    }
+  }
+  log.push("After the deploy, run “Schedule Apex jobs” (or schedule them again with the timing above).");
+  return log.join("\n");
+}
+
 async function runScript({target, step}) {
   await executeAnonymous(target.conn, step.code || "");
   return "✓ Ran without errors.";
@@ -268,6 +400,8 @@ const ACTIONS = {
   "group-members": copyGroupMembers,
   "custom-settings": copyCustomSettings,
   "schedule-jobs": scheduleJobs,
+  "pause-jobs": pauseJobs,
+  "flow-deactivate": deactivateFlows,
   "script": runScript
 };
 
@@ -279,6 +413,8 @@ export const ACTION_EFFECT = {
   "group-members": "adds matching users to the groups and queues",
   "custom-settings": "creates or updates custom setting values",
   "schedule-jobs": "schedules the Apex classes",
+  "pause-jobs": "stops (aborts) the scheduled jobs of these classes in the target",
+  "flow-deactivate": "deactivates these flows in the target (no version stays active)",
   "script": "runs the anonymous Apex"
 };
 

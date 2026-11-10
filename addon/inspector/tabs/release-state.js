@@ -1,7 +1,7 @@
 // Release Center shared state. Lives for the page session (not in the
 // sidebar snapshot: compare results hold whole files), so switching
 // between Compare / Changes / Package / Deploy keeps the work.
-import {listOrgs} from "../shared/deploy-api.js";
+import {listOrgs, loadCatalog} from "../shared/deploy-api.js";
 import {putSession, getSession, pruneSessions} from "../shared/release-store.js";
 import {githubConfig, readBranch} from "../shared/github.js";
 import {componentsFromSource} from "../../core/source-format.js";
@@ -101,7 +101,9 @@ export async function loadOrgs(refresh = false) {
     const other = orgs.find(o => o.host !== sourceHost && !o.isGit);
     const targetOk = has(state.targetHost) && state.targetHost !== sourceHost && !state.targetHost.startsWith("git:");
     const targetHost = targetOk ? state.targetHost : (other ? other.host : "");
-    setRelease({orgs, orgsBusy: false, sourceHost, targetHost});
+    // Every metadata type the orgs can deploy (adds to the built-in list).
+    await Promise.all(orgs.filter(o => o.conn && (o.host === sourceHost || o.host === targetHost)).map(o => loadCatalog(o.conn)));
+    setRelease({orgs, orgsBusy: false, sourceHost, targetHost, catalogAt: Date.now()});
   } catch (e) {
     setRelease({orgsBusy: false, orgsError: e.message || String(e)});
   }

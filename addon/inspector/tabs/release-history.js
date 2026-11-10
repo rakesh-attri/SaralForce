@@ -10,7 +10,7 @@ import {sourcePathType} from "../../core/source-format.js";
 import {deployStatus} from "../shared/deploy-api.js";
 import {queryAll} from "../shared/deploy-api.js";
 import {rollbackPlan, restoreFromDrift, DRIFT_LABELS, formatBytes, trimSummary} from "../../core/release-history.js";
-import {listComponents} from "../shared/deploy-api.js";
+import {listComponents, loadCatalog} from "../shared/deploy-api.js";
 import {
   listReleases, listSnapshots, deleteRelease, deleteSnapshot, getSnapshot, snapshotComponents, saveSnapshot,
   loadBytes, usage, exportRelease, importRelease, putRelease
@@ -238,7 +238,8 @@ export function HistoryView({goTo}) {
     const partial = restore.length + remove.length < plan.restore.length + plan.remove.length;
     setRelease({pendingPlan: {kind: "rollback", title: `Roll back ${r.version}${partial ? " (partly)" : ""} · ${target.name}`,
       detail: `Restores ${restore.length} component(s)` + (remove.length ? ` and deletes ${remove.length} that ${r.version} added` : "") + ". Validate first, then Quick deploy.",
-      since: r.finishedAt || r.at, comps, keys: restore, destructive: membersFromKeys(remove), targetHost: r.targetHost, releaseId: r.id}});
+      since: r.finishedAt || r.at, comps, keys: restore, destructive: membersFromKeys(remove), targetHost: r.targetHost, releaseId: r.id,
+      sourceName: `${r.targetName || target.name} as it was before ${r.version || "the release"}${r.at ? " (" + new Date(r.at).toLocaleString(undefined, {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) + ")" : ""}`}});
     setRbPick(null);
     goTo("deploy");
   };
@@ -392,6 +393,7 @@ export function HistoryView({goTo}) {
   const takeSnapshot = () => work(async () => {
     const org = orgByHost(snapHost) || (st.orgs || []).find(o => o.isCurrent);
     if (!org) throw new Error("Pick an org.");
+    await loadCatalog(org.conn);
     const types = presetTypes(snapPresets);
     if (!types.length) throw new Error("Pick at least one kind of metadata.");
     const list = await listComponents(org.conn, types, {onProgress: (n, of) => setStatus(`Listing ${org.name}… ${n}/${of}`)});

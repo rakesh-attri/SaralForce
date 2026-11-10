@@ -59,7 +59,7 @@ export function SearchSelect({value, options, onChange, placeholder, emptyText, 
   };
 
   const display = open ? query : selected ? selected.label : (value || "");
-  return h("div", {className: "ff-combo" + (open ? " open" : "") + (className ? " " + className : ""), ref: wrapRef},
+  return h("div", {className: "ff-combo" + (open ? " open" : "") + (selected && selected.sub && !open ? " has-sub" : "") + (className ? " " + className : ""), ref: wrapRef},
     h("input", {
       className: "ff-combo-input",
       value: display,

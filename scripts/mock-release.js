@@ -3,7 +3,32 @@
 // Dev-only (scripts/dev-server.js). Failures can be forced with
 // GET /mock-release?fail=component|test|none ; GET /mock-release shows state.
 import {writeZip, readZip, base64ToBytes, bytesToBase64, bytesToText} from "../addon/core/zip.js";
-import {parsePackageXml, splitParentFile, pathToComponent} from "../addon/core/deploy.js";
+import {parsePackageXml, splitParentFile, pathToComponent, registerTypes, assembleParentFile, TYPE_BY_NAME} from "../addon/core/deploy.js";
+
+// What describeMetadata returns here: a few types beyond the built-in list.
+const DESCRIBE = [
+  {xmlName: "ApexClass", directoryName: "classes", suffix: "cls", metaFile: true, inFolder: false},
+  {xmlName: "Workflow", directoryName: "workflows", suffix: "workflow", metaFile: false, inFolder: false,
+    childXmlNames: ["WorkflowRule", "WorkflowAlert", "WorkflowFieldUpdate", "WorkflowOutboundMessage", "WorkflowTask"]},
+  {xmlName: "CaseSettings", directoryName: "settings", suffix: "settings", metaFile: false, inFolder: false},
+  {xmlName: "AccountSettings", directoryName: "settings", suffix: "settings", metaFile: false, inFolder: false},
+  {xmlName: "ExperienceBundle", directoryName: "experiences", metaFile: false, inFolder: false},
+  {xmlName: "OmniScript", directoryName: "omniScripts", suffix: "os", metaFile: false, inFolder: false},
+  {xmlName: "DecisionTable", directoryName: "decisionTables", suffix: "decisionTable", metaFile: false, inFolder: false},
+  {xmlName: "Document", directoryName: "documents", metaFile: true, inFolder: true},
+  {xmlName: "FlowDefinition", directoryName: "flowDefinitions", suffix: "flowDefinition", metaFile: false, inFolder: false},
+  {xmlName: "MatchingRules", directoryName: "matchingRules", suffix: "matchingRule", metaFile: false, inFolder: false, childXmlNames: ["MatchingRule"]}
+];
+registerTypes(DESCRIBE);
+const describeXml = () => "<describeMetadataResponse><result>" + DESCRIBE.map(d => "<metadataObjects>" +
+  [].concat(d.childXmlNames || []).map(c => `<childXmlNames>${c}</childXmlNames>`).join("") +
+  `<directoryName>${d.directoryName}</directoryName><inFolder>${d.inFolder}</inFolder><metaFile>${d.metaFile}</metaFile>` +
+  (d.suffix ? `<suffix>${d.suffix}</suffix>` : "") + `<xmlName>${d.xmlName}</xmlName></metadataObjects>`).join("") +
+  "<organizationNamespace></organizationNamespace><partialSaveAllowed>true</partialSaveAllowed><testRequired>false</testRequired></result></describeMetadataResponse>";
+
+const wfRule = (name, active, formula) => `<rules>\n        <fullName>${name}</fullName>\n        <active>${active}</active>\n        <formula>${formula}</formula>\n        <triggerType>onCreateOrTriggeringUpdate</triggerType>\n    </rules>`;
+const workflowXml = rules => `<?xml version="1.0" encoding="UTF-8"?>\n<Workflow xmlns="http://soap.sforce.com/2006/04/metadata">\n    ${rules.join("\n    ")}\n</Workflow>\n`;
+const settingsXml = (type, body) => `<?xml version="1.0" encoding="UTF-8"?>\n<${type} xmlns="http://soap.sforce.com/2006/04/metadata">\n    ${body}\n</${type}>\n`;
 
 export const ORG2_SESSION = "FAKE_SESSION_2";
 const day = 86400e3;
@@ -50,6 +75,11 @@ function baseObject(fields, rules = "") {
   return {label: "<label>Invoice</label>\n    <pluralLabel>Invoices</pluralLabel>\n    <sharingModel>ReadWrite</sharingModel>", fields, rules};
 }
 
+const fp = (field, editable) => `<fieldPermissions>\n        <editable>${editable}</editable>\n        <field>${field}</field>\n        <readable>true</readable>\n    </fieldPermissions>`;
+const profileXml = els => `<?xml version="1.0" encoding="UTF-8"?>\n<Profile xmlns="http://soap.sforce.com/2006/04/metadata">\n    ${els.join("\n    ")}\n</Profile>\n`;
+const mrule = (name, method, status) => `<matchingRules>\n        <fullName>${name}</fullName>\n        <label>${name.replace(/_/g, " ")}</label>\n        <matchingRuleItems>\n            <fieldName>Name</fieldName>\n            <matchingMethod>${method}</matchingMethod>\n        </matchingRuleItems>\n        <ruleStatus>${status}</ruleStatus>\n    </matchingRules>`;
+const matchXml = rules => `<?xml version="1.0" encoding="UTF-8"?>\n<MatchingRules xmlns="http://soap.sforce.com/2006/04/metadata">\n    ${rules.join("\n    ")}\n</MatchingRules>\n`;
+
 function makeOrgs() {
   const source = {
     name: "SaralForce Demo Org",
@@ -59,6 +89,22 @@ function makeOrgs() {
       InvoiceServiceTest: comp("Priya Nair", 3 * day, {"classes/InvoiceServiceTest.cls": TEST, "classes/InvoiceServiceTest.cls-meta.xml": meta("ApexClass")}),
       InvoiceReminderJob: comp("Priya Nair", 1 * day, {"classes/InvoiceReminderJob.cls": "public class InvoiceReminderJob implements Schedulable {\n    public void execute(SchedulableContext sc) {}\n}\n", "classes/InvoiceReminderJob.cls-meta.xml": meta("ApexClass")})
     },
+    Workflow: {
+      Case: comp("Priya Nair", 1 * day, {"workflows/Case.workflow": workflowXml([wfRule("Escalate_VIP", true, "ISPICKVAL(Priority, 'High')"), wfRule("Notify_Owner", true, "ISNEW()")])})
+    },
+    Settings: {
+      Case: comp("Rakesh Sharma", 1 * day, {"settings/Case.settings": settingsXml("CaseSettings", "<enableCaseFeed>true</enableCaseFeed>\n    <keepRecordTypeOnAssignmentRule>true</keepRecordTypeOnAssignmentRule>")}),
+      Account: comp("Rakesh Sharma", 5 * day, {"settings/Account.settings": settingsXml("AccountSettings", "<enableAccountTeams>true</enableAccountTeams>")})
+    },
+    ExperienceBundle: {
+      Customer_Portal1: comp("Priya Nair", 1 * day, {
+        "experiences/Customer_Portal1.site-meta.xml": settingsXml("ExperienceBundle", "<label>Customer Portal</label>\n    <type>ChatterNetworkPicasso</type>"),
+        "experiences/Customer_Portal1/config/mainAppPage.json": "{\n  \"appPageId\": \"home\",\n  \"theme\": \"Build Your Own (LWR)\"\n}\n"
+      })
+    },
+    OmniScript: {
+      Onboarding_English_1: comp("Shivam Ojha", 1 * day, {"omniScripts/Onboarding_English_1.os": settingsXml("OmniScript", "<name>Onboarding</name>\n    <isActive>true</isActive>\n    <versionNumber>1</versionNumber>")})
+    },
     NamedCredential: {
       Payment_Gateway: comp("Shivam Ojha", 0.1 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v2</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
@@ -66,6 +112,9 @@ function makeOrgs() {
       PayGateway_Sandbox: comp("Shivam Ojha", 0.05 * day, {"remoteSiteSettings/PayGateway_Sandbox.remoteSite": meta("RemoteSiteSetting", "\n    <isActive>true</isActive>\n    <url>https://sandbox.pay.example.com</url>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")}, 0.05 * day)
     },
     ExternalDataSource: {},
+    Profile: {"Sales User": comp("Priya Nair", 1 * day, {"profiles/Sales User.profile": profileXml([fp("Invoice__c.Amount__c", true), "<custom>true</custom>", "<userLicense>Salesforce</userLicense>"])})},
+    MatchingRules: {Account: {...comp("Autoproc", 40 * day, {"matchingRules/Account.matchingRule": matchXml([mrule("Standard_Account_Match", "Exact", "Active"), mrule("TestRule1", "FuzzyCompanyName", "Inactive")])}),
+      childAt: {"Account.TestRule1": {by: "Shivam Ojha", at: when(0.05 * day)}}}},
     PermissionSet: {
       Invoice_Manager: comp("Rakesh Sharma", 1 * day, {"permissionsets/Invoice_Manager.permissionset": meta("PermissionSet", "\n    <label>Invoice Manager</label>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
@@ -103,6 +152,7 @@ function makeOrgs() {
       InvoiceTrigger: comp("Deploy User", 40 * day, {"triggers/InvoiceTrigger.trigger": TRIGGER, "triggers/InvoiceTrigger.trigger-meta.xml": meta("ApexTrigger")})
     },
     Flow: {
+      Old_Routing: comp("Old Admin", 200 * day, {"flows/Old_Routing.flow": meta("Flow", "\n    <label>Old Routing</label>\n    <processType>AutoLaunchedFlow</processType>")}),
       Invoice_Approval: comp("Deploy User", 30 * day, {"flows/Invoice_Approval.flow": meta("Flow", "\n    <label>Invoice Approval</label>\n    <processType>AutoLaunchedFlow</processType>\n    <description>Routes invoices over 5,000 to finance</description>")})
     },
     CustomObject: {
@@ -115,7 +165,17 @@ function makeOrgs() {
       Payment_Gateway: comp("Deploy User", 30 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v1</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
     RemoteSiteSetting: {},
-    ExternalDataSource: {}
+    ExternalDataSource: {},
+    Profile: {"Sales User": comp("Deploy User", 30 * day, {"profiles/Sales User.profile": profileXml([fp("Invoice__c.Amount__c", false), "<custom>true</custom>", "<userLicense>Salesforce</userLicense>"])})},
+    MatchingRules: {Account: comp("Autoproc", 40 * day, {"matchingRules/Account.matchingRule": matchXml([mrule("Standard_Account_Match", "Exact", "Active")])})},
+    Workflow: {
+      Case: comp("Deploy User", 30 * day, {"workflows/Case.workflow": workflowXml([wfRule("Escalate_VIP", false, "ISPICKVAL(Priority, 'High')")])})
+    },
+    Settings: {
+      Case: comp("Deploy User", 30 * day, {"settings/Case.settings": settingsXml("CaseSettings", "<enableCaseFeed>false</enableCaseFeed>\n    <keepRecordTypeOnAssignmentRule>true</keepRecordTypeOnAssignmentRule>")})
+    },
+    ExperienceBundle: {},
+    OmniScript: {}
   };
   return {source, target};
 }
@@ -148,6 +208,10 @@ function objectXml(o, fieldNames, ruleNames, withParent) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">\n    ${parts.join("\n    ")}\n</CustomObject>\n`;
 }
 
+// Child types kept in one file per object (not CustomObject: handled above).
+const mockParent = type => { const p = (TYPE_BY_NAME[type] || {}).parent; return p && p !== "CustomObject" && p !== "CustomLabels" ? p : ""; };
+const parentPath = (parent, obj) => `${TYPE_BY_NAME[parent].dir}/${obj}.${TYPE_BY_NAME[parent].suffix}`;
+
 function listRows(org, type) {
   const rows = [];
   if (type === "CustomField" || type === "ValidationRule") {
@@ -157,12 +221,21 @@ function listRows(org, type) {
     }
     return rows;
   }
+  const parent = mockParent(type);
+  if (parent) {
+    for (const [obj, c] of Object.entries(org[parent] || {})) {
+      const {children} = splitParentFile(parent, obj, Object.values(c.files)[0]);
+      for (const k of children) if (k.type === type) rows.push({fullName: k.fullName, by: c.by, at: c.at, ...((c.childAt || {})[k.fullName] || {})});
+    }
+    return rows;
+  }
   for (const [name, c] of Object.entries(org[type] || {})) rows.push({fullName: name, by: c.by, at: c.at, created: c.created});
   return rows;
 }
 
 const RELEASE_TYPES = new Set(["ApexClass", "ApexTrigger", "LightningComponentBundle", "Flow", "CustomObject", "CustomField", "ValidationRule", "Layout",
-  "NamedCredential", "RemoteSiteSetting", "ExternalDataSource"]);
+  "NamedCredential", "RemoteSiteSetting", "ExternalDataSource", "WorkflowRule", "WorkflowAlert", "WorkflowFieldUpdate", "WorkflowOutboundMessage", "WorkflowTask",
+  "ExperienceBundle", "OmniScript", "DecisionTable", "Settings", "Profile", "MatchingRule"]);
 
 function retrieveZip(org, members) {
   const files = new Map();
@@ -177,6 +250,18 @@ function retrieveZip(org, members) {
       if (type === "CustomField" || type === "ValidationRule") {
         const [obj, child] = n.split(".");
         if (org.CustomObject[obj]) objEntry(obj)[type === "CustomField" ? "fields" : "rules"].add(child);
+        continue;
+      }
+      const parent = mockParent(type);
+      if (parent) {
+        const [obj] = n.split(".");
+        const w = (org[parent] || {})[obj];
+        if (!w) continue;
+        const {children} = splitParentFile(parent, obj, Object.values(w.files)[0]);
+        const path = parentPath(parent, obj);
+        const have = files.has(path) ? splitParentFile(parent, obj, files.get(path)).children : [];
+        const keep = [...have, ...children.filter(k => k.fullName === n && k.type === type)];
+        files.set(path, assembleParentFile(parent, "", keep.map(k => k.text)));
         continue;
       }
       const c = (org[type] || {})[n];
@@ -207,6 +292,18 @@ async function applyZip(org, files) {
       if (/<label>/.test(parentText)) cur.files.label = parentText.replace(/^[\s\S]*?<CustomObject[^>]*>\s*/, "").replace(/\s*<\/CustomObject>\s*$/, "");
       cur.at = when(0); cur.by = "Rakesh Sharma";
       org.CustomObject[c.fullName] = cur;
+      continue;
+    }
+    if (TYPE_BY_NAME[c.type] && TYPE_BY_NAME[c.type].hidden && c.type !== "Settings") {
+      org[c.type] = org[c.type] || {};
+      const cur = org[c.type][c.fullName] || comp("Rakesh Sharma", 0, {[path]: assembleParentFile(c.type, "", [])});
+      const now = splitParentFile(c.type, c.fullName, Object.values(cur.files)[0]).children;
+      const incoming = splitParentFile(c.type, c.fullName, text).children;
+      const merged = [...now.filter(k => !incoming.some(i => i.fullName === k.fullName && i.type === k.type)), ...incoming];
+      cur.files = {[path]: assembleParentFile(c.type, "", merged.map(k => k.text))};
+      cur.at = when(0); cur.by = "Rakesh Sharma";
+      cur.childAt = {...(cur.childAt || {}), ...Object.fromEntries(incoming.map(k => [k.fullName, {by: "Rakesh Sharma", at: when(0)}]))};
+      org[c.type][c.fullName] = cur;
       continue;
     }
     org[c.type] = org[c.type] || {};
@@ -244,6 +341,8 @@ function deployResultXml(d) {
   let details = "";
   if (done && d.compileErrors && d.compileErrors.length) {
     details += d.compileErrors.map(e => `<componentFailures><componentType>${e.type}</componentType><fileName>${e.file}</fileName><fullName>${e.name}</fullName><lineNumber>${e.line}</lineNumber><columnNumber>9</columnNumber><problem>${e.problem}</problem><problemType>Error</problemType></componentFailures>`).join("");
+  } else if (done && d.flowRefFail) {
+    details += `<componentFailures><componentType>Flow</componentType><fileName>flows/${d.flowRefFail}.flow</fileName><fullName>${d.flowRefFail}</fullName><problem>insufficient access rights on cross-reference id</problem><problemType>Error</problemType></componentFailures>`;
   } else if (done && failC) {
     details += `<componentFailures><componentType>ApexClass</componentType><fileName>classes/InvoiceService.cls</fileName><fullName>InvoiceService</fullName><lineNumber>11</lineNumber><problem>Variable does not exist: InvoiceTax</problem><problemType>Error</problemType></componentFailures>`;
   }
@@ -278,6 +377,10 @@ function mockCompile(files) {
 export async function releaseSoap(raw, res) {
   const org = raw.includes(ORG2_SESSION) ? orgs.target : orgs.source;
   const send = xml => { res.writeHead(200, {"Content-Type": "text/xml; charset=utf-8", "Access-Control-Allow-Origin": "*"}); res.end(xml); };
+  if (/<met:describeMetadata>/.test(raw)) {
+    send(env(describeXml()));
+    return true;
+  }
   if (/<met:listMetadata>/.test(raw)) {
     const types = [...raw.matchAll(/<met:type>([^<]+)<\/met:type>/g)].map(m => m[1]);
     if (!types.some(t => RELEASE_TYPES.has(t)) && org === orgs.source) return false;
@@ -313,6 +416,10 @@ export async function releaseSoap(raw, res) {
       failComponent: failMode === "component" || (files.has("classes/InvoiceService.cls") && !hasTax && !!org.ApexClass.InvoiceService),
       failTest: failMode === "test" && testLevel !== "NoTestRun"};
     if (d.compileErrors.length) d.failComponent = true;
+    const delXml = files.get("destructiveChangesPost.xml") || files.get("destructiveChanges.xml");
+    const delFlows = delXml ? (parsePackageXml(bytesToText(delXml)).Flow || []) : [];
+    d.flowRefFail = delFlows.find(n => n === "Old_Routing" && org.Flow && org.Flow[n]) || "";
+    if (d.flowRefFail) d.failComponent = true;
     deploys.set(d.id, d);
     lastDeployPaths = [...files.keys()];
     send(env(`<deployResponse><result><done>false</done><id>${d.id}</id><state>Queued</state></result></deployResponse>`));
@@ -381,11 +488,17 @@ export function releaseRest(req, res, url, json) {
     });
     return true;
   }
+  if (isOrg2 && /\/tooling\/sobjects\/Flow\/301U00000000009AAA/.test(url.pathname) && req.method === "DELETE") {
+    delete orgs.target.Flow.Old_Routing;
+    res.writeHead(204, {"Access-Control-Allow-Origin": "*"});
+    res.end();
+    return true;
+  }
   if (isOrg2 && /\/tooling\/sobjects\/FlowDefinition\//.test(url.pathname) && req.method === "PATCH") {
     let raw = "";
     req.on("data", c => { raw += c; });
     req.on("end", () => {
-      manual.flowActive = (JSON.parse(raw || "{}").Metadata || {}).activeVersionNumber || manual.flowActive;
+      manual.flowActive = (JSON.parse(raw || "{}").Metadata || {}).activeVersionNumber ?? manual.flowActive;
       res.writeHead(204, {"Access-Control-Allow-Origin": "*"});
       res.end();
     });
@@ -451,7 +564,17 @@ export function releaseRest(req, res, url, json) {
     if (isOrg2 && /FROM User WHERE IsActive/i.test(q)) return send([{Id: "005U00000000001AAA", Username: "priya@demo.saralforce.uat"}, {Id: "005U00000000002AAA", Username: "rakesh@demo.saralforce.uat"}]);
     if (isOrg2 && /FROM PermissionSet WHERE Name IN/i.test(q)) return send(orgs.target.PermissionSet && orgs.target.PermissionSet.Invoice_Manager ? [{Id: "0PSU00000000001AAA", Name: "Invoice_Manager"}] : []);
     if (isOrg2 && /FROM PermissionSetAssignment/i.test(q)) return send(manual.psa);
-    if (isOrg2 && /FROM FlowDefinition/i.test(q)) return send([{Id: "300U00000000001AAA", DeveloperName: "Invoice_Approval", LatestVersion: {VersionNumber: 3}, ActiveVersion: {VersionNumber: manual.flowActive}}]);
+    if (isOrg2 && /FROM Flow WHERE Definition/i.test(q)) {
+      const rows = [];
+      if (orgs.target.Flow.Old_Routing) rows.push({Id: "301U00000000009AAA", VersionNumber: 1, Status: "Obsolete", MasterLabel: "Old Routing", Definition: {DeveloperName: "Old_Routing"}});
+      if (orgs.target.Flow.Invoice_Approval) [1, 2, 3].forEach(n => rows.push({Id: "301U0000000000" + n + "AAA", VersionNumber: n, Status: n === manual.flowActive ? "Active" : "Obsolete", MasterLabel: "Invoice Approval", Definition: {DeveloperName: "Invoice_Approval"}}));
+      return send(rows.filter(r => q.includes("'" + r.Definition.DeveloperName + "'")));
+    }
+    if (isOrg2 && /FROM FlowDefinition/i.test(q)) {
+      const rows = [{Id: "300U00000000001AAA", DeveloperName: "Invoice_Approval", LatestVersion: {VersionNumber: 3}, ActiveVersion: manual.flowActive ? {VersionNumber: manual.flowActive} : null}];
+      if (orgs.target.Flow.Old_Routing) rows.push({Id: "300U00000000009AAA", DeveloperName: "Old_Routing", LatestVersion: {VersionNumber: 1}, ActiveVersion: null});
+      return send(/DeveloperName IN/i.test(q) ? rows.filter(r => q.includes("'" + r.DeveloperName + "'")) : rows);
+    }
     if (isOrg2 && /FROM CronTrigger/i.test(q)) return send(manual.scheduled.map(n => ({CronJobDetail: {Name: n}})));
   }
   if (!/\/query\/?$/.test(url.pathname)) {

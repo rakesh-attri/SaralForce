@@ -26,7 +26,8 @@ export function rollbackPlan(release, snapshotKeys, missing) {
   const unknown = [];
   for (const k of release.items || []) {
     if (has(k)) restore.push(real(k));
-    else if (wasMissing.has(k.toLowerCase())) remove.push(k);
+    // Settings can't be deleted; they are put back from the snapshot or left as they are.
+    else if (wasMissing.has(k.toLowerCase()) && splitKey(k).type !== "Settings") remove.push(k);
     else unknown.push(k);
   }
   for (const k of release.deletes || []) {

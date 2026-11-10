@@ -92,6 +92,7 @@ export function ManualView({goTo}) {
   const [err, setErr] = React.useState("");
   const [script, setScript] = React.useState("");
   const [custom, setCustom] = React.useState("");
+  const [customPhase, setCustomPhase] = React.useState("pre");
   const [aiBusy, setAiBusy] = React.useState(false);
   const [aiErr, setAiErr] = React.useState("");
   const [aiSteps, setAiSteps] = React.useState(null);
@@ -101,7 +102,10 @@ export function ManualView({goTo}) {
       const real = list.filter(r => r.kind !== "validation");
       setReleases(real);
       // Right after a deploy, open its runbook.
-      setPick(p => p || (real[0] && Date.now() - new Date(real[0].at).getTime() < 10 * 60e3 ? real[0].id : "current"));
+      // Opened from Deploy (pre-deployment steps): the selection about to go out.
+      const want = releaseState().manualPick;
+      if (want) setRelease({manualPick: null});
+      setPick(p => want || p || (real[0] && Date.now() - new Date(real[0].at).getTime() < 10 * 60e3 ? real[0].id : "current"));
     }).catch(() => setPick("current"));
   }, [st.historyTick]);
 
@@ -169,13 +173,13 @@ export function ManualView({goTo}) {
 
   const addScript = () => {
     if (!script.trim()) return;
-    save([...steps, {key: "script-" + Date.now(), id: "script", custom: true, phase: "post", title: "Run Apex script", why: "Your post-deploy script (anonymous Apex) in the target.",
+    save([...steps, {key: "script-" + Date.now(), id: "script", custom: true, phase: customPhase, title: "Run Apex script", why: `Your ${customPhase === "pre" ? "pre" : "post"}-deploy script (anonymous Apex) in the target.`,
       code: script.trim(), targets: [], auto: true, setup: "", status: "todo", log: ""}]);
     setScript("");
   };
   const addCustom = () => {
     if (!custom.trim()) return;
-    save([...steps, {key: "own-" + Date.now(), id: "own", custom: true, phase: "post", title: custom.trim().slice(0, 140), why: "",
+    save([...steps, {key: "own-" + Date.now(), id: "own", custom: true, phase: customPhase, title: custom.trim().slice(0, 140), why: "",
       targets: [], auto: false, setup: "", status: "todo", log: ""}]);
     setCustom("");
   };
@@ -256,9 +260,15 @@ export function ManualView({goTo}) {
             onRemove: () => save(steps.filter(x => x.key !== s.key))})));
       }),
       steps && h("details", {className: "rel-paste"},
-        h("summary", null, "Add a post-deploy Apex script or your own step"),
+        h("summary", null, "Add your own step or Apex script (before or after the deploy)"),
+        h("div", {className: "rel-modes rel-phase-pick", role: "radiogroup", "aria-label": "When"},
+          [["pre", "⏮️", "Before the deploy", "Pre-deployment"], ["post", "⏭️", "After the deploy", "Post-deployment"]].map(([id, ico, title, sub]) =>
+            h("label", {key: id, className: "rel-mode-opt" + (customPhase === id ? " active" : "")},
+              h("input", {type: "radio", name: "rel-phase", checked: customPhase === id, onChange: () => setCustomPhase(id)}),
+              h("span", {className: "rel-mode-ico", "aria-hidden": "true"}, ico),
+              h("span", {className: "rel-mode-tx"}, h("span", {className: "rel-mode-title"}, title), h("span", {className: "rel-mode-sub"}, sub))))),
         h("textarea", {className: "soql-save-input rel-textarea", rows: 5, value: script, onChange: e => setScript(e.target.value),
-          placeholder: "insert new Region__c(Name = 'EMEA');", "aria-label": "Post-deploy Apex script"}),
+          placeholder: "insert new Region__c(Name = 'EMEA');", "aria-label": "Apex script"}),
         h("div", {className: "soql-save-row"},
           h("button", {className: "btn btn-secondary btn-sm", disabled: !script.trim(), onClick: addScript}, "Add script step")),
         h("div", {className: "soql-save-row"},

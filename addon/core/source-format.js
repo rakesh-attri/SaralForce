@@ -3,6 +3,10 @@
 // deployed. Pure: works on components (deploy.js componentsFromZip shape)
 // and plain file maps.
 import {TYPE_BY_NAME, METADATA_TYPES, assembleParentFile, componentsFromZip, compKey, pathToComponent} from "./deploy.js";
+
+// Parent files kept whole in source format (workflows, sharing rules…):
+// their children are put back into one file.
+const WHOLE_PARENTS = new Set(["Workflow", "SharingRules", "AssignmentRules", "AutoResponseRules", "EscalationRules", "MatchingRules"]);
 import {writeZip} from "./zip.js";
 
 // Folder meta files: mdapi "reports/Sales-meta.xml" ↔ DX "reports/Sales.reportFolder-meta.xml".
@@ -45,12 +49,20 @@ function docToChild(tag, xml) {
 export function toSourceFiles(comps, base = "force-app/main/default") {
   const out = new Map();
   const labels = [];
+  const wholes = new Map(); // mdapi parent path → {type, parentText, children[]}
   for (const c of comps.values()) {
     for (const [path, text] of Object.entries(c.files)) {
       const raw = c.raw && c.raw[path];
       const hash = path.indexOf("#");
       if (hash >= 0) {
         if (c.type === "CustomLabel") { labels.push(text.trim()); continue; }
+        const parentType = TYPE_BY_NAME[c.type] && TYPE_BY_NAME[c.type].parent;
+        if (WHOLE_PARENTS.has(parentType)) {
+          const p = path.slice(0, hash);
+          if (!wholes.has(p)) wholes.set(p, {type: parentType, parentText: "", children: []});
+          wholes.get(p).children.push(text);
+          continue;
+        }
         const map = CHILD_SOURCE[c.type];
         if (!map) continue;
         const [obj, name] = c.fullName.split(".");
@@ -59,6 +71,11 @@ export function toSourceFiles(comps, base = "force-app/main/default") {
       }
       if (c.type === "CustomObject") {
         out.set(joinPath(base, `objects/${c.fullName}/${c.fullName}.object-meta.xml`), text);
+        continue;
+      }
+      if (WHOLE_PARENTS.has(c.type)) {
+        if (!wholes.has(path)) wholes.set(path, {type: c.type, parentText: "", children: []});
+        wholes.get(path).parentText = text;
         continue;
       }
       const def = TYPE_BY_NAME[c.type];
@@ -72,6 +89,7 @@ export function toSourceFiles(comps, base = "force-app/main/default") {
       out.set(joinPath(base, needsMeta ? path + "-meta.xml" : path), raw || text);
     }
   }
+  for (const [p, w] of wholes) out.set(joinPath(base, p + "-meta.xml"), assembleParentFile(w.type, w.parentText, w.children));
   if (labels.length) {
     out.set(joinPath(base, "labels/CustomLabels.labels-meta.xml"),
       `${XML_HEAD}<CustomLabels ${NS}>\n    ${labels.join("\n    ")}\n</CustomLabels>\n`);
@@ -79,7 +97,8 @@ export function toSourceFiles(comps, base = "force-app/main/default") {
   return out;
 }
 
-const DIRS = new Set(METADATA_TYPES.filter(t => t.dir).map(t => t.dir));
+// Folders of known types (grows when the org's types are loaded).
+const isTypeDir = dir => METADATA_TYPES.some(t => t.dir === dir);
 
 // Source files (Map relPath under base → bytes) → Metadata API files map.
 export function sourceToMdapi(files, decode) {
@@ -92,7 +111,7 @@ export function sourceToMdapi(files, decode) {
   };
   for (const [path, bytes] of files) {
     const parts = path.split("/");
-    if (!DIRS.has(parts[0])) continue;
+    if (!isTypeDir(parts[0])) continue;
     if (parts[0] === "objects" && parts.length >= 3) {
       const name = parts[1];
       if (parts.length === 3 && parts[2] === `${name}.object-meta.xml`) { obj(name).parent = decode(bytes); continue; }

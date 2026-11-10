@@ -36,6 +36,25 @@ export const STEP_CATALOG = [
     }
   },
   {
+    id: "pause-jobs", phase: "pre", auto: true, setup: "/lightning/setup/ScheduledJobs/home",
+    title: "Pause scheduled jobs of the classes you deploy",
+    why: "Salesforce rejects a deploy of an Apex class that has scheduled jobs (unless “Allow deployments of components when corresponding Apex jobs are pending or in progress” is on in Deployment Settings). SaralForce stops those jobs in the target and lists their timing; “Schedule Apex jobs” after the deploy puts them back.",
+    detect: ctx => names(ctx.items || [], "ApexClass").filter(n => /\bimplements\b[^{]*\bSchedulable\b/i.test(textOf(ctx, "ApexClass:" + n)))
+  },
+  {
+    id: "flow-deactivate", phase: "pre", auto: true, setup: "/lightning/setup/Flows/home",
+    title: "Deactivate flows you are deleting",
+    why: "Salesforce can't delete a flow while a version is active or still in use (paused runs, queued scheduled paths, other metadata calling it). SaralForce deactivates them in the target; Deploy also checks what uses them before deleting.",
+    detect: ctx => names(ctx.deletes || [], "Flow")
+  },
+  {
+    id: "rule-users", phase: "pre", auto: false, setup: "/lightning/setup/Queues/home",
+    title: "Create the users and queues these rules send work to",
+    why: "Assignment, escalation and approval rules name users and queues. The deploy fails if the target doesn't have them; queues and users are not metadata here.",
+    detect: ctx => ["AssignmentRules", "EscalationRules", "ApprovalProcess"].flatMap(t => names(ctx.items || [], t)
+      .filter(n => { const x = textOf(ctx, t + ":" + n); return !x || /<(assignedTo|approver|queue)>/i.test(x); }).map(n => n + " (" + typeLabel(t) + ")"))
+  },
+  {
     id: "tab-launcher", phase: "post", auto: true, setup: "/lightning/setup/CustomTabs/home",
     title: "Make new tabs show in the App Launcher",
     why: "Salesforce applies tab visibility only after the tab is saved in the target. SaralForce saves each tab again for you.",
@@ -132,6 +151,11 @@ export function mergeRunbook(saved, detected) {
 export function sortRunbook(steps) {
   const rank = s => (s.phase === "pre" ? 0 : 1);
   return steps.map((s, i) => ({s, i})).sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i).map(x => x.s);
+}
+
+// "Before the deploy" steps not done or skipped yet.
+export function pendingPreSteps(steps) {
+  return (steps || []).filter(s => s.phase === "pre" && s.status !== "done" && s.status !== "skipped");
 }
 
 export function runbookProgress(steps) {

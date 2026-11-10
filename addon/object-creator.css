@@ -12189,6 +12189,59 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
   min-width: 200px;
 }
 
+.rel-type {
+  min-width: 280px;
+}
+
+/* A selected value with its API name: keep the two from overlapping. */
+.ff-combo.has-sub .ff-combo-input {
+  padding-right: calc(38% + 34px);
+  text-overflow: ellipsis;
+}
+
+.ff-combo.has-sub .ff-combo-sub {
+  max-width: 38%;
+}
+
+.rel-found {
+  margin: 4px 0 10px;
+}
+
+.rel-found-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.rel-chip-all {
+  font-weight: 600;
+}
+
+/* "More types" looks like a chip, not a text box. */
+.rel-more-types .ff-combo-input {
+  font-size: 11px;
+  padding: 3px 24px 3px 10px;
+  border: 1px dashed #9db8e6;
+  border-radius: 999px;
+  background: #fff;
+  color: #0176d3;
+  cursor: pointer;
+}
+
+.rel-more-types .ff-combo-input::placeholder {
+  color: #0176d3;
+  opacity: 1;
+}
+
+.rel-more-types .ff-combo-caret {
+  right: 9px;
+  font-size: 9px;
+}
+
 .rel-table-wrap {
   max-height: 520px;
   overflow: auto;
@@ -13064,4 +13117,133 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
   margin-top: 4px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.rel-more-types {
+  width: 190px;
+}
+
+.rel-prestrip {
+  margin-bottom: 10px;
+}
+
+.rel-phase-pick {
+  margin: 8px 0;
+}
+
+.rel-flowhelp {
+  display: block;
+}
+
+.rel-flowhelp .rel-pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
+.rel-flowhelp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Compare: what a deploy does to each row in the target. */
+.rel-act {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.rel-act-off {
+  color: #8a94a6;
+  font-weight: 500;
+}
+
+.rel-act-add {
+  color: #2e844a;
+}
+
+.rel-act-mod {
+  color: #a96404;
+}
+
+.rel-act-del {
+  color: #c23934;
+}
+
+.rel-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rel-st-diff.on { background: #eef4ff; border-color: #0176d3; color: #0b5cab; }
+
+.rel-fixed-src {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  border: 1px solid #d8e3f3;
+  border-radius: 8px;
+  background: #f7faff;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.rel-fixed-src .insp-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Compare: comparison filter and date range. */
+.rel-filter {
+  margin: 4px 0 8px;
+}
+
+.rel-filter-row,
+.rel-range,
+.rel-filter-actions,
+.rel-filter-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.rel-filter-combo {
+  min-width: 300px;
+}
+
+.rel-filter-edit {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #d8e3f3;
+  border-radius: 8px;
+  background: #f7faff;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rel-filter-actions {
+  justify-content: flex-end;
+}
+
+.rel-range-l {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #5c6b82;
+}
+
+.rel-table th.rel-sort {
+  cursor: pointer;
+  user-select: none;
+}
+
+.rel-table th.rel-sort.on {
+  color: #0176d3;
 }

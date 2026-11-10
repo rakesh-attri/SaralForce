@@ -4,6 +4,10 @@
 // Exact Salesforce error codes first, then (anchored) generic phrases, so a
 // validation message that happens to say "offline" isn't read as a network error.
 const RULES = [
+  [/insufficient access rights on cross-reference id/i, "Salesforce refused a reference (not your admin rights)",
+    "Something still points at what you are changing. For a flow delete: an active version, paused or waiting runs, queued scheduled-path actions, or metadata that calls the flow. Otherwise the item points at a record, user, queue or template ID the target doesn't have."],
+  [/did not run tests in the org/i, "This validation can't be quick deployed",
+    "Salesforce only quick-deploys validations that ran tests. Use “Deploy validated package” (no tests needed when there is no Apex), or validate again with Local or Specified tests."],
   [/\bFIELD_CUSTOM_VALIDATION_EXCEPTION\b/, "A validation rule blocked the save",
     "Fix the value the rule complains about (see details), then save again."],
   [/\bREQUIRED_FIELD_MISSING\b/, "A required field is empty",
