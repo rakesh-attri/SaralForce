@@ -4,7 +4,7 @@
 import {getRedirectUri, getClientId, getPKCEParameters, Constants} from "./utils.js";
 import {createSfClient} from "./core/sf-client.js";
 
-export let defaultApiVersion = "67.0";
+export let defaultApiVersion = "68.0";
 export let apiVersion = localStorage.getItem("apiVersion") == null ? defaultApiVersion : localStorage.getItem("apiVersion");
 
 export let sessionError;

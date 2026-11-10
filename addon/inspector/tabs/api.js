@@ -155,7 +155,7 @@ function ApiTab() {
                   h("select", {className: "mdn-input api-method", value: method, "aria-label": "Method", onChange: e => setMethod(e.target.value)},
                     METHODS.map(m => h("option", {key: m, value: m}, m))),
                   h("input", {className: "mdn-input api-path", value: path, spellCheck: false, "aria-label": "Path",
-                    placeholder: "/services/data/v67.0/sobjects/Account  or  sobjects/Account",
+                    placeholder: `/services/data/v${apiVersion}/sobjects/Account  or  sobjects/Account`,
                     onChange: e => setPath(e.target.value), onKeyDown: e => { if (e.key === "Enter") send(); }}),
                   h("button", {className: "btn btn-primary btn-sm", disabled: busy, onClick: () => send()}, busy ? "Sending…" : "Send ▸")),
                 WRITE_METHODS.has(method) && method !== "DELETE" && h("div", {className: "api-body"},

@@ -16,7 +16,7 @@ function client(handler, extra = {}) {
   const sf = createSfClient({
     getHost: () => "acme.my.salesforce.com",
     getSessionId: () => "SID",
-    getApiVersion: () => "67.0",
+    getApiVersion: () => "68.0",
     fetchImpl: async (url, init) => {
       calls.push({url, init});
       return handler(url, init, calls.length);
@@ -28,9 +28,9 @@ function client(handler, extra = {}) {
 
 test("request sends auth, call options and a cache-buster, and parses JSON", async () => {
   const {sf, calls} = client(() => response(200, {ok: true}));
-  assert.deepEqual(await sf.request("/services/data/v67.0/limits/"), {ok: true});
+  assert.deepEqual(await sf.request("/services/data/v68.0/limits/"), {ok: true});
   const {url, init} = calls[0];
-  assert.match(url, /^https:\/\/acme\.my\.salesforce\.com\/services\/data\/v67\.0\/limits\/\?cache=/);
+  assert.match(url, /^https:\/\/acme\.my\.salesforce\.com\/services\/data\/v68.0\/limits\/\?cache=/);
   assert.equal(init.headers.Authorization, "Bearer SID");
   assert.equal(init.headers["Sforce-Call-Options"], "client=SaralForce");
 });

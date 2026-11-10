@@ -33,7 +33,7 @@ const settingsXml = (type, body) => `<?xml version="1.0" encoding="UTF-8"?>\n<${
 export const ORG2_SESSION = "FAKE_SESSION_2";
 const day = 86400e3;
 const when = ago => new Date(Date.now() - ago).toISOString();
-const meta = (type, extra = "") => `<?xml version="1.0" encoding="UTF-8"?>\n<${type} xmlns="http://soap.sforce.com/2006/04/metadata">\n    <apiVersion>67.0</apiVersion>${extra}\n    <status>Active</status>\n</${type}>\n`;
+const meta = (type, extra = "") => `<?xml version="1.0" encoding="UTF-8"?>\n<${type} xmlns="http://soap.sforce.com/2006/04/metadata">\n    <apiVersion>68.0</apiVersion>${extra}\n    <status>Active</status>\n</${type}>\n`;
 const field = (name, type, extra = "") => `<fields>\n        <fullName>${name}</fullName>\n        <label>${name.replace(/__c$/, "").replace(/_/g, " ")}</label>\n${extra}        <type>${type}</type>\n    </fields>`;
 
 const INVOICE_V1 = `public with sharing class InvoiceService {
@@ -106,17 +106,17 @@ function makeOrgs() {
       Onboarding_English_1: comp("Shivam Ojha", 1 * day, {"omniScripts/Onboarding_English_1.os": settingsXml("OmniScript", "<name>Onboarding</name>\n    <isActive>true</isActive>\n    <versionNumber>1</versionNumber>")})
     },
     NamedCredential: {
-      Payment_Gateway: comp("Shivam Ojha", 0.1 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v2</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+      Payment_Gateway: comp("Shivam Ojha", 0.1 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v2</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
     RemoteSiteSetting: {
-      PayGateway_Sandbox: comp("Shivam Ojha", 0.05 * day, {"remoteSiteSettings/PayGateway_Sandbox.remoteSite": meta("RemoteSiteSetting", "\n    <isActive>true</isActive>\n    <url>https://sandbox.pay.example.com</url>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")}, 0.05 * day)
+      PayGateway_Sandbox: comp("Shivam Ojha", 0.05 * day, {"remoteSiteSettings/PayGateway_Sandbox.remoteSite": meta("RemoteSiteSetting", "\n    <isActive>true</isActive>\n    <url>https://sandbox.pay.example.com</url>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")}, 0.05 * day)
     },
     ExternalDataSource: {},
     Profile: {"Sales User": comp("Priya Nair", 1 * day, {"profiles/Sales User.profile": profileXml([fp("Invoice__c.Amount__c", true), "<custom>true</custom>", "<userLicense>Salesforce</userLicense>"])})},
     MatchingRules: {Account: {...comp("Autoproc", 40 * day, {"matchingRules/Account.matchingRule": matchXml([mrule("Standard_Account_Match", "Exact", "Active"), mrule("TestRule1", "FuzzyCompanyName", "Inactive")])}),
       childAt: {"Account.TestRule1": {by: "Shivam Ojha", at: when(0.05 * day)}}}},
     PermissionSet: {
-      Invoice_Manager: comp("Rakesh Sharma", 1 * day, {"permissionsets/Invoice_Manager.permissionset": meta("PermissionSet", "\n    <label>Invoice Manager</label>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+      Invoice_Manager: comp("Rakesh Sharma", 1 * day, {"permissionsets/Invoice_Manager.permissionset": meta("PermissionSet", "\n    <label>Invoice Manager</label>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
     ApexTrigger: {
       InvoiceTrigger: comp("Priya Nair", 40 * day, {"triggers/InvoiceTrigger.trigger": TRIGGER, "triggers/InvoiceTrigger.trigger-meta.xml": meta("ApexTrigger")})
@@ -138,7 +138,7 @@ function makeOrgs() {
       }, {Positive_Amount: "<validationRules>\n        <fullName>Positive_Amount</fullName>\n        <active>true</active>\n        <errorConditionFormula>Amount__c &lt; 0</errorConditionFormula>\n        <errorMessage>Amount must be positive</errorMessage>\n    </validationRules>"}))
     },
     Layout: {
-      "Invoice__c-Invoice Layout": comp("Rakesh Sharma", 2 * day, {"layouts/Invoice__c-Invoice Layout.layout": meta("Layout", "\n    <layoutSections>\n        <layoutColumns>\n            <layoutItems>\n                <field>Amount__c</field>\n            </layoutItems>\n            <layoutItems>\n                <field>Status__c</field>\n            </layoutItems>\n        </layoutColumns>\n    </layoutSections>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+      "Invoice__c-Invoice Layout": comp("Rakesh Sharma", 2 * day, {"layouts/Invoice__c-Invoice Layout.layout": meta("Layout", "\n    <layoutSections>\n        <layoutColumns>\n            <layoutItems>\n                <field>Amount__c</field>\n            </layoutItems>\n            <layoutItems>\n                <field>Status__c</field>\n            </layoutItems>\n        </layoutColumns>\n    </layoutSections>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")})
     }
   };
   const target = {
@@ -162,7 +162,7 @@ function makeOrgs() {
     },
     Layout: {},
     NamedCredential: {
-      Payment_Gateway: comp("Deploy User", 30 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v1</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>67.0</apiVersion>", "").replace("<status>Active</status>", "")})
+      Payment_Gateway: comp("Deploy User", 30 * day, {"namedCredentials/Payment_Gateway.namedCredential": meta("NamedCredential", "\n    <endpoint>https://pay.example.com/v1</endpoint>\n    <label>Payment Gateway</label>\n    <principalType>NamedUser</principalType>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")})
     },
     RemoteSiteSetting: {},
     ExternalDataSource: {},
@@ -272,7 +272,7 @@ function retrieveZip(org, members) {
     files.set(`objects/${name}.object`, objectXml(org.CustomObject[name].files, [...e.fields], [...e.rules], e.parent));
   }
   const pkgTypes = Object.entries(members).map(([t, ns]) => `<types>${ns.map(m => `<members>${m}</members>`).join("")}<name>${t}</name></types>`).join("");
-  files.set("package.xml", `<?xml version="1.0" encoding="UTF-8"?><Package xmlns="http://soap.sforce.com/2006/04/metadata">${pkgTypes}<version>67.0</version></Package>`);
+  files.set("package.xml", `<?xml version="1.0" encoding="UTF-8"?><Package xmlns="http://soap.sforce.com/2006/04/metadata">${pkgTypes}<version>68.0</version></Package>`);
   return bytesToBase64(writeZip(files));
 }
 
