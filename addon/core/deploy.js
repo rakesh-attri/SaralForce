@@ -62,34 +62,191 @@ export const METADATA_TYPES = [
   {name: "LightningMessageChannel", label: "Message channel", dir: "messageChannels", suffix: "messageChannel"},
   {name: "Queue", label: "Queue", dir: "queues", suffix: "queue"},
   {name: "Group", label: "Public group", dir: "groups", suffix: "group"},
-  {name: "Role", label: "Role", dir: "roles", suffix: "role"}
+  {name: "Role", label: "Role", dir: "roles", suffix: "role"},
+  {name: "SharingReason", label: "Sharing reason", parent: "CustomObject", tag: "sharingReasons"},
+  {name: "Workflow", label: "Workflow file", dir: "workflows", suffix: "workflow", hidden: true},
+  {name: "WorkflowRule", label: "Workflow rule", parent: "Workflow", tag: "rules"},
+  {name: "WorkflowAlert", label: "Email alert", parent: "Workflow", tag: "alerts"},
+  {name: "WorkflowFieldUpdate", label: "Field update", parent: "Workflow", tag: "fieldUpdates"},
+  {name: "WorkflowOutboundMessage", label: "Outbound message", parent: "Workflow", tag: "outboundMessages"},
+  {name: "WorkflowTask", label: "Workflow task", parent: "Workflow", tag: "tasks"},
+  {name: "WorkflowKnowledgePublish", label: "Knowledge publish", parent: "Workflow", tag: "knowledgePublishes"},
+  {name: "WorkflowFlowAction", label: "Workflow flow action", parent: "Workflow", tag: "flowActions"},
+  {name: "WorkflowSend", label: "Workflow send", parent: "Workflow", tag: "send"},
+  {name: "SharingRules", label: "Sharing rules file", dir: "sharingRules", suffix: "sharingRules", hidden: true},
+  {name: "SharingCriteriaRule", label: "Criteria sharing rule", parent: "SharingRules", tag: "sharingCriteriaRules"},
+  {name: "SharingOwnerRule", label: "Owner sharing rule", parent: "SharingRules", tag: "sharingOwnerRules"},
+  {name: "SharingTerritoryRule", label: "Territory sharing rule", parent: "SharingRules", tag: "sharingTerritoryRules"},
+  {name: "SharingGuestRule", label: "Guest sharing rule", parent: "SharingRules", tag: "sharingGuestRules"},
+  // One file per object holds every rule; each rule is compared on its own
+  // (the file's date doesn't move when one rule changes).
+  {name: "AssignmentRules", label: "Assignment rules file", dir: "assignmentRules", suffix: "assignmentRules", hidden: true},
+  {name: "AssignmentRule", label: "Assignment rule", parent: "AssignmentRules", tag: "assignmentRule"},
+  {name: "AutoResponseRules", label: "Auto-response rules file", dir: "autoResponseRules", suffix: "autoResponseRules", hidden: true},
+  {name: "AutoResponseRule", label: "Auto-response rule", parent: "AutoResponseRules", tag: "autoResponseRule"},
+  {name: "EscalationRules", label: "Escalation rules file", dir: "escalationRules", suffix: "escalationRules", hidden: true},
+  {name: "EscalationRule", label: "Escalation rule", parent: "EscalationRules", tag: "escalationRule"},
+  {name: "MatchingRules", label: "Matching rules file", dir: "matchingRules", suffix: "matchingRule", hidden: true},
+  {name: "MatchingRule", label: "Matching rule", parent: "MatchingRules", tag: "matchingRules"},
+  {name: "Index", label: "Index", parent: "CustomObject", tag: "indexes"},
+  {name: "EntitlementProcess", label: "Entitlement process", dir: "entitlementProcesses", suffix: "entitlementProcess"},
+  {name: "MilestoneType", label: "Milestone type", dir: "milestoneTypes", suffix: "milestoneType"},
+  {name: "Settings", label: "Org settings", dir: "settings", suffix: "settings"},
+  {name: "ReportType", label: "Report type", dir: "reportTypes", suffix: "reportType"},
+  {name: "Document", label: "Document", dir: "documents", meta: true, folder: "DocumentFolder"},
+  {name: "Letterhead", label: "Letterhead", dir: "letterhead", suffix: "letter"},
+  {name: "AnalyticSnapshot", label: "Reporting snapshot", dir: "analyticSnapshots", suffix: "snapshot"},
+  {name: "ContentAsset", label: "Content asset", dir: "contentassets", suffix: "asset", meta: true},
+  {name: "ApexTestSuite", label: "Apex test suite", dir: "testSuites", suffix: "testSuite"},
+  {name: "PlatformCachePartition", label: "Platform cache partition", dir: "cachePartitions", suffix: "cachePartition"},
+  {name: "PlatformEventChannel", label: "Platform event channel", dir: "platformEventChannels", suffix: "platformEventChannel"},
+  {name: "PlatformEventChannelMember", label: "Event channel member", dir: "platformEventChannelMembers", suffix: "platformEventChannelMember"},
+  {name: "TopicsForObjects", label: "Topics for objects", dir: "topicsForObjects", suffix: "topicsForObjects"},
+  {name: "SharingSet", label: "Sharing set", dir: "sharingSets", suffix: "sharingSet"},
+  {name: "MutingPermissionSet", label: "Muting permission set", dir: "mutingpermissionsets", suffix: "mutingpermissionset"},
+  {name: "AuthProvider", label: "Auth provider", dir: "authproviders", suffix: "authprovider"},
+  {name: "ProfilePasswordPolicy", label: "Profile password policy", dir: "profilePasswordPolicies", suffix: "profilePasswordPolicy"},
+  {name: "ProfileSessionSetting", label: "Profile session setting", dir: "profileSessionSettings", suffix: "profileSessionSetting"},
+  {name: "TransactionSecurityPolicy", label: "Transaction security policy", dir: "transactionSecurityPolicies", suffix: "transactionSecurityPolicy"},
+  {name: "Network", label: "Experience site (network)", dir: "networks", suffix: "network"},
+  {name: "CustomSite", label: "Site", dir: "sites", suffix: "site"},
+  {name: "ExperienceBundle", label: "Experience bundle", dir: "experiences", bundle: true},
+  {name: "DigitalExperienceBundle", label: "Digital experience", dir: "digitalExperiences", bundle: true, depth: 2},
+  {name: "NavigationMenu", label: "Navigation menu", dir: "navigationMenus", suffix: "navigationMenu"},
+  {name: "BrandingSet", label: "Branding set", dir: "brandingSets", suffix: "brandingSet"},
+  {name: "Translations", label: "Translations", dir: "translations", suffix: "translation"},
+  {name: "CustomObjectTranslation", label: "Object translation", dir: "objectTranslations", suffix: "objectTranslation"},
+  {name: "StandardValueSetTranslation", label: "Value set translation", dir: "standardValueSetTranslations", suffix: "standardValueSetTranslation"},
+  {name: "GlobalValueSetTranslation", label: "Global value set translation", dir: "globalValueSetTranslations", suffix: "globalValueSetTranslation"},
+  {name: "GenAiPromptTemplate", label: "Prompt template", dir: "genAiPromptTemplates", suffix: "genAiPromptTemplate"},
+  {name: "GenAiPlugin", label: "Agent topic", dir: "genAiPlugins", suffix: "genAiPlugin"},
+  {name: "GenAiFunction", label: "Agent action", dir: "genAiFunctions", bundle: true},
+  {name: "Bot", label: "Bot / agent", dir: "bots", suffix: "bot"}
 ];
 
-export const TYPE_BY_NAME = Object.fromEntries(METADATA_TYPES.map(t => [t.name, t]));
-const TYPE_BY_DIR = Object.fromEntries(METADATA_TYPES.filter(t => t.dir).map(t => [t.dir, t]));
-const CHILD_TYPES = METADATA_TYPES.filter(t => t.parent);
+// Lookups, kept in step with METADATA_TYPES (registerTypes adds to it).
+export const TYPE_BY_NAME = {};
+const TYPE_BY_DIR = {};
+const CHILD_TYPES = [];
+function reindex() {
+  for (const k of Object.keys(TYPE_BY_NAME)) delete TYPE_BY_NAME[k];
+  for (const k of Object.keys(TYPE_BY_DIR)) delete TYPE_BY_DIR[k];
+  CHILD_TYPES.length = 0;
+  for (const t of METADATA_TYPES) {
+    TYPE_BY_NAME[t.name] = t;
+    if (t.dir && !TYPE_BY_DIR[t.dir]) TYPE_BY_DIR[t.dir] = t;
+    if (t.parent) CHILD_TYPES.push(t);
+  }
+}
+reindex();
+
+// "AccountSettings" → member "Account" of type Settings (package.xml form).
+const SETTINGS_MEMBERS = new Set();
+export function settingsMembers() {
+  return [...SETTINGS_MEMBERS].sort();
+}
+
+// Child types kept inside a parent file, with the tag they use there.
+const CHILD_TAGS = Object.fromEntries(METADATA_TYPES.filter(t => t.parent).map(t => [t.name, [t.parent, t.tag]]));
+
+// "EscalationRules" → "Escalation rules"
+function labelFromName(name) {
+  const words = name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").split(" ");
+  return words.map((w, i) => (i && /^[A-Z][a-z]/.test(w) ? w.toLowerCase() : w)).join(" ");
+}
+
+// describeMetadata(metadataObjects) → every type this org can deploy.
+// Adds unknown types (and corrects where a built-in layout differs).
+// Returns the number of types added.
+export function registerTypes(described) {
+  let added = 0;
+  for (const d of described || []) {
+    const name = d && d.xmlName;
+    if (!name) continue;
+    const dir = d.directoryName || "";
+    const suffix = d.suffix || "";
+    const meta = d.metaFile === true || d.metaFile === "true";
+    const inFolder = d.inFolder === true || d.inFolder === "true";
+    if (dir === "settings" && /Settings$/.test(name)) {
+      SETTINGS_MEMBERS.add(name.replace(/Settings$/, ""));
+      continue;
+    }
+    const known = METADATA_TYPES.find(t => t.name === name);
+    if (known) {
+      if (!known.parent && dir) { known.dir = dir; if (suffix) known.suffix = suffix; known.meta = meta || !!known.meta; }
+    } else {
+      METADATA_TYPES.push({name, label: labelFromName(name), dir, suffix: suffix || undefined, meta,
+        bundle: !suffix && !inFolder, folder: inFolder ? (name === "EmailTemplate" ? "EmailFolder" : name + "Folder") : undefined, described: true});
+      added++;
+    }
+    for (const kid of [].concat(d.childXmlNames || [])) {
+      if (!kid || METADATA_TYPES.some(t => t.name === kid) || !CHILD_TAGS[kid]) continue;
+      METADATA_TYPES.push({name: kid, label: labelFromName(kid), parent: CHILD_TAGS[kid][0], tag: CHILD_TAGS[kid][1], described: true});
+      added++;
+    }
+  }
+  reindex();
+  return added;
+}
+
+// Types whose file holds child components (objects, labels, workflows…).
+export function hasChildTypes(type) {
+  return CHILD_TYPES.some(c => c.parent === type);
+}
 
 export function typeLabel(name) {
-  return (TYPE_BY_NAME[name] && TYPE_BY_NAME[name].label) || name;
+  return (TYPE_BY_NAME[name] && TYPE_BY_NAME[name].label) || labelFromName(name);
 }
 
 export const TYPE_PRESETS = [
-  {id: "apex", label: "Apex", types: ["ApexClass", "ApexTrigger", "ApexPage", "ApexComponent"]},
+  {id: "apex", label: "Apex", types: ["ApexClass", "ApexTrigger", "ApexPage", "ApexComponent", "ApexTestSuite", "PlatformCachePartition", "PlatformEventChannel", "PlatformEventChannelMember"]},
   {id: "ui", label: "LWC & Aura", types: ["LightningComponentBundle", "AuraDefinitionBundle", "StaticResource", "LightningMessageChannel"]},
   {id: "flows", label: "Flows", types: ["Flow"]},
-  {id: "objects", label: "Objects & fields", types: ["CustomObject", "CustomField", "ValidationRule", "RecordType", "ListView", "WebLink", "CompactLayout", "FieldSet", "BusinessProcess", "GlobalValueSet"]},
+  {id: "objects", label: "Objects & fields", types: ["CustomObject", "CustomField", "ValidationRule", "RecordType", "ListView", "WebLink", "CompactLayout", "FieldSet", "BusinessProcess", "SharingReason", "GlobalValueSet", "StandardValueSet", "TopicsForObjects"]},
   {id: "pages", label: "Layouts & pages", types: ["Layout", "FlexiPage", "QuickAction", "CustomTab", "CustomApplication", "PathAssistant"]},
-  {id: "security", label: "Security", types: ["PermissionSet", "PermissionSetGroup", "CustomPermission", "Profile"]},
+  {id: "security", label: "Security", types: ["PermissionSet", "PermissionSetGroup", "CustomPermission", "Profile", "MutingPermissionSet", "Role",
+    "SharingCriteriaRule", "SharingOwnerRule", "SharingTerritoryRule", "SharingGuestRule", "SharingSet", "AuthProvider",
+    "ProfilePasswordPolicy", "ProfileSessionSetting", "TransactionSecurityPolicy"]},
+  {id: "automation", label: "Automation rules", types: ["WorkflowRule", "WorkflowAlert", "WorkflowFieldUpdate", "WorkflowOutboundMessage", "WorkflowTask",
+    "WorkflowKnowledgePublish", "WorkflowFlowAction", "WorkflowSend", "AssignmentRule", "AutoResponseRule", "EscalationRule", "MatchingRule",
+    "EntitlementProcess", "MilestoneType"]},
   {id: "config", label: "Config & labels", types: ["CustomMetadata", "CustomLabel", "CustomNotificationType", "DuplicateRule", "ApprovalProcess"]},
   {id: "integrations", label: "Integrations", types: ["NamedCredential", "ExternalCredential", "ExternalDataSource", "RemoteSiteSetting", "CspTrustedSite",
     "ExternalServiceRegistration", "ConnectedApp", "ExternalClientApplication", "ExtlClntAppOauthSettings", "ExtlClntAppOauthConfigurablePolicies"]},
-  {id: "content", label: "Email & reports", types: ["EmailTemplate", "Report", "Dashboard"]}
+  {id: "content", label: "Reports & content", types: ["EmailTemplate", "Report", "Dashboard", "ReportType", "Document", "Letterhead", "AnalyticSnapshot", "ContentAsset"]},
+  {id: "settings", label: "Org settings", types: ["Settings"]},
+  {id: "experience", label: "Experience", types: ["Network", "CustomSite", "ExperienceBundle", "DigitalExperienceBundle", "DigitalExperienceConfig", "NavigationMenu", "BrandingSet", "SiteDotCom"]},
+  {id: "translations", label: "Translations", types: ["Translations", "CustomObjectTranslation", "StandardValueSetTranslation", "GlobalValueSetTranslation"]},
+  {id: "ai", label: "AI & Agentforce", types: ["GenAiFunction", "GenAiPlugin", "GenAiPromptTemplate", "GenAiPromptTemplateActv", "Bot", "BotVersion", "AiAuthoringBundle"]},
+  {id: "omni", label: "OmniStudio", types: ["OmniScript", "OmniUiCard", "OmniDataTransform", "OmniIntegrationProcedure"]}
 ];
 
+// Picker value prefix for a single type chosen under "More types".
+export const TYPE_PICK = "type:";
+// Picker value meaning "every type this org has".
+export const ALL_TYPES = "all";
+
+// Old types describeMetadata still lists, replaced by newer ones (FlowDefinition
+// only activated flows before API 44; Flow does that now).
+export const DEPRECATED_TYPES = new Set(["FlowDefinition", "EventDelivery", "EventSubscription", "Scontrol", "ArticleType"]);
+
+export function allTypes() {
+  return METADATA_TYPES.filter(t => !t.hidden && !DEPRECATED_TYPES.has(t.name)).map(t => t.name);
+}
+
 export function presetTypes(ids) {
+  if (ids.includes(ALL_TYPES)) return allTypes();
   const out = new Set();
   for (const p of TYPE_PRESETS) if (ids.includes(p.id)) p.types.forEach(t => out.add(t));
-  return [...out];
+  for (const id of ids) if (String(id).startsWith(TYPE_PICK)) out.add(id.slice(TYPE_PICK.length));
+  // Only types this org has (built-in, or found by describeMetadata).
+  return [...out].filter(t => TYPE_BY_NAME[t]);
+}
+
+// Types not in any preset, for "More types" (listable ones only).
+export function otherTypes() {
+  const inPresets = new Set(TYPE_PRESETS.flatMap(p => p.types));
+  return METADATA_TYPES.filter(t => !t.hidden && !inPresets.has(t.name)).map(t => t.name).sort();
 }
 
 // Types listMetadata can be asked for directly (child types live in their
@@ -131,7 +288,11 @@ export function pathToComponent(path) {
   const parts = clean.split("/");
   const t = TYPE_BY_DIR[parts[0]];
   if (!t) return null;
-  if (t.bundle) return {type: t.name, fullName: parts[1]};
+  if (t.bundle) {
+    if (t.depth === 2) return parts.length > 3 ? {type: t.name, fullName: parts[1] + "/" + parts[2]} : null;
+    if (parts.length > 2) return {type: t.name, fullName: parts[1]};
+    return {type: t.name, fullName: parts[1].replace(/-meta\.xml$/, "").replace(/\.[^.]+$/, "")};
+  }
   let rest = parts.slice(1).join("/").replace(/-meta\.xml$/, "");
   if (t.suffix && rest.endsWith("." + t.suffix)) rest = rest.slice(0, -(t.suffix.length + 1));
   return {type: t.name, fullName: rest};
@@ -171,6 +332,7 @@ function innerFullName(text) {
 // the parent plus its child components.
 export function splitParentFile(parentType, parentName, xml) {
   const kids = CHILD_TYPES.filter(c => c.parent === parentType);
+  // (Children are named Parent.Child, labels by their own name.)
   const byTag = Object.fromEntries(kids.map(k => [k.tag, k]));
   const els = topLevelElements(xml);
   const children = [];
@@ -204,12 +366,13 @@ export function componentsFromZip(files, decode) {
   for (const [path, bytes] of files) {
     const c = pathToComponent(path);
     if (!c) continue;
-    const isText = TEXT_EXT.test(path) || !/\.[a-z0-9]+$/i.test(path);
+    const def = TYPE_BY_NAME[c.type];
+    const isText = TEXT_EXT.test(path) || !/\.[a-z0-9]+$/i.test(path) || !!(def && def.suffix && path.endsWith("." + def.suffix));
     const text = isText ? decode(bytes) : `binary ${bytes.length} bytes, crc ${crc32(bytes).toString(16)}`;
-    if (c.type === "CustomObject" || c.type === "CustomLabels") {
+    if (hasChildTypes(c.type) && !path.endsWith("-meta.xml")) {
       const {parentText, children} = splitParentFile(c.type, c.fullName, text);
       for (const kid of children) add(kid.type, kid.fullName, `${path}#${kid.type}/${kid.fullName}`, kid.text);
-      if (c.type === "CustomObject" && hasOwnContent(parentText)) add(c.type, c.fullName, path, parentText);
+      if (c.type !== "CustomLabels" && hasOwnContent(parentText)) add(c.type, c.fullName, path, parentText);
       continue;
     }
     add(c.type, c.fullName, path, text, bytes);
@@ -251,11 +414,11 @@ export function buildDeployEntries(keys, comps, apiVersion, {destructive = null,
       const hash = path.indexOf("#");
       if (hash >= 0) {
         const p = path.slice(0, hash);
-        const rootTag = p.startsWith("labels/") ? "CustomLabels" : "CustomObject";
+        const rootTag = (pathToComponent(p) || {type: "CustomObject"}).type;
         if (!parents.has(p)) parents.set(p, {rootTag, parentText: "", children: []});
         parents.get(p).children.push(text);
-      } else if (c.type === "CustomObject") {
-        if (!parents.has(path)) parents.set(path, {rootTag: "CustomObject", parentText: "", children: []});
+      } else if (hasChildTypes(c.type) && !path.endsWith("-meta.xml")) {
+        if (!parents.has(path)) parents.set(path, {rootTag: c.type, parentText: "", children: []});
         parents.get(path).parentText = text;
       } else if (trimProfiles && c.type === "Profile" && !path.endsWith("-meta.xml")) {
         entries.set(path, trimProfile(text, keys));
@@ -409,20 +572,33 @@ export function chunkMembers(members, maxFiles = 5000) {
 // Two copies of one parent file (objects/X.object, labels/CustomLabels.labels)
 // from different retrieve parts → one file holding the elements of both.
 export function mergeParentXml(a, b) {
-  const rootTag = (/<(CustomObject|CustomLabels)\b/.exec(a) || /<(CustomObject|CustomLabels)\b/.exec(b) || [])[1] || "CustomObject";
+  const root = /<(CustomObject|CustomLabels|Workflow|SharingRules|AssignmentRules|AutoResponseRules|EscalationRules|MatchingRules|Profile)\b/;
+  const rootTag = (root.exec(a) || root.exec(b) || [])[1] || "CustomObject";
   const seen = new Map();
   for (const xml of [a, b]) {
     for (const el of topLevelElements(xml)) {
       const text = xml.slice(el.start, el.end);
-      const name = innerFullName(text);
+      const name = rootTag === "Profile" ? "" : innerFullName(text);
       const key = el.tag + "|" + (name || text);
       if (!seen.has(key)) seen.set(key, text);
     }
   }
-  return assembleParentFile(rootTag, "", [...seen.values()]);
+  let els = [...seen.values()];
+  // A profile only holds the permissions for what was retrieved with it, so
+  // retrieve parts are pieced together, in Salesforce's order (by the item
+  // each entry is for) so both orgs' copies compare cleanly.
+  if (rootTag === "Profile") els = els.map(t => ({t, k: profileEntryKey(t)})).sort((x, y) => x.k.localeCompare(y.k)).map(x => x.t);
+  return assembleParentFile(rootTag, "", els);
 }
 
-const PARENT_FILE = /^(unpackaged\/)?(objects\/[^/]+\.object|labels\/[^/]+\.labels)$/;
+const PROFILE_KEY = /<(field|object|apexClass|apexPage|application|layout|recordType|tab|name|flow|customPermission|externalDataSource|customMetadataType|customSettings|startAddress)>([^<]*)</g;
+export function profileEntryKey(text) {
+  const tag = (/^<(\w+)/.exec(text.trim()) || [])[1] || "";
+  const ids = [...text.matchAll(PROFILE_KEY)].map(m => m[2]);
+  return tag + "|" + (ids.join("|") || text.trim());
+}
+
+const PARENT_FILE = /^(unpackaged\/)?(objects\/[^/]+\.object|labels\/[^/]+\.labels|workflows\/[^/]+\.workflow|sharingRules\/[^/]+\.sharingRules|assignmentRules\/[^/]+\.assignmentRules|autoResponseRules\/[^/]+\.autoResponseRules|escalationRules\/[^/]+\.escalationRules|matchingRules\/[^/]+\.matchingRule|profiles\/[^/]+\.profile)$/;
 
 // Adds a retrieve part's files to the running map, merging parent files.
 export function mergeZipFiles(into, part, decode) {
@@ -444,10 +620,10 @@ export function expandMemberKeys(members, comps) {
     for (const n of names) {
       if (n === "*") { all.filter(k => splitKey(k).type === type).forEach(k => keys.push(k)); }
       else keys.push(compKey(type, n));
-      if (type === "CustomObject") {
+      if (type !== "CustomLabels" && hasChildTypes(type)) {
         all.filter(k => {
           const p = splitKey(k);
-          return TYPE_BY_NAME[p.type] && TYPE_BY_NAME[p.type].parent === "CustomObject" && (n === "*" || p.fullName.startsWith(n + "."));
+          return TYPE_BY_NAME[p.type] && TYPE_BY_NAME[p.type].parent === type && (n === "*" || p.fullName.startsWith(n + "."));
         }).forEach(k => keys.push(k));
       }
       if (type === "CustomLabels") all.filter(k => splitKey(k).type === "CustomLabel").forEach(k => keys.push(k));

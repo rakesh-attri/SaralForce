@@ -113,14 +113,14 @@ test("normalize ignores package versions and blank lines", () => {
 
 test("package.xml parse, merge, members", () => {
   const xml = `<Package><types><members>A</members><members>B</members><name>ApexClass</name></types>
-    <types><members>X__c.F__c</members><name>CustomField</name></types><version>67.0</version></Package>`;
+    <types><members>X__c.F__c</members><name>CustomField</name></types><version>68.0</version></Package>`;
   const m = parsePackageXml(xml);
   assert.deepEqual(m, {ApexClass: ["A", "B"], CustomField: ["X__c.F__c"]});
   assert.deepEqual(mergeMembers(m, {ApexClass: ["C", "A"]}).ApexClass, ["A", "B", "C"]);
   assert.deepEqual(membersFromKeys(["ApexClass:Z", "Flow:F", "ApexClass:Y"]), {ApexClass: ["Y", "Z"], Flow: ["F"]});
   assert.equal(chunkMembers({ApexClass: ["a", "b", "c"]}, 4).length, 2);
-  assert.ok(deployExtraFiles({ApexClass: ["Old"]}, "67.0")["destructiveChangesPost.xml"].includes("<members>Old</members>"));
-  assert.deepEqual(deployExtraFiles({}, "67.0"), {});
+  assert.ok(deployExtraFiles({ApexClass: ["Old"]}, "68.0")["destructiveChangesPost.xml"].includes("<members>Old</members>"));
+  assert.deepEqual(deployExtraFiles({}, "68.0"), {});
 });
 
 test("managed components are skipped", () => {
@@ -181,7 +181,7 @@ test("deploy entries: only the chosen fields go into the object file", async () 
   ]), bytesToText);
   const {entries, included} = buildDeployEntries(
     [compKey("CustomField", "Invoice__c.Amount__c"), compKey("ApexClass", "A"), compKey("Flow", "Missing")],
-    comps, "67.0", {destructive: {ApexClass: ["Old"]}});
+    comps, "68.0", {destructive: {ApexClass: ["Old"]}});
   const files = new Map(entries);
   assert.deepEqual(included, ["CustomField:Invoice__c.Amount__c", "ApexClass:A"]);
   const obj = files.get("objects/Invoice__c.object");
@@ -191,14 +191,14 @@ test("deploy entries: only the chosen fields go into the object file", async () 
   assert.ok(files.has("classes/A.cls-meta.xml"));
   assert.ok(files.get("destructiveChangesPost.xml").includes("Old"));
   // Parent + a child: elements come back in tag order.
-  const both = new Map(buildDeployEntries([compKey("CustomObject", "Invoice__c"), compKey("ValidationRule", "Invoice__c.Positive")], comps, "67.0").entries);
+  const both = new Map(buildDeployEntries([compKey("CustomObject", "Invoice__c"), compKey("ValidationRule", "Invoice__c.Positive")], comps, "68.0").entries);
   const o = both.get("objects/Invoice__c.object");
   assert.ok(o.indexOf("<label>") < o.indexOf("<validationRules>"));
 });
 
 test("deletes can run before the deploy", async () => {
   const {buildDeployEntries} = await import("../../addon/core/deploy.js");
-  const files = new Map(buildDeployEntries([], new Map(), "67.0", {destructive: {ApexClass: ["Old"]}, post: false}).entries);
+  const files = new Map(buildDeployEntries([], new Map(), "68.0", {destructive: {ApexClass: ["Old"]}, post: false}).entries);
   assert.ok(files.has("destructiveChanges.xml"));
   assert.ok(!files.has("destructiveChangesPost.xml"));
 });

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {buildPackageXml, packageCount, togglePackageMember, erLayout, relationshipsFromDescribe} from "../../addon/core/metadata.js";
 
 test("buildPackageXml sorts, de-duplicates and escapes", () => {
-  const xml = buildPackageXml({ApexClass: ["B", "A", "A"], CustomObject: ["Acc&Co__c"], Flow: []}, "67.0");
+  const xml = buildPackageXml({ApexClass: ["B", "A", "A"], CustomObject: ["Acc&Co__c"], Flow: []}, "68.0");
   assert.equal(xml, [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<Package xmlns="http://soap.sforce.com/2006/04/metadata">',
@@ -16,7 +16,7 @@ test("buildPackageXml sorts, de-duplicates and escapes", () => {
     "        <members>Acc&amp;Co__c</members>",
     "        <name>CustomObject</name>",
     "    </types>",
-    "    <version>67.0</version>",
+    "    <version>68.0</version>",
     "</Package>",
     "",
   ].join("\n"));

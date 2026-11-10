@@ -30,9 +30,9 @@ const ID_QUERY = {
 // Apex, triggers, Visualforce, LWC and Aura go as ONE Metadata API package:
 // Salesforce compiles every file together and saves all of them or none.
 // checkOnly = compile (and in production run the draft's tests) without saving.
-async function deployDraftPackage(draft, {checkOnly = false, onProgress = () => {}} = {}) {
-  // 1. Known mistakes, caught without a round trip.
-  const lint = lintFiles(draft.files, {apiVersion: (draft.form || {}).apiVersion || apiVersion});
+async function deployDraftPackage(draft, {checkOnly = false, onProgress = () => {}, skipLint = false} = {}) {
+  // 1. Known mistakes, caught without a round trip (skipLint: "check anyway").
+  const lint = skipLint ? [] : lintFiles(draft.files, {apiVersion: (draft.form || {}).apiVersion || apiVersion});
   if (lint.length) {
     const err = new Error(lintText(lint));
     err.code = "LINT";

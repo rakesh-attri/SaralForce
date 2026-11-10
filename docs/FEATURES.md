@@ -26,7 +26,7 @@ what you can **change**, how to do it, and where the limits are.
 13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · New · package.xml
 14. [Org Info](#14-org-info)
 15. [App Tab Manager](#15-app-tab-manager)
-16. [Release Center](#16-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · GitHub
+16. [SandShift (release center)](#16-sandshift-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · GitHub
 17. [Settings & AI providers](#17-settings--ai-providers)
 18. [Safety, privacy and limits](#18-safety-privacy-and-limits)
 19. [Quick "can I…?" answers](#19-quick-can-i-answers)
@@ -465,19 +465,24 @@ custom metadata record with **＋ package.xml**. The bar at the top shows the co
 
 ---
 
-## 16. Release Center ✏️ ✨
+## 16. SandShift (release center) ✏️ ✨
 
 Move changes between any two orgs you're logged into in this browser (sandbox → UAT → production, or back). No extra login: open the other org in another tab, then press ↻.
 
 | You can | Details |
 |---|---|
-| Compare orgs | Pick **Source** and **Target** and what to compare (Apex, LWC & Aura, Flows, Objects & fields, Layouts & pages, Security, Config & labels, Integrations, Email & reports). Every component is **New**, **Changed**, **Only in target** or **Same**, with who changed it and when in each org. Optional "only changed since" date. |
+| Comparison filter | Like Gearset's: **Compare all** (default), standard filters (Default comparison, Basic, Profiles & permission sets, Picklists, and each type group) with type counts, and **your own saved filters** (＋ New filter, Edit / Delete), kept in this browser. |
+| Date range | **Changed All time / Today / 7 days / 30 days**, or **from … to …** dates (org time zone). Items with no usable date (some types list none, or 1970) are always compared. Changes has the same from / to. |
+| Rules per rule | Matching, assignment, auto-response and escalation rules are listed, compared and deployed **one rule at a time** (MatchingRule Account.TestRule1), like workflow and sharing rules, so a changed rule is never hidden behind its file's date. Deprecated types (FlowDefinition…) are left out. |
+| Export results | **⬇ Export results** downloads what's shown (status, in target, type, name, who and when in each org) as CSV. **Changed in source** sorts newest first. |
+| Compare orgs | Pick **Source** and **Target**; SandShift compares **every metadata type** both orgs have (the describeMetadata list: all deployable Metadata API types; see docs/metadata-coverage-api68.csv). Results work like Gearset's: tabs **All differences / New / Changed / Only in target / No difference**, filters for **metadata type** and **changed by**, plus search. Each row's **In target** column says what the deploy does there: ＋ Will be added, ✎ Will be modified, − Will be deleted, or nothing if not ticked. It also shows who changed the item and when, in each org. Profiles retrieved in several parts are pieced together, so their permissions compare in full. Optional "only changed since" date. |
 | See the diff | Click a row for a side-by-side line diff (target now vs incoming). |
 | Reverse deployment | **⇄** swaps source and target, e.g. bring a production hotfix back to a sandbox. |
 | Dependency check | Warns when your selection needs something the target doesn't have (new object for a field, fields on a layout or permission set, objects and classes used by Apex, MetadataComponentDependency). **Add missing** selects them. |
 | Deletes | Tick an "Only in target" item to delete it in the target (destructiveChangesPost.xml). |
 | ✨ Release notes | AI writes plain release notes from the selected changes (names and short diffs only). |
-| Changes | Everything changed in an org since Today / 7 days / 30 days / Last release / a date (in the org user's time zone), with a **Status** of New, Updated or Deleted, filtered by status and person, plus the Setup audit trail. Deletes come from source tracking (sandboxes) and the audit trail. **Add to package** puts deleted items on the delete list. |
+| Changes | Everything changed in an org since Today / 7 days / 30 days / Last release / a date (in the org user's time zone), across every metadata type, with a **Status** of New, Updated or Deleted, filtered by status, metadata type and person, plus the Setup audit trail. Profile and permission set edits are also picked up from their record dates and from audit trail lines ("Changed profile X: …"), which listMetadata often misses. Deletes come from source tracking (sandboxes) and the audit trail. **Add to package** puts deleted items on the delete list. |
+| Rollback source | A rollback deploys the **rollback point** (the org as it was just before the release) back into that same org. So the target is locked to the org the release went to, and the source shows the saved copy instead of an org. To bring production changes back to a sandbox, run a reverse deployment instead: Compare with ⇄. |
 | Package | The same basket as Metadata → ＋ package.xml. Add by name, paste a package.xml or destructiveChanges.xml, download package.xml / destructiveChanges.xml / a source zip. |
 | Validate | Check-only deploy with live progress, component errors (line and problem), failing tests with stack traces, and coverage under 75%. Test level: Default, No tests (sandboxes only), Specified tests (**Suggest tests** finds tests that use the changed Apex), Local tests, All tests. |
 | Quick deploy | After a passing validation, release in seconds without re-running tests. |
@@ -500,7 +505,7 @@ Move changes between any two orgs you're logged into in this browser (sandbox �
 | Drafts | Save a compare selection or package and load it later (Package → Drafts). |
 | Deploy to another org | History → a release → the exact deployed package to the next org (UAT → production). **Compare again** re-runs a release's items between any two orgs. |
 | Partial rollback | Tick which items to restore or remove before rolling back. |
-| Progress and minimize | Compare shows a percentage and elapsed time; both orgs are retrieved at the same time. Minimize / maximize keeps the Release tab, compare results, selection and a running deploy (it resumes watching). A deploy queued behind another one says so, with **Check status** and a link to Deployment Status. Rollbacks show **Validate (RB)** / **Deploy now (RB)**. |
+| Progress and minimize | Compare shows a percentage and elapsed time; both orgs are retrieved at the same time. Minimize / maximize keeps the SandShift tab, compare results, selection and a running deploy (it resumes watching). A deploy queued behind another one says so, with **Check status** and a link to Deployment Status. Rollbacks show **Validate (RB)** / **Deploy now (RB)**. |
 | Check status | A deploy SaralForce lost track of (closed screen, network) stays in History; **Check status** reads its result and it can still be rolled back. |
 | All deployments in an org | Salesforce's own deployment list (change sets, CLI, other tools, SaralForce) for any logged-in org. |
 | Pull requests | History → **Open pull request** commits a release to a release/… branch and opens a PR. Deletes are removed from Git; snapshot commits mirror the org. Any branch can be the source. |

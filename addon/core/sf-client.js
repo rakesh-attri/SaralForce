@@ -94,7 +94,9 @@ function firstMessage(detail) {
   return Array.isArray(detail) && detail.length > 0 && detail[0] ? detail[0].message : null;
 }
 
-export function createSfClient({getHost, getSessionId, getApiVersion, fetchImpl, onAuthError, callOptionsClient = "SaralForce"}) {
+// renewSession (optional, async → true when a new session is in place): on a
+// 401 the request is retried once with the renewed session.
+export function createSfClient({getHost, getSessionId, getApiVersion, fetchImpl, onAuthError, renewSession, callOptionsClient = "SaralForce"}) {
   const doFetch = fetchImpl || ((...args) => fetch(...args));
 
   // Low-level request. path is relative to the instance (or absolute).
@@ -115,7 +117,6 @@ export function createSfClient({getHost, getSessionId, getApiVersion, fetchImpl,
     }
     const fullUrl = new URL(url, "https://" + host).toString();
 
-    headers.Authorization = "Bearer " + getSessionId();
     if (!("Accept" in headers)) headers.Accept = "application/json; charset=UTF-8";
     let body = opts.body;
     if (body !== undefined) {
@@ -125,7 +126,10 @@ export function createSfClient({getHost, getSessionId, getApiVersion, fetchImpl,
     headers["Sforce-Call-Options"] = `client=${callOptionsClient}`;
 
     const maxRetries = opts.retries != null ? opts.retries : (IDEMPOTENT.has(method) ? 2 : 0);
+    let renewed = false;
     for (let attempt = 0; ; attempt++) {
+      const usedSid = getSessionId();
+      headers.Authorization = "Bearer " + usedSid;
       const linked = linkSignals(opts.signal, opts.timeoutMs);
       let response;
       try {
@@ -156,6 +160,11 @@ export function createSfClient({getHost, getSessionId, getApiVersion, fetchImpl,
         return opts.returnResponse ? {status, headers: response.headers, body: data} : data;
       }
       if (status === 401) {
+        // Logged in again meanwhile (or another call already renewed): retry once.
+        if (!renewed && (getSessionId() !== usedSid || (renewSession && await Promise.resolve(renewSession()).catch(() => false)))) {
+          renewed = true;
+          continue;
+        }
         const err = new Error(firstMessage(data) || "New access token needed");
         err.name = "Unauthorized";
         err.status = status;

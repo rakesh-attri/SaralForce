@@ -513,6 +513,18 @@ function SchemaView({pkg, onTogglePkg}) {
 // ─── Metadata tab ────────────────────────────────────────────────────
 const DRAFTS_KEY = "ff_md_drafts";
 
+// SaralForce's own checks can be wrong: show what they found and let the
+// user send it to Salesforce anyway (Salesforce's compile decides).
+async function lintOverride(e, setBusy, setProgress) {
+  setBusy(false);
+  setProgress(null);
+  return confirmDialog({
+    title: "Possible problems found",
+    message: `${e.message}\n\nFix them first (✨ Fix with AI can do it), or let Salesforce check the code as it is.`,
+    confirmLabel: "Check with Salesforce anyway"
+  });
+}
+
 function MetadataTab() {
   const [kindId, setKindId] = useFfSession("metadata", "kind", "apex");
   const [lists, setLists] = React.useState({});
@@ -593,7 +605,7 @@ function MetadataTab() {
   };
 
   // Save an edit draft back to the org (or compile-check it).
-  const saveEdit = async (d, {checkOnly = false, force = false} = {}) => {
+  const saveEdit = async (d, {checkOnly = false, force = false, skipLint = false} = {}) => {
     const files = changedFiles(d);
     if (!checkOnly && !force) {
       const ok = await confirmDialog({
@@ -609,7 +621,7 @@ function MetadataTab() {
     setNotice(null);
     setProgress(checkOnly ? "Compiling…" : "Saving…");
     try {
-      await saveEditDraft(d, {checkOnly, force, onProgress: setProgress});
+      await saveEditDraft(d, {checkOnly, force, skipLint, onProgress: setProgress});
       if (checkOnly) {
         setNotice(`${d.name} compiles cleanly. Nothing was saved.`);
       } else {
@@ -624,7 +636,11 @@ function MetadataTab() {
         setBusy(false);
         setProgress(null);
         const ok = await confirmDialog({title: "Overwrite newer changes?", message: e.message, confirmLabel: "Overwrite", danger: true});
-        if (ok) await saveEdit(d, {force: true});
+        if (ok) await saveEdit(d, {force: true, skipLint, checkOnly});
+        return;
+      }
+      if (e.code === "LINT" && await lintOverride(e, setBusy, setProgress)) {
+        await saveEdit(d, {checkOnly, force, skipLint: true});
         return;
       }
       setDeployErr(e.message);
@@ -636,15 +652,16 @@ function MetadataTab() {
 
   // Deploy a draft (from the dialog or the editor), then show it in the list.
   // Compile a new draft without saving it (whole bundle at once).
-  const checkNew = async (draft) => {
+  const checkNew = async (draft, skipLint = false) => {
     setBusy(true);
     setDeployErr(null);
     setNotice(null);
     try {
-      const r = await deployDraft(draft, {checkOnly: true, onProgress: setProgress});
+      const r = await deployDraft(draft, {checkOnly: true, skipLint, onProgress: setProgress});
       setNotice(`${draft.name} compiles cleanly${r.tests && r.tests !== "NoTestRun" ? " and its tests pass" : ""}. Nothing was saved yet.`);
       return true;
     } catch (e) {
+      if (e.code === "LINT" && await lintOverride(e, setBusy, setProgress)) return checkNew(draft, true);
       setDeployErr(e.message);
       return false;
     } finally {
@@ -653,12 +670,12 @@ function MetadataTab() {
     }
   };
 
-  const deploy = async (draft, fromDialog) => {
+  const deploy = async (draft, fromDialog, skipLint = false) => {
     setBusy(true);
     setDeployErr(null);
     setNotice(null);
     try {
-      const res = await deployDraft(draft, {onProgress: setProgress});
+      const res = await deployDraft(draft, {skipLint, onProgress: setProgress});
       setProgress(null);
       setDrafts(drafts.filter(d => d.id !== draft.id));
       setNewOpen(false);
@@ -669,6 +686,7 @@ function MetadataTab() {
       setKindId(draft.kind);
       setSelId(res.id);
     } catch (e) {
+      if (e.code === "LINT" && await lintOverride(e, setBusy, setProgress)) return deploy(draft, fromDialog, true);
       setDeployErr(e.message);
       setProgress(null);
       // A failed deploy from the dialog keeps the work as a draft.

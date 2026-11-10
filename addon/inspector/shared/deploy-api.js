@@ -1,12 +1,12 @@
 // Release Center transport: Metadata API listMetadata / retrieve / deploy /
 // quick deploy / cancel against ANY Salesforce org with a session in this
 // browser (source and target can differ from the org the panel is on).
-import {sfConn, apiVersion} from "../../inspector.js";
+import {sfConn, apiVersion, reportSessionExpired} from "../../inspector.js";
 import {createSfClient} from "../../core/sf-client.js";
 import {soapPostDom} from "../../builder/metadata-soap.js";
 import {escXml} from "../../builder/metadata-xml.js";
 import {domLocal, domChildren, domFind} from "../../builder/metadata-dom.js";
-import {chunk, keepListRow, compKey, TYPE_BY_NAME, summarizeDeployResult} from "../../core/deploy.js";
+import {chunk, keepListRow, compKey, TYPE_BY_NAME, summarizeDeployResult, registerTypes, settingsMembers} from "../../core/deploy.js";
 import {readZip, base64ToBytes, bytesToBase64, writeZipCompressed} from "../../core/zip.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -18,9 +18,19 @@ function sendMessage(msg) {
 }
 
 // ── Orgs ──────────────────────────────────────────────────────────────
+// Re-read the org's session cookie (after logging in again). True if new.
+async function renewConn(conn) {
+  if (conn.isCurrent) return sfConn.renewSession();
+  const session = await sendMessage({message: "getSession", sfHost: conn.host});
+  if (!session || !session.key || session.key === conn.sessionId) return false;
+  conn.sessionId = session.key;
+  return true;
+}
+
 function connFor(host, sessionId) {
   const conn = {host, sessionId, apiVersion};
-  conn.client = createSfClient({getHost: () => host, getSessionId: () => conn.sessionId, getApiVersion: () => apiVersion});
+  conn.client = createSfClient({getHost: () => host, getSessionId: () => conn.sessionId, getApiVersion: () => apiVersion,
+    renewSession: () => renewConn(conn)});
   return conn;
 }
 
@@ -28,7 +38,11 @@ const orgCache = new Map();
 
 // The org the panel runs on, as a connection.
 export function currentOrgConn() {
-  return connFor(sfConn.instanceHostname, sfConn.sessionId);
+  const conn = connFor(sfConn.instanceHostname, sfConn.sessionId);
+  conn.isCurrent = true;
+  // Always the panel's live session, so a renewed one is used everywhere.
+  Object.defineProperty(conn, "sessionId", {get: () => sfConn.sessionId, set: () => {}, enumerable: true});
+  return conn;
 }
 
 async function describeOrg(conn, isCurrent) {
@@ -75,7 +89,15 @@ function ctxFor(conn, {signal} = {}) {
 }
 
 async function mdCall(conn, inner, opts) {
-  return soapPostDom(ctxFor(conn, opts), inner);
+  const used = conn.sessionId;
+  try {
+    return await soapPostDom(ctxFor(conn, opts), inner);
+  } catch (e) {
+    if (!/INVALID_SESSION_ID|Session expired or invalid/i.test(e.message || "")) throw e;
+    if (conn.sessionId !== used || await renewConn(conn)) return soapPostDom(ctxFor(conn, opts), inner);
+    if (conn.isCurrent) reportSessionExpired();
+    throw e;
+  }
 }
 
 // DOM element → plain object (repeated children become arrays).
@@ -102,6 +124,28 @@ function resultObjs(doc) {
   return domChildren(resp).filter(c => domLocal(c) === "result").map(domToObj);
 }
 
+// ── describeMetadata: every type this org can deploy ─────────────────
+const described = new Map(); // host → Promise<count>
+
+export async function describeMetadata(conn, {signal} = {}) {
+  const doc = await mdCall(conn, `<met:describeMetadata><met:asOfVersion>${apiVersion}</met:asOfVersion></met:describeMetadata>`, {signal});
+  const r = resultObjs(doc)[0] || {};
+  return [].concat(r.metadataObjects || []);
+}
+
+// Adds the org's types to the catalog (once per org and page load).
+// Never fails: without it the built-in types still work.
+export function loadCatalog(conn) {
+  if (!conn || !conn.host) return Promise.resolve(0);
+  if (!described.has(conn.host)) {
+    described.set(conn.host, describeMetadata(conn).then(list => registerTypes(list)).catch(() => {
+      described.delete(conn.host);
+      return 0;
+    }));
+  }
+  return described.get(conn.host);
+}
+
 // ── listMetadata ──────────────────────────────────────────────────────
 // queries: [{type, folder?}] → rows with dates and authors (managed skipped).
 export async function listMetadata(conn, queries, {signal, onProgress} = {}) {
@@ -111,8 +155,24 @@ export async function listMetadata(conn, queries, {signal, onProgress} = {}) {
   for (const g of groups) {
     if (signal && signal.aborted) throw new Error("Cancelled");
     const qx = g.map(q => `<met:queries>${q.folder ? `<met:folder>${escXml(q.folder)}</met:folder>` : ""}<met:type>${escXml(q.type)}</met:type></met:queries>`).join("");
-    const doc = await mdCall(conn, `<met:listMetadata>${qx}<met:asOfVersion>${apiVersion}</met:asOfVersion></met:listMetadata>`, {signal});
-    for (const r of resultObjs(doc)) if (keepListRow(r)) rows.push(r);
+    const call = x => mdCall(conn, `<met:listMetadata>${x}<met:asOfVersion>${apiVersion}</met:asOfVersion></met:listMetadata>`, {signal});
+    let docs;
+    try {
+      docs = [await call(qx)];
+    } catch (e) {
+      // A type the other org doesn't have (feature off, older API): list
+      // the group one by one and skip only that type.
+      if (g.length < 2 || /INVALID_SESSION|Cancelled/i.test(e.message || "")) {
+        if (g.length < 2 && /INVALID_TYPE|not a valid|Unknown type|UNKNOWN_EXCEPTION/i.test(e.message || "")) docs = [];
+        else throw e;
+      } else {
+        docs = [];
+        for (const q of g) {
+          try { docs.push(await call(`<met:queries>${q.folder ? `<met:folder>${escXml(q.folder)}</met:folder>` : ""}<met:type>${escXml(q.type)}</met:type></met:queries>`)); } catch (e2) { /* skip this type */ }
+        }
+      }
+    }
+    for (const doc of docs) for (const r of resultObjs(doc)) if (keepListRow(r)) rows.push(r);
     n++;
     if (onProgress) onProgress(n, groups.length);
   }
@@ -124,10 +184,13 @@ export async function listMetadata(conn, queries, {signal, onProgress} = {}) {
 export async function listComponents(conn, types, {signal, onProgress} = {}) {
   const plain = [];
   const folderTypes = [];
+  const settings = [];
   for (const t of types) {
     const def = TYPE_BY_NAME[t];
     if (!def || def.hidden) continue;
-    if (def.folder) folderTypes.push(def); else plain.push({type: t});
+    // Can't be listed: every setting the org knows, retrieved to see which exist.
+    if (t === "Settings") settings.push(...settingsMembers().map(n => ({type: "Settings", fullName: n, synthetic: true})));
+    else if (def.folder) folderTypes.push(def); else plain.push({type: t});
   }
   const queries = plain.slice();
   if (folderTypes.length) {
@@ -145,13 +208,14 @@ export async function listComponents(conn, types, {signal, onProgress} = {}) {
   const real = queries.filter(q => !q.folderRow);
   const rows = await listMetadata(conn, real, {signal, onProgress});
   for (const q of queries) if (q.folderRow) rows.push(q.folderRow);
+  rows.push(...settings);
   const out = new Map();
   for (const r of rows) {
     const type = r.type || "";
     out.set(compKey(type, r.fullName), {
       type, fullName: r.fullName, isFolder: !!r.isFolder,
       lastModifiedDate: r.lastModifiedDate || "", lastModifiedByName: r.lastModifiedByName || "",
-      createdDate: r.createdDate || "", createdByName: r.createdByName || "", id: r.id || ""
+      createdDate: r.createdDate || "", createdByName: r.createdByName || "", id: r.id || "", synthetic: !!r.synthetic
     });
   }
   return out;

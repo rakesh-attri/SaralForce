@@ -4,18 +4,29 @@
 import {getRedirectUri, getClientId, getPKCEParameters, Constants} from "./utils.js";
 import {createSfClient} from "./core/sf-client.js";
 
-export let defaultApiVersion = "67.0";
+export let defaultApiVersion = "68.0";
 export let apiVersion = localStorage.getItem("apiVersion") == null ? defaultApiVersion : localStorage.getItem("apiVersion");
 
 export let sessionError;
+
+// The panel shows a "session expired" bar on this event and hides it on
+// "sfoc-session-renewed".
+export function reportSessionExpired() {
+  try { window.dispatchEvent(new CustomEvent("sfoc-session-expired")); } catch (e) { /* no window */ }
+}
+
+const SESSION_FAULT = /INVALID_SESSION_ID|Session expired or invalid/i;
+let renewing = null;
 
 // Shared Salesforce API client bound to the current session (see sfConn).
 export const sf = createSfClient({
   getHost: () => sfConn.instanceHostname,
   getSessionId: () => sfConn.sessionId,
   getApiVersion: () => apiVersion,
+  renewSession: () => sfConn.renewSession(),
   onAuthError(kind, message) {
     if (kind === "unauthorized") {
+      reportSessionExpired();
       // Only OAuth tokens can be renewed from the panel; a cookie session
       // expiring is handled by logging in to Salesforce again.
       if (localStorage.getItem(sfConn.instanceHostname + Constants.ACCESS_TOKEN)) {
@@ -28,6 +39,26 @@ export const sf = createSfClient({
 });
 
 export let sfConn = {
+
+  // After the Salesforce session expires and you log in again, the browser
+  // holds a new session cookie: pick it up. True when a new session is in
+  // place. OAuth tokens can't be renewed this way.
+  renewSession() {
+    if (!this.instanceHostname || localStorage.getItem(this.instanceHostname + Constants.ACCESS_TOKEN)) return Promise.resolve(false);
+    if (!renewing) {
+      renewing = (async () => {
+        const old = this.sessionId;
+        const msg = await new Promise(resolve => {
+          try { chrome.runtime.sendMessage({message: "getSession", sfHost: this.instanceHostname}, resolve); } catch (e) { resolve(null); }
+        });
+        if (!msg || !msg.key || msg.key === old) return false;
+        this.sessionId = msg.key;
+        try { window.dispatchEvent(new CustomEvent("sfoc-session-renewed")); } catch (e) { /* no window */ }
+        return true;
+      })().catch(() => false).finally(() => { renewing = null; });
+    }
+    return renewing;
+  },
 
   async getSession(sfHost) {
     const url = new URL(window.location.href);
@@ -154,7 +185,19 @@ export let sfConn = {
     return wsdl;
   },
 
-  async soap(wsdl, method, args, {headers} = {}) {
+  async soap(wsdl, method, args, opts = {}) {
+    const used = this.sessionId;
+    try {
+      return await this.soapOnce(wsdl, method, args, opts);
+    } catch (e) {
+      if (!SESSION_FAULT.test(e.message || "")) throw e;
+      if (this.sessionId !== used || await this.renewSession()) return this.soapOnce(wsdl, method, args, opts);
+      reportSessionExpired();
+      throw e;
+    }
+  },
+
+  async soapOnce(wsdl, method, args, {headers} = {}) {
     if (!this.instanceHostname || !this.sessionId) {
       throw new Error("Session not found");
     }

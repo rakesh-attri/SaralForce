@@ -4,7 +4,7 @@
 //
 //   ctx = {
 //     conn,          // {instanceHostname, sessionId} — read at call time
-//     apiVersion,    // e.g. "67.0"
+//     apiVersion,    // e.g. "68.0"
 //     signal,        // optional shared AbortSignal (deploy "Cancel")
 //     isAborted,     // () => boolean — the deploy was cancelled by the user
 //     onDebug,       // (action, requestXml, responseText) => void
@@ -242,7 +242,7 @@ export async function metadataUpdateRecords(ctx, xsiType, fullName, recordsEl) {
 // Create one metadata component. Primary path is the synchronous
 // createMetadata() call (SaveResult) — the async CRUD create()/checkStatus()
 // pair is documented as available only in API 30.0 and earlier, and this
-// app talks to /services/Soap/m/<apiVersion> (67.0 by default). The legacy
+// app talks to /services/Soap/m/<apiVersion> (68.0 by default). The legacy
 // create() + checkStatus() polling is kept only as a fallback for an org
 // or endpoint that rejects createMetadata as an unknown operation.
 export async function metadataCreate(ctx, metadataXml) {

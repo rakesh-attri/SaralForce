@@ -56,3 +56,34 @@ export function impactForPrompt({type, name, org, usedBy, uses, codeMatches, dat
   if (activeFlows.length) lines.push(`Active flows using it: ${activeFlows.join(", ")}`);
   return lines.join("\n");
 }
+
+// Why a flow delete fails ("insufficient access rights on cross-reference id"):
+// an active version, paused or waiting runs, or metadata that still uses it.
+// list: [{name, found, versions: [{number, status}], active, interviews: [{label, status}], interviewsGuessed, usedBy: [{type, name}], notes: []}]
+// → {blocked: [names], clear: [names], text}
+export function flowDeleteReport(list) {
+  const lines = [];
+  const blocked = [];
+  const clear = [];
+  for (const f of list) {
+    if (!f.found) { lines.push(`✓ ${f.name}: not in the target, nothing to delete.`); continue; }
+    const why = [];
+    if (f.active) why.push(`version ${f.active} is active (deactivate it)`);
+    if (f.interviews.length) {
+      why.push(`${f.interviews.length} ${f.interviewsGuessed ? "possible " : ""}paused or waiting run(s): ` +
+        f.interviews.slice(0, 5).map(i => i.label + (i.status ? ` (${i.status})` : "")).join(", ") + (f.interviews.length > 5 ? "…" : "") +
+        " (Setup → Paused and Failed Flow Interviews)");
+    }
+    if (f.usedBy.length) {
+      why.push("used by " + f.usedBy.slice(0, 8).map(u => `${typeLabel(u.type)} ${u.name}`).join(", ") + (f.usedBy.length > 8 ? "…" : ""));
+    }
+    const versions = f.versions.length ? ` [${f.versions.length} version(s): ${f.versions.map(v => `v${v.number} ${v.status}`).join(", ")}]` : "";
+    if (why.length) { blocked.push(f.name); lines.push(`✗ ${f.name}${versions}: ` + why.join("; ") + "."); }
+    else {
+      clear.push(f.name);
+      lines.push(`? ${f.name}${versions}: nothing found blocking it. Check queued scheduled-path actions (Setup → Time-Based Workflow), or delete it with the Tooling API.`);
+    }
+    for (const n of f.notes || []) lines.push(`   · ${n}`);
+  }
+  return {blocked, clear, text: lines.join("\n")};
+}

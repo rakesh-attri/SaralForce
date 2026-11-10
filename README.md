@@ -280,13 +280,26 @@ debug-log analysis.
 
 ## What's New
 
+### v2.3.1
+- **SandShift** — the Release tab has a new name
+- **Session expiry handled** — an expired session is renewed from your new login automatically; when you are
+  logged out, a banner offers **Reconnect** and **Log in to Salesforce**, then **Reload this tool**
+- **Smarter code checks** — fewer false alarms on valid Apex (stripInaccessible, assertEquals chains,
+  queryWithBinds, sub-queries, mocks without asserts, lightning/toast); **Check with Salesforce anyway** when
+  a check looks wrong; edits only flag problems they add
+- **SandShift fixes** — Deploy opens on the screen you came from with a Back link, "What to deploy" cards,
+  rollback warning only in rollback mode, green progress bar, no double polling, an interrupted deploy no longer
+  locks the screen
+- **Plain-language errors** in Records (validation, required field, duplicate, not found, session, access)
+- Larger sub-tab icons; store description updated
+
 ### v2.3.0
 - **Release** keeps its work across minimize/maximize, shows compare progress in %, retrieves both orgs at once,
   resumes a running deploy and explains a queued one
 - **Reliable code deploys** — AI-written and template Apex, triggers, Visualforce, LWC and Aura pass a
   known-mistake check, then **Check compile** (Salesforce compiles the whole draft, saves nothing) and an
   all-or-nothing **Deploy** as one package; ✨ Fix with AI sends every compile error and rechecks
-- **Release Center** (new tab) — compare any two orgs you're logged into and deploy either way:
+- **SandShift** (new tab, release center) — compare any two orgs you're logged into and deploy either way:
   side-by-side diffs, dependency check with **Add missing**, deletes, a change tracker by date and
   person, package.xml / destructiveChanges.xml, **Validate**, **Quick deploy**, **Deploy now** and
   Cancel; ✨ AI release notes and ✨ Explain failures
@@ -659,18 +672,26 @@ sf-object-creator/
 
 ## Security
 
-- API keys are stored locally in your browser (`localStorage`) and never sent anywhere except the LLM provider you configured
-- The extension communicates directly with Salesforce APIs using your existing session
-- Only your natural language descriptions are sent to LLM providers - object/field data stays in your org unless you paste it into the chat
+- AI provider keys and the optional GitHub token are stored in the extension's own storage
+  (`chrome.storage.local`, never in Salesforce pages) and sent only to the AI provider you
+  configured and to `api.github.com`
+- The extension communicates directly with Salesforce APIs using your existing session; there
+  is no SaralForce server in between
+- AI requests carry only what the feature needs (your description, the relevant schema or code,
+  or error text); record data stays in your org unless you paste it in
+- Deploys, deletes, rollbacks and data changes ask first and name the target org; AI-written code
+  must pass a lint and a Salesforce compile check before it can be deployed
 - Signs in with OAuth2 PKCE or your existing Salesforce session cookie
 
 ## Permissions
 
 - `cookies`: Read Salesforce session cookies for API authentication
+- `storage`: Keep settings, AI keys and the GitHub connection in the extension's storage
 - Host permissions for Salesforce domains (needed to inject the inspector on your pages)
 - **Optional** host permission for `https://*/*`: requested only when you save an AI
   provider in Settings — it covers the chosen AI endpoint (or a custom OpenAI-compatible
-  URL). Without it, everything except AI calls works as before
+  URL) — or connect GitHub (`api.github.com`). Without it, everything except AI and GitHub
+  calls works as before
 
 ## Development
 

@@ -3,7 +3,7 @@
 
   // Keep in sync with defaultApiVersion in inspector.js (checked by
   // test/unit/api-version.test.js). A content script cannot import modules.
-  const API_VERSION = "67.0";
+  const API_VERSION = "68.0";
 
   // Messages to the panel iframe go only to the extension's own origin.
   const PANEL_ORIGIN = new URL(chrome.runtime.getURL(""), location.href).origin;

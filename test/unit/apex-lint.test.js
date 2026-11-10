@@ -32,3 +32,22 @@ test("LWC JS checks and file routing", () => {
   const out = lintFiles([{path: "classes/A.cls", content: "Test.getSentEmailMessages();"}, {path: "lwc/c/c.js-meta.xml", content: "", generated: true}]);
   assert.equal(out[0].path, "classes/A.cls");
 });
+
+test("valid Apex and LWC patterns are not flagged", () => {
+  const ok = [
+    "SObjectAccessDecision d = Security.stripInaccessible(AccessType.READABLE, rows);\nList<Account> safe = d.getRecords();",
+    "@isTest class T { @isTest static void a() { System.assertEquals(2, c.getItems().size()); } }",
+    "List<SObject> r = Database.queryWithBinds(buildQuery(), binds, AccessLevel.USER_MODE);",
+    "String e = UserInfo.getUserEmail().toLowerCase();",
+    "List<Account> a = [SELECT Id, (SELECT Id FROM Contacts ORDER BY Name LIMIT 5) FROM Account WITH USER_MODE];",
+    "@isTest public class MockHttp implements HttpCalloutMock { public HttpResponse respond(HttpRequest r) { return new HttpResponse(); } }"
+  ];
+  for (const code of ok) assert.deepEqual(lintApex(code, {apiVersion: "62.0"}), [], code);
+  assert.deepEqual(lintLwcJs("import Toast from 'lightning/toast';"), []);
+  // Still caught:
+  assert.equal(lintApex("List<Account> x = Security.stripInaccessible(AccessType.READABLE, rows);").length, 1);
+  assert.equal(lintApex("Database.queryWithBinds(q, binds);").length, 1);
+  assert.equal(lintApex("System.assertEquals(1, 1).foo();").length, 1);
+  assert.equal(lintApex("[SELECT Id FROM Account ORDER BY Name WITH USER_MODE]").length, 1);
+  assert.equal(lintApex("@isTest class T { @isTest static void a() { insert new Account(); } }").length, 1);
+});

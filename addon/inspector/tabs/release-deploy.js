@@ -13,10 +13,12 @@ import {retrieve, startDeploy, waitForDeploy, quickDeploy, cancelDeploy, queryAl
 import {analyzePlan, sizeProblems, overwriteRisks} from "../../core/analyzers.js";
 import {listReleases, putRelease, saveSnapshot, saveBytes, newId} from "../shared/release-store.js";
 import {nextVersion, trimSummary} from "../../core/release-history.js";
-import {detectSteps} from "../../core/manual-steps.js";
+import {detectSteps, mergeRunbook, pendingPreSteps} from "../../core/manual-steps.js";
 import {explainDeployFailures} from "../shared/ai.js";
+import {activeFlows, deactivateFlows, flowDeleteBlockers, deleteFlowsTooling} from "../shared/manual-actions.js";
+import {flowDeleteReport} from "../../core/impact.js";
 import {useFfSession} from "../shared/session-state.js";
-import {FFBadge} from "../shared/ui.js";
+import {FFBadge, FriendlyError} from "../shared/ui.js";
 import {confirmDialog} from "../../ui/confirm.js";
 import {useRelease, setRelease, releaseState, gitComponents, orgByHost, orgLabel, downloadBytes, fmtWhen} from "./release-state.js";
 import {OrgBar, CardHead, AiAnswer, AiError} from "./release-ui.js";
@@ -45,7 +47,8 @@ function usePlan(mode, pkg, destructivePkg) {
 function preflight(plan, target, testLevel, targetApi) {
   const isProd = target && !target.isSandbox;
   const out = analyzePlan(plan, {targetApi, isProd});
-  if ((plan.members.Flow || []).length) out.push({kind: "info", text: "Flows: in production they arrive inactive unless “Deploy processes and flows as active” is on in Process Automation Settings."});
+  if ((plan.members.Flow || []).length) out.push({kind: "info", text: "Flows: in production they arrive inactive unless “Deploy processes and flows as active” is on in Process Automation Settings. With that setting on, Salesforce also needs Apex tests that cover the flows: pick Specified or Local tests."});
+  if (isProd && !hasApexChanges(plan.members) && testLevel === "Default") out.push({kind: "info", text: "No Apex in this release, so production runs no tests (Default). Salesforce can't quick deploy a validation without tests: after Validate, use “Deploy validated package”, or Deploy now."});
   const legacy = plan.texts.filter(t => /^Apex(Class|Trigger):/.test(t.key) && hasSecurityEnforced(t.text));
   if (legacy.length) out.push({kind: "err", text: `${legacy.map(t => splitKey(t.key).fullName).join(", ")} use WITH SECURITY_ENFORCED, which new API versions reject. Change it to WITH USER_MODE in the source first.`});
   if (isProd && testLevel === "NoTestRun") out.push({kind: "err", text: "Production does not allow “No tests”."});
@@ -131,7 +134,7 @@ export async function resumeDeploy() {
     setRelease(prev => ({
       deploy: {...prev.deploy, summary, finished: true, status: summary.status},
       ...(d.checkOnly && summary.canQuickDeploy && d.info
-        ? {validation: {id: d.id, targetHost: d.targetHost, at: Date.now(), items: d.items, info: d.info, entries: d.entries, noTests: !summary.tests.total && d.level !== "Default"}} : {}),
+        ? {validation: {id: d.id, targetHost: d.targetHost, at: Date.now(), items: d.items, info: d.info, entries: d.entries, level: d.level, noTests: !summary.tests.total}} : {}),
       ...(!d.checkOnly && summary.success ? staleCompare(prev, d.targetHost) : {}),
       ...(!d.checkOnly && summary.success && d.info && d.info.kind !== "deploy" ? {pendingPlan: null} : {})
     }));
@@ -144,6 +147,48 @@ export async function resumeDeploy() {
   } finally {
     watching.delete(d.id);
   }
+}
+
+// After "insufficient access rights on cross-reference id" on a flow delete:
+// find what blocks it in the target and offer the fixes.
+function FlowDeleteHelp({names, target, isProd, checkOnly, disabled}) {
+  const [busy, setBusy] = React.useState("");
+  const [report, setReport] = React.useState(null);
+  const [done, setDone] = React.useState("");
+  const check = async () => {
+    setBusy("check");
+    try { setReport(flowDeleteReport(await flowDeleteBlockers(target.conn, names))); }
+    catch (e) { setReport({blocked: [], clear: [], text: "Could not check: " + e.message}); }
+    setBusy("");
+  };
+  React.useEffect(() => { check(); }, []);
+  const act = async (kind) => {
+    const list = kind === "deactivate" ? names : report.clear;
+    const ok = await confirmDialog(kind === "deactivate"
+      ? {title: "Deactivate the flows?", message: `Deactivate ${list.join(", ")} in ${orgLabel(target)}.`, confirmLabel: "Deactivate", danger: isProd}
+      : {title: "Delete with the Tooling API?", message: `Delete ${list.join(", ")} (every version) from ${orgLabel(target)} now. This is a real delete, not a validation.`, confirmLabel: "Delete", danger: true});
+    if (!ok) return;
+    setBusy(kind);
+    try {
+      setDone(kind === "deactivate" ? await deactivateFlows({target, targets: list}) : await deleteFlowsTooling({target, targets: list}));
+    } catch (e) { setDone("✗ " + e.message); }
+    await check();
+  };
+  const anyActive = report && /version \d+ is active/.test(report.text);
+  return h("div", {className: "insp-hint-strip rel-flowhelp"},
+    h("div", null, h("b", null, "Why: "),
+      "Salesforce refuses to delete a flow while something still points at one of its versions: an active version, a paused or waiting run, queued scheduled-path actions, or other metadata that calls it. It is not about your admin rights."),
+    busy === "check" ? h("div", {className: "insp-meta"}, `Checking ${names.join(", ")} in ${target.name}…`)
+      : report && h("pre", {className: "rel-pre"}, report.text),
+    done && h("pre", {className: "rel-pre"}, done),
+    busy && busy !== "check" && h("div", {className: "insp-meta"}, busy === "deactivate" ? "Deactivating…" : "Deleting…"),
+    report && !busy && h("div", {className: "rel-flowhelp-actions"},
+      h("button", {className: "field-action-btn", disabled, onClick: check}, "Check again"),
+      anyActive && h("button", {className: "field-action-btn", disabled, onClick: () => act("deactivate")}, "Deactivate in the target"),
+      report.clear.length > 0 && h("button", {className: "field-action-btn", disabled, onClick: () => act("tooling")},
+        `Delete ${report.clear.length === 1 ? report.clear[0] : report.clear.length + " flows"} with the Tooling API`),
+      h("a", {className: "field-action-btn", href: setupUrl(target.conn, "/lightning/setup/Pausedflows/home"), target: "_blank", rel: "noopener noreferrer"}, "Paused runs in Setup ↗"),
+      h("span", {className: "insp-meta"}, `Then press ${checkOnly ? "Validate" : "Deploy"} again.`)));
 }
 
 function fmtElapsed(ms) {
@@ -331,8 +376,23 @@ export function DeployView({goTo}) {
     notes: plan.mode === "compare" ? st.releaseNotes || "" : ""
   });
 
+  // Pre-deployment steps of this selection (status from Manual steps).
+  const preSteps = pendingPreSteps(mergeRunbook(st.runbook || [], detectSteps({items: plan.keys, deletes: keysFromMembers(plan.destructive),
+    texts: new Map(plan.texts.map(t => [t.key, t.text])), before: new Map()})));
+  const preOk = async () => {
+    if (!preSteps.length) return true;
+    const ok = await confirmDialog({
+      title: `${preSteps.length} pre-deployment step(s) not done`,
+      message: preSteps.map(p => "• " + p.title + (p.targets && p.targets.length ? `: ${p.targets.slice(0, 4).join(", ")}` : "")).join("\n") +
+        "\n\nDo them in Manual steps first (mark each Done or Skipped), or deploy anyway.",
+      confirmLabel: "Deploy anyway", cancelLabel: "Not yet", danger: isProd
+    });
+    return ok;
+  };
+
   const run = async (checkOnly, preset = null) => {
     if ((!source && plan.mode !== "plan" && !preset) || !target) return;
+    if (!checkOnly && !(await preOk())) return;
     if (!checkOnly && !preset) {
       const ok = await confirmDialog({
         title: "Deploy now?",
@@ -359,6 +419,34 @@ export function DeployView({goTo}) {
       if (tooBig.length) throw new Error(tooBig.map(p => p.text).join(" "));
       if (!checkOnly && !(await confirmNoOverwrite(target, [...included, ...keysFromMembers(plan.destructive)], plan.since,
         x => setRelease({deploy: {...base, status: x}})))) throw new Error("Stopped: the target has newer changes. Compare again before deploying.");
+      let ignoreWarnings = false;
+      const flowDeletes = preset ? [] : keysFromMembers(plan.destructive).filter(k => splitKey(k).type === "Flow").map(k => splitKey(k).fullName);
+      if (flowDeletes.length) {
+        setRelease({deploy: {...base, entries, status: "Checking flows to delete…"}});
+        const active = await activeFlows(target.conn, flowDeletes).catch(() => []);
+        if (active.length) {
+          const go = await confirmDialog({
+            title: `Deactivate ${active.length} flow(s) first?`,
+            message: `Salesforce can't delete a flow while a version is active: ${active.map(d => d.DeveloperName).join(", ")}.\n\n` +
+              `Deactivate ${active.length === 1 ? "it" : "them"} in ${orgLabel(target)} now? ${checkOnly ? "(This changes the target before validating; nothing else is deployed yet.)" : ""}`,
+            confirmLabel: "Deactivate and continue", danger: isProd
+          });
+          if (!go) throw new Error(`Stopped: ${active.map(d => d.DeveloperName).join(", ")} must be deactivated before ${active.length === 1 ? "it" : "they"} can be deleted.`);
+          setRelease({deploy: {...base, entries, status: "Deactivating flows…"}});
+          const log = await deactivateFlows({target, targets: active.map(d => d.DeveloperName)});
+          if (/✗/.test(log)) throw new Error("Could not deactivate: " + log.split("\n").filter(l => l.startsWith("✗")).join("; "));
+        }
+        setRelease({deploy: {...base, entries, status: "Checking what uses the flows…"}});
+        const found = await flowDeleteBlockers(target.conn, flowDeletes).catch(() => []);
+        // Already gone (deleted by hand or with the Tooling API): let the rest go through.
+        ignoreWarnings = found.some(f => !f.found);
+        const report = flowDeleteReport(found);
+        if (report.blocked.length) {
+          const go = await confirmDialog({title: "These flows can't be deleted yet",
+            message: report.text + "\n\nSalesforce will refuse the delete until these are cleared. Send anyway?", confirmLabel: "Send anyway"});
+          if (!go) throw new Error("Stopped: clear what uses the flows first (" + report.blocked.join(", ") + ").");
+        }
+      }
       setRelease({deploy: {...base, entries, status: `Sending to ${target.name}…`}});
       const tests = level === "RunSpecifiedTests" ? runTests.split(/[\s,]+/).filter(Boolean) : [];
       if (level === "RunSpecifiedTests" && !tests.length) throw new Error("Add at least one test class for “Specified tests”.");
@@ -373,19 +461,19 @@ export function DeployView({goTo}) {
           if (!go) throw new Error("Stopped: no rollback point was saved.");
         }
       }
-      const id = await startDeploy(target.conn, entries, {checkOnly, testLevel: preset ? "NoTestRun" : level, runTests: tests});
+      const id = await startDeploy(target.conn, entries, {checkOnly, testLevel: preset ? preset.level || (isProd ? "Default" : "NoTestRun") : level, runTests: tests, ignoreWarnings});
+      watching.add(id);
       setRelease({deploy: {...base, entries, id, status: "Queued in Salesforce…"}});
       // In History from the start: a deploy that outlives this screen can still be checked and rolled back.
       record = await recordRelease({...info, kind: checkOnly ? "validation" : info.kind, deployId: id, success: false,
         status: "InProgress", summary: null, snapshotId}, checkOnly ? null : entries).catch(() => null);
-      setRelease(prev => ({deploy: {...prev.deploy, recordId: record ? record.id : "", info, level: preset ? "NoTestRun" : level}}));
-      watching.add(id);
+      setRelease(prev => ({deploy: {...prev.deploy, recordId: record ? record.id : "", info, level: preset ? preset.level || (isProd ? "Default" : "NoTestRun") : level}}));
       const summary = await waitForDeploy(target.conn, id, {
         onUpdate: s => setRelease(prev => ({deploy: {...prev.deploy, summary: s, status: s.stateDetail || s.status}}))
       });
       setRelease(prev => ({
         deploy: {...prev.deploy, summary, finished: true, status: summary.status},
-        validation: checkOnly && summary.canQuickDeploy ? {id, targetHost: target.host, at: Date.now(), items: count, info, entries, noTests: !summary.tests.total && level !== "Default"} : (checkOnly ? null : prev.validation),
+        validation: checkOnly && summary.canQuickDeploy ? {id, targetHost: target.host, at: Date.now(), items: count, info, entries, level: preset ? preset.level || level : level, noTests: !summary.tests.total} : (checkOnly ? null : prev.validation),
         ...(!checkOnly && summary.success && plan.mode === "plan" ? {pendingPlan: null} : {}),
         ...(!checkOnly && summary.success ? staleCompare(prev, target.host) : {})
       }));
@@ -402,11 +490,12 @@ export function DeployView({goTo}) {
 
   const quick = async () => {
     if (!validation) return;
+    if (!validation.noTests && !(await preOk())) return;
     if (validation.noTests) {
       // Salesforce only quick-deploys validations that ran tests: send the
       // exact validated files instead (the rollback point is still taken).
       const ok = await confirmDialog({title: "Deploy the validated package?", message: `Deploy the same ${validation.items} item(s) that passed validation to ${orgLabel(target)}.`, confirmLabel: "Deploy", danger: isProd});
-      if (ok) run(false, {entries: validation.entries, included: validation.info.items, info: validation.info});
+      if (ok) run(false, {entries: validation.entries, included: validation.info.items, info: validation.info, level: validation.level || (isProd ? "Default" : "NoTestRun")});
       return;
     }
     const ok = await confirmDialog({
@@ -431,11 +520,11 @@ export function DeployView({goTo}) {
         if (!go) throw new Error("Stopped: no rollback point was saved.");
       }
       const id = await quickDeploy(target.conn, validation.id);
+      watching.add(id);
       setRelease({deploy: {...base, id, status: "Queued in Salesforce…"}});
       record = await recordRelease({...info, kind: info.kind === "deploy" ? "quick" : info.kind, deployId: id, validationId: validation.id,
         success: false, status: "InProgress", summary: null, snapshotId}, validation.entries).catch(() => null);
       setRelease(prev => ({deploy: {...prev.deploy, recordId: record ? record.id : "", info}}));
-      watching.add(id);
       const summary = await waitForDeploy(target.conn, id, {
         onUpdate: s => setRelease(prev => ({deploy: {...prev.deploy, summary: s, status: s.stateDetail || s.status}}))
       });
@@ -507,7 +596,18 @@ export function DeployView({goTo}) {
     h("div", {className: "org-card org-card-wide"},
       h(CardHead, {icon: "🚀", title: "Validate & deploy"}),
       from && BACK[from.view] && h("button", {className: "field-action-btn rel-back", onClick: () => goTo(from.view)}, `← Back to ${BACK[from.view]}`),
-      h(OrgBar, {disabled: running}),
+      h(OrgBar, {disabled: running, ...(pending && plan.mode === "plan" && pending.kind !== "promote" ? {
+        sourceLabel: "From", lockTarget: true,
+        fixedSource: {title: pending.kind === "rollback" ? "⏪ Rollback point" : "♻️ Snapshot",
+          sub: pending.sourceName || `Saved copy of ${orgLabel(orgByHost(pending.targetHost) || target)} from before the release`}
+      } : {})}),
+      pending && plan.mode === "plan" && pending.kind === "rollback" && h("div", {className: "insp-hint-strip"},
+        `A rollback puts ${orgByHost(pending.targetHost) ? orgByHost(pending.targetHost).name : "the org"} back the way it was before that release, from the copy saved just before it. ` +
+        "So the target is the org the release went to. To bring changes from production back to a sandbox, use Compare and ⇄ (reverse deployment)."),
+      preSteps.length > 0 && h("div", {className: "insp-warn rel-prestrip"},
+        h("b", null, `⏮️ ${preSteps.length} pre-deployment step(s) to do first: `),
+        preSteps.map(p => p.title).join(" · "), " ",
+        h("button", {className: "field-action-btn", onClick: () => { setRelease({manualPick: "current"}); goTo("manual"); }}, "Open Manual steps")),
       h("div", {className: "rel-label", id: "rel-mode-label"}, "What to deploy"),
       h("div", {className: "rel-modes", role: "radiogroup", "aria-labelledby": "rel-mode-label"},
         pending && h(ModeOption, {id: "plan", plan, running, setMode,
@@ -583,8 +683,8 @@ export function DeployView({goTo}) {
         s.components.errors > 0 && h("span", {className: "tr-stat bad"}, `✗ ${s.components.errors} error(s)`),
         s.tests.total > 0 && h("span", {className: "tr-stat" + (s.tests.errors ? " bad" : " ok")}, `Tests ${s.tests.completed}/${s.tests.total}` + (s.tests.errors ? ` · ${s.tests.errors} failed` : "")),
         d.finished && h(FFBadge, {kind: s.success ? "ok" : "err"}, s.status)),
-      d.error && h("div", {className: "insp-error"}, d.error),
-      s && s.errorMessage && h("div", {className: "insp-error"}, s.errorMessage),
+      d.error && h(FriendlyError, {error: d.error}),
+      s && s.errorMessage && h(FriendlyError, {error: s.errorMessage}),
       d.finished && s && s.success && !d.checkOnly && h("div", {className: "rel-actionbar"},
         h("span", {className: "insp-meta"}, "Flows to activate, assignments, scheduled jobs, secrets: check what the deploy didn’t do."),
         h("button", {className: "btn btn-primary btn-sm", onClick: () => goTo("manual")}, "Manual steps →")),
@@ -595,6 +695,10 @@ export function DeployView({goTo}) {
           h("thead", null, h("tr", null, h("th", null, "Component"), h("th", null, "Line"), h("th", null, "Problem"))),
           h("tbody", null, s.componentFailures.map((f, i) => h("tr", {key: i},
             h("td", null, `${typeLabel(f.type)} ${f.fullName}`), h("td", null, f.line || ""), h("td", null, f.problem)))))),
+      s && target && d.info && s.componentFailures.some(f => f.type === "Flow" && /cross-reference id/i.test(f.problem || "")) &&
+        (d.info.deletes || []).some(k => k.startsWith("Flow:")) &&
+        h(FlowDeleteHelp, {key: d.id || d.startedAt, target, isProd, checkOnly: d.checkOnly, disabled: running,
+          names: (d.info.deletes || []).filter(k => k.startsWith("Flow:")).map(k => splitKey(k).fullName)}),
       s && s.testFailures.length > 0 && h("details", {className: "tr-class", open: true},
         h("summary", null, h("span", {className: "tr-dot bad"}, "✗"), h("span", {className: "tr-cls"}, `${s.testFailures.length} failing test(s)`)),
         s.testFailures.map((t, i) => h("div", {key: i, className: "rel-testfail"},

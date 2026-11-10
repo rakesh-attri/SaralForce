@@ -1,6 +1,6 @@
 // Release Center building blocks: org pickers, type presets, diff view.
 import {SearchSelect} from "../shared/combo.js";
-import {TYPE_PRESETS} from "../../core/deploy.js";
+import {TYPE_PRESETS, TYPE_PICK, TYPE_BY_NAME, ALL_TYPES, allTypes, otherTypes, typeLabel, presetTypes} from "../../core/deploy.js";
 import {diffLines, diffStats, sideBySide} from "../../core/text-diff.js";
 import {useRelease, setRelease, loadOrgs, orgByHost, setGitBranch} from "./release-state.js";
 import {listBranches} from "../shared/github.js";
@@ -55,7 +55,9 @@ function BranchPicker({org, disabled}) {
 }
 
 // Source → target pickers with swap (reverse deployment) and refresh.
-export function OrgBar({showTarget = true, sourceLabel = "Source", disabled}) {
+// fixedSource {title, sub}: a rollback or restore comes from a saved copy, not
+// an org; lockTarget keeps it on the org it belongs to.
+export function OrgBar({showTarget = true, sourceLabel = "Source", disabled, fixedSource = null, lockTarget = false}) {
   const st = useRelease();
   React.useEffect(() => {
     if (!st.orgs && !st.orgsBusy) loadOrgs();
@@ -66,6 +68,9 @@ export function OrgBar({showTarget = true, sourceLabel = "Source", disabled}) {
   disabled = disabled || !!(st.deploy && !st.deploy.finished);
   const swap = () => setRelease({sourceHost: st.targetHost, targetHost: st.sourceHost, compare: null, selected: new Set(), validation: null});
   return h("div", {className: "rel-orgbar"},
+    fixedSource ? h("div", {className: "rel-org"},
+      h("span", {className: "rel-org-l"}, sourceLabel),
+      h("div", {className: "rel-fixed-src", title: fixedSource.sub}, h("b", null, fixedSource.title), h("span", {className: "insp-meta"}, fixedSource.sub))) :
     h("div", {className: "rel-org"},
       h("span", {className: "rel-org-l"}, sourceLabel),
       h(SearchSelect, {
@@ -75,14 +80,14 @@ export function OrgBar({showTarget = true, sourceLabel = "Source", disabled}) {
       }),
       h(OrgTag, {org: orgByHost(st.sourceHost)}),
       orgByHost(st.sourceHost) && orgByHost(st.sourceHost).isGit && h(BranchPicker, {org: orgByHost(st.sourceHost), disabled})),
-    showTarget && h("button", {
+    showTarget && !fixedSource && h("button", {
       className: "btn btn-secondary btn-sm rel-swap", disabled: disabled || !st.sourceHost || !st.targetHost || st.sourceHost.startsWith("git:"),
       title: "Swap source and target (reverse deployment)", "aria-label": "Swap source and target", onClick: swap
     }, "⇄"),
     showTarget && h("div", {className: "rel-org"},
       h("span", {className: "rel-org-l"}, "Target"),
       h(SearchSelect, {
-        value: st.targetHost, options: orgOptions(orgs, st.sourceHost), disabled,
+        value: st.targetHost, options: orgOptions(orgs, fixedSource ? null : st.sourceHost), disabled: disabled || lockTarget,
         ariaLabel: "Target org", placeholder: orgs.length < 2 ? "Log in to another org first" : "Pick the target org",
         emptyText: "No other org found",
         onChange: v => setRelease({targetHost: v, compare: null, selected: new Set(), validation: null})
@@ -99,16 +104,138 @@ export function OrgBar({showTarget = true, sourceLabel = "Source", disabled}) {
       "SaralForce uses that login; nothing extra to set up."));
 }
 
+// Type groups (presets), plus any single type the org has under "More types".
+// Groups show only the types this org has; empty groups are hidden.
 export function PresetPicker({value, onChange, disabled}) {
-  const toggle = id => onChange(value.includes(id) ? value.filter(x => x !== id) : [...value, id]);
+  useRelease(); // re-render once the org's type list has loaded
+  const all = value.includes(ALL_TYPES);
+  // "All types" stands alone; picking a group switches it off.
+  const toggle = id => onChange(all ? [id] : value.includes(id) ? value.filter(x => x !== id) : [...value, id]);
+  const picked = all ? [] : value.filter(v => String(v).startsWith(TYPE_PICK));
+  const others = otherTypes().filter(t => !picked.includes(TYPE_PICK + t));
+  const count = allTypes().length;
   return h("div", {className: "rel-presets", role: "group", "aria-label": "What to include"},
-    TYPE_PRESETS.map(p => h("button", {
+    h("button", {
+      type: "button", disabled,
+      className: "insp-chip rel-chip rel-chip-all" + (all ? " on" : ""),
+      "aria-pressed": all,
+      title: `Every metadata type this org has (${count}). Big orgs take a while: use "Only changed since" to narrow it.`,
+      onClick: () => onChange(all ? [] : [ALL_TYPES])
+    }, (all ? "✓ " : "★ ") + `All types (${count})`),
+    TYPE_PRESETS.map(p => ({...p, have: p.types.filter(t => TYPE_BY_NAME[t])})).filter(p => p.have.length).map(p => h("button", {
       key: p.id, type: "button", disabled,
-      className: "insp-chip rel-chip" + (value.includes(p.id) ? " on" : ""),
-      "aria-pressed": value.includes(p.id),
-      title: p.types.join(", "),
+      className: "insp-chip rel-chip" + (!all && value.includes(p.id) ? " on" : ""),
+      "aria-pressed": !all && value.includes(p.id),
+      title: p.have.join(", "),
       onClick: () => toggle(p.id)
-    }, (value.includes(p.id) ? "✓ " : "") + p.label)));
+    }, (!all && value.includes(p.id) ? "✓ " : "") + p.label)),
+    picked.map(v => h("button", {
+      key: v, type: "button", disabled, className: "insp-chip rel-chip on",
+      title: "Remove " + v.slice(TYPE_PICK.length), onClick: () => onChange(value.filter(x => x !== v))
+    }, "✓ " + typeLabel(v.slice(TYPE_PICK.length)) + " ✕")),
+    !all && others.length > 0 && h("div", {className: "rel-more-types"},
+      h(SearchSelect, {
+        value: "", disabled, ariaLabel: "More metadata types",
+        placeholder: `＋ More types (${others.length})…`,
+        emptyText: "No other types",
+        options: others.map(t => ({value: t, label: typeLabel(t), sub: t})),
+        onChange: t => { if (t) onChange([...value, TYPE_PICK + t]); }
+      })));
+}
+
+// ── Comparison filters (like Gearset's): which types a compare covers ──
+const FILTERS_KEY = "sf_release_filters";
+const pick = types => types.map(t => TYPE_PICK + t);
+export const STANDARD_FILTERS = [
+  {id: "all", label: "Compare all", presets: [ALL_TYPES]},
+  {id: "default", label: "Default comparison", presets: ["apex", "ui", "flows", "objects", "pages", "security", "automation", "config"]},
+  {id: "basic", label: "Basic comparison", presets: pick(["ApexClass", "ApexTrigger", "ApexPage", "ApexComponent", "CustomObject", "CustomField"])},
+  {id: "perms", label: "Profiles & permission sets", presets: pick(["Profile", "PermissionSet", "PermissionSetGroup", "MutingPermissionSet", "CustomPermission",
+    "CustomObject", "CustomField", "ApexClass", "ApexPage", "CustomTab", "CustomApplication", "Layout", "RecordType", "Flow"])},
+  {id: "picklists", label: "Picklists", presets: pick(["CustomField", "GlobalValueSet", "StandardValueSet", "RecordType", "BusinessProcess"])},
+  ...TYPE_PRESETS.map(p => ({id: "p:" + p.id, label: p.label, presets: [p.id]}))
+];
+
+export function savedFilters() {
+  try { return JSON.parse(localStorage.getItem(FILTERS_KEY) || "[]").filter(f => f && f.id && Array.isArray(f.presets)); } catch (e) { return []; }
+}
+function storeFilters(list) {
+  try { localStorage.setItem(FILTERS_KEY, JSON.stringify(list)); } catch (e) { /* quota */ }
+}
+export function findFilter(id) {
+  return STANDARD_FILTERS.find(f => f.id === id) || savedFilters().find(f => f.id === id) || STANDARD_FILTERS[0];
+}
+export function filterTypes(f) {
+  return presetTypes(f.presets);
+}
+
+// One combo: standard filters, your saved ones, and "＋ New filter / manage".
+export function FilterPicker({value, onChange, disabled}) {
+  useRelease(); // counts follow the org's type list
+  const [editing, setEditing] = React.useState(null); // {id?, name, presets}
+  const [mine, setMine] = React.useState(savedFilters);
+  const opt = (f, group) => ({value: f.id, label: `${f.label} (${filterTypes(f).length})`, sub: group});
+  const options = [
+    ...STANDARD_FILTERS.map(f => opt(f, f.id === "all" ? "" : "Standard")),
+    ...mine.map(f => opt(f, "My filter")),
+    {value: "__new", label: "＋ New filter…", sub: ""},
+    ...(mine.length ? [{value: "__manage", label: "✎ Edit my filters…", sub: ""}] : [])
+  ];
+  const save = () => {
+    const name = (editing.name || "").trim();
+    if (!name || !filterTypes(editing).length) return;
+    const f = {id: editing.id || "c:" + Date.now().toString(36), label: name, presets: editing.presets};
+    const list = [...mine.filter(x => x.id !== f.id), f];
+    storeFilters(list); setMine(list); setEditing(null); onChange(f.id);
+  };
+  const remove = id => {
+    const list = mine.filter(x => x.id !== id);
+    storeFilters(list); setMine(list);
+    if (value === id) onChange("all");
+    setEditing(null);
+  };
+  return h("div", {className: "rel-filter"},
+    h("div", {className: "rel-filter-row"},
+      h("span", {className: "rel-org-l"}, "Comparison filter"),
+      h(SearchSelect, {value, options, disabled, className: "rel-filter-combo", ariaLabel: "Comparison filter",
+        onChange: v => {
+          if (v === "__new") setEditing({name: "", presets: []});
+          else if (v === "__manage") setEditing({manage: true});
+          else if (v) onChange(v);
+        }}),
+      h("span", {className: "insp-meta"}, filterTypes(findFilter(value)).length + " metadata types")),
+    editing && editing.manage && h("div", {className: "rel-filter-edit"},
+      h("div", {className: "rel-label"}, "My filters"),
+      mine.map(f => h("div", {key: f.id, className: "rel-filter-item"},
+        h("b", null, f.label), h("span", {className: "insp-meta"}, `${filterTypes(f).length} types`),
+        h("button", {className: "field-action-btn", onClick: () => setEditing({id: f.id, name: f.label, presets: f.presets})}, "Edit"),
+        h("button", {className: "field-action-btn", onClick: () => remove(f.id)}, "Delete"))),
+      h("div", {className: "rel-filter-actions"}, h("button", {className: "btn btn-secondary btn-sm", onClick: () => setEditing(null)}, "Close"))),
+    editing && !editing.manage && h("div", {className: "rel-filter-edit"},
+      h("div", {className: "rel-label"}, editing.id ? "Edit filter" : "New comparison filter"),
+      h("input", {className: "soql-save-input", placeholder: "Filter name, e.g. Sales release", value: editing.name, autoFocus: true,
+        onChange: e => setEditing({...editing, name: e.target.value}), "aria-label": "Filter name"}),
+      h(PresetPicker, {value: editing.presets, onChange: p => setEditing({...editing, presets: p})}),
+      h("div", {className: "rel-filter-actions"},
+        h("span", {className: "insp-meta"}, `${filterTypes(editing).length} metadata types`),
+        editing.id && h("button", {className: "field-action-btn", onClick: () => remove(editing.id)}, "Delete"),
+        h("button", {className: "btn btn-secondary btn-sm", onClick: () => setEditing(null)}, "Cancel"),
+        h("button", {className: "btn btn-primary btn-sm", disabled: !(editing.name || "").trim() || !filterTypes(editing).length, onClick: save}, "Save filter"))));
+}
+
+// ── Date range: from / to (empty = open), with quick picks ────────────
+export function DateRange({from, to, onChange, disabled, picks}) {
+  return h("div", {className: "rel-range"},
+    h("span", {className: "rel-org-l"}, "Changed"),
+    picks.map(p => h("button", {key: p.id, type: "button", disabled,
+      className: "insp-chip rel-chip" + (p.from === from && p.to === to ? " on" : ""),
+      onClick: () => onChange(p.from, p.to)}, p.label)),
+    h("label", {className: "rel-range-l"}, "from ",
+      h("input", {type: "date", className: "soql-save-input", value: from, max: to || undefined, disabled,
+        onChange: e => onChange(e.target.value, to), "aria-label": "Changed from"})),
+    h("label", {className: "rel-range-l"}, "to ",
+      h("input", {type: "date", className: "soql-save-input", value: to, min: from || undefined, disabled,
+        onChange: e => onChange(from, e.target.value), "aria-label": "Changed to"})));
 }
 
 const MAX_DIFF_ROWS = 3000;
@@ -147,6 +274,22 @@ export const STATUS_BADGE = {
   deleted: {kind: "err", label: "Only in target"},
   same: {kind: "off", label: "Same"}
 };
+
+// What a deploy does to a row in the target (Gearset's "difference type",
+// said as the action): added, modified, deleted, or left alone.
+// selected: what the deploy will do; not selected: what it would do.
+export const TARGET_ACTION = {
+  new: {kind: "add", on: "＋ Will be added", off: "＋ Add"},
+  changed: {kind: "mod", on: "✎ Will be modified", off: "✎ Modify"},
+  deleted: {kind: "del", on: "− Will be deleted", off: "Kept (tick to delete)"},
+  same: {kind: "off", on: "No change", off: "No change"}
+};
+export function TargetAction({status, selected}) {
+  const a = TARGET_ACTION[status] || TARGET_ACTION.same;
+  return h("span", {className: "rel-act rel-act-" + (selected ? a.kind : "off"),
+    title: selected ? "Selected: this is what the deploy does in the target" : "Not selected: nothing happens to it in the target"},
+  selected ? a.on : a.off);
+}
 
 // AI answer card with copy (shared by release notes and failure help).
 export function AiAnswer({title, text, onClose}) {

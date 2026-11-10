@@ -1,7 +1,7 @@
 // Release Center shared state. Lives for the page session (not in the
 // sidebar snapshot: compare results hold whole files), so switching
 // between Compare / Changes / Package / Deploy keeps the work.
-import {listOrgs} from "../shared/deploy-api.js";
+import {listOrgs, loadCatalog} from "../shared/deploy-api.js";
 import {putSession, getSession, pruneSessions} from "../shared/release-store.js";
 import {githubConfig, readBranch} from "../shared/github.js";
 import {componentsFromSource} from "../../core/source-format.js";
@@ -56,6 +56,11 @@ export const sessionRestored = !SESSION_ID ? Promise.resolve(false) : getSession
   restoring = false;
   pruneSessions().catch(() => {});
   if (!value) return false;
+  // Closed while still preparing (nothing sent to Salesforce yet): don't
+  // restore it as running, or the Deploy screen would stay locked.
+  if (value.deploy && !value.deploy.finished && !value.deploy.id) {
+    value.deploy = {...value.deploy, finished: true, error: "Interrupted before it reached Salesforce (the panel was closed). Nothing was deployed; run it again."};
+  }
   const patch = {};
   for (const k of PERSIST) if (value[k] != null && state[k] == null || (k === "selected" && value[k] && value[k].size)) patch[k] = value[k];
   if (Object.keys(patch).length) setRelease({...patch, restored: true});
@@ -96,7 +101,9 @@ export async function loadOrgs(refresh = false) {
     const other = orgs.find(o => o.host !== sourceHost && !o.isGit);
     const targetOk = has(state.targetHost) && state.targetHost !== sourceHost && !state.targetHost.startsWith("git:");
     const targetHost = targetOk ? state.targetHost : (other ? other.host : "");
-    setRelease({orgs, orgsBusy: false, sourceHost, targetHost});
+    // Every metadata type the orgs can deploy (adds to the built-in list).
+    await Promise.all(orgs.filter(o => o.conn && (o.host === sourceHost || o.host === targetHost)).map(o => loadCatalog(o.conn)));
+    setRelease({orgs, orgsBusy: false, sourceHost, targetHost, catalogAt: Date.now()});
   } catch (e) {
     setRelease({orgsBusy: false, orgsError: e.message || String(e)});
   }

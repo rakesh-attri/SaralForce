@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {detectSteps, mergeRunbook, runbookProgress, baseUsername, stepsFromAi, stepsForPrompt} from "../../addon/core/manual-steps.js";
+import {detectSteps, mergeRunbook, runbookProgress, baseUsername, stepsFromAi, stepsForPrompt, pendingPreSteps, sortRunbook} from "../../addon/core/manual-steps.js";
 
 const ctx = (items, texts = {}, extra = {}) => ({items, deletes: [], texts: new Map(Object.entries(texts)), before: new Map(), ...extra});
 
@@ -57,4 +57,21 @@ test("AI steps become guided custom steps", () => {
   assert.equal(s[0].setup, "/lightning/setup/Users/home");
   assert.equal(s[1].setup, "");
   assert.match(stepsForPrompt([{phase: "post", title: "T", targets: ["a"]}], ["x"]), /audit trail/);
+});
+
+test("pre-deployment steps: scheduled classes, deleted flows, rules with queues", () => {
+  const texts = new Map([
+    ["ApexClass:NightlyJob", "public class NightlyJob implements Schedulable { public void execute(SchedulableContext c) {} }"],
+    ["AssignmentRules:Case", "<AssignmentRules><assignedTo>Support_Queue</assignedTo></AssignmentRules>"]
+  ]);
+  const steps = detectSteps({items: ["ApexClass:NightlyJob", "AssignmentRules:Case"], deletes: ["Flow:Old_Flow"], texts, before: new Map()});
+  const pre = steps.filter(s => s.phase === "pre").map(s => s.id);
+  assert.ok(pre.includes("pause-jobs"));
+  assert.ok(pre.includes("flow-deactivate"));
+  assert.ok(pre.includes("rule-users"));
+  // Before steps come first, and only unfinished ones are pending.
+  const book = sortRunbook(steps);
+  assert.equal(book[0].phase, "pre");
+  const done = book.map(s => s.id === "pause-jobs" ? {...s, status: "done"} : s.id === "flow-deactivate" ? {...s, status: "skipped"} : s);
+  assert.deepEqual(pendingPreSteps(done).map(s => s.id), ["rule-users"]);
 });

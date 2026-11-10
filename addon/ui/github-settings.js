@@ -48,7 +48,7 @@ export function GitHubCard() {
     h("div", {className: "opt-card-h"},
       h("div", null,
         h("h2", null, "GitHub ", h("span", {className: "opt-optional"}, "optional")),
-        h("p", null, "Release Center can commit each release and snapshot to a repository (Salesforce DX source format) and deploy from a branch.")),
+        h("p", null, "SandShift can commit each release and snapshot to a repository (Salesforce DX source format) and deploy from a branch.")),
       h("span", {className: "opt-status " + (saved ? "on" : "off")},
         h("span", {className: "opt-dot", "aria-hidden": "true"}), saved ? "Connected" : "Not set up")),
     h("div", {className: "opt-step"},

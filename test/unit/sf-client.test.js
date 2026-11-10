@@ -16,7 +16,7 @@ function client(handler, extra = {}) {
   const sf = createSfClient({
     getHost: () => "acme.my.salesforce.com",
     getSessionId: () => "SID",
-    getApiVersion: () => "67.0",
+    getApiVersion: () => "68.0",
     fetchImpl: async (url, init) => {
       calls.push({url, init});
       return handler(url, init, calls.length);
@@ -28,9 +28,9 @@ function client(handler, extra = {}) {
 
 test("request sends auth, call options and a cache-buster, and parses JSON", async () => {
   const {sf, calls} = client(() => response(200, {ok: true}));
-  assert.deepEqual(await sf.request("/services/data/v67.0/limits/"), {ok: true});
+  assert.deepEqual(await sf.request("/services/data/v68.0/limits/"), {ok: true});
   const {url, init} = calls[0];
-  assert.match(url, /^https:\/\/acme\.my\.salesforce\.com\/services\/data\/v67\.0\/limits\/\?cache=/);
+  assert.match(url, /^https:\/\/acme\.my\.salesforce\.com\/services\/data\/v68.0\/limits\/\?cache=/);
   assert.equal(init.headers.Authorization, "Bearer SID");
   assert.equal(init.headers["Sforce-Call-Options"], "client=SaralForce");
 });
@@ -128,4 +128,22 @@ test("formatSalesforceErrors handles arrays, objects and text", () => {
   assert.equal(formatSalesforceErrors([{errorCode: "X", message: "y"}]), "X: y");
   assert.equal(formatSalesforceErrors({a: 1}), '{"a":1}');
   assert.equal(formatSalesforceErrors("plain"), "plain");
+});
+
+test("401 renews the session once and retries with the new one", async () => {
+  let sid = "OLD";
+  const seen = [];
+  const {sf, calls} = client((url, init) => init.headers.Authorization === "Bearer NEW" ? response(200, {ok: 1}) : response(401, [{message: "Session expired or invalid", errorCode: "INVALID_SESSION_ID"}]), {
+    getSessionId: () => sid,
+    renewSession: async () => { sid = "NEW"; return true; },
+    onAuthError: kind => seen.push(kind)
+  });
+  assert.deepEqual(await sf.request("/q"), {ok: 1});
+  assert.equal(calls.length, 2);
+  assert.deepEqual(seen, []);
+  // Still logged out: one renewal attempt, then the auth error.
+  const dead = client(() => response(401, ""), {renewSession: async () => false, onAuthError: kind => seen.push(kind)});
+  await assert.rejects(dead.sf.request("/q"), {name: "Unauthorized"});
+  assert.equal(dead.calls.length, 1);
+  assert.deepEqual(seen, ["unauthorized"]);
 });

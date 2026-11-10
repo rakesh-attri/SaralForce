@@ -1,17 +1,20 @@
 // Release Center → Compare: two orgs side by side, pick what to move.
 import {
   presetTypes, compKey, splitKey, typeLabel, membersFromKeys, chunkMembers, componentsFromZip,
-  classifyComponents, compareCounts, dependencyGaps, changesForPrompt, mergeMembers, mergeZipFiles
+  classifyComponents, compareCounts, dependencyGaps, changesForPrompt, mergeMembers, mergeZipFiles, ALL_TYPES
 } from "../../core/deploy.js";
+import {SearchSelect} from "../shared/combo.js";
+import {inRange, trustedDate} from "../../core/changes.js";
+import {toCsv, downloadText} from "../shared/csv.js";
 import {bytesToText} from "../../core/zip.js";
-import {listComponents, retrieve, queryAll} from "../shared/deploy-api.js";
+import {listComponents, retrieve, queryAll, loadCatalog} from "../shared/deploy-api.js";
 import {releaseNotesFromChanges} from "../shared/ai.js";
 import {permissionHolders} from "../../core/analyzers.js";
 import {putDraft} from "../shared/release-store.js";
 import {useFfSession} from "../shared/session-state.js";
 import {FFBadge} from "../shared/ui.js";
-import {useRelease, setRelease, releaseState, orgByHost, orgLabel, fmtWhen, gitComponents, orgDayStart} from "./release-state.js";
-import {OrgBar, PresetPicker, DiffView, CardHead, STATUS_BADGE, AiAnswer, AiError} from "./release-ui.js";
+import {useRelease, setRelease, releaseState, orgByHost, orgLabel, fmtWhen, gitComponents, orgDayStart, orgDaysAgo} from "./release-state.js";
+import {OrgBar, DiffView, CardHead, STATUS_BADGE, TARGET_ACTION, TargetAction, AiAnswer, AiError, FilterPicker, findFilter, filterTypes, DateRange} from "./release-ui.js";
 
 const h = React.createElement;
 const PAGE = 300;
@@ -84,13 +87,18 @@ async function compareFromGit(src, tgt, {presets, onStatus, only}) {
   return {sourceHost: src.host, targetHost: tgt.host, rows, sourceComps, edges: [], at: new Date().toISOString(), problems: t.problems.filter(p => p.problem), since: ""};
 }
 
-export async function runCompare({presets, since, onStatus}) {
+// from / to: "YYYY-MM-DD" in the org's zone ("" = open). Items changed in the
+// source in that range are compared; items without a usable date stay in.
+export async function runCompare({presets = [ALL_TYPES], from = "", to = "", since = "", onStatus}) {
+  from = from || since;
+  const ranged = !!(from || to);
   const st = releaseState();
   const src = orgByHost(st.sourceHost);
   const tgt = orgByHost(st.targetHost);
   if (!src || !tgt) throw new Error("Pick a source and a target org.");
   const only = st.compareOnly;
-  if (src.isGit) return compareFromGit(src, tgt, {presets, since, onStatus, only});
+  if (src.isGit) return compareFromGit(src, tgt, {presets, onStatus, only});
+  await Promise.all([loadCatalog(src.conn), loadCatalog(tgt.conn)]);
   let srcList;
   let tgtList;
   if (only && only.length) {
@@ -110,12 +118,10 @@ export async function runCompare({presets, since, onStatus}) {
   }
   for (const list of [srcList, tgtList]) for (const k of [...list.keys()]) if (!keepObject(k)) list.delete(k);
   let srcKeys = [...srcList.keys()];
-  if (since) {
-    const t = orgDayStart(since);
-    srcKeys = srcKeys.filter(k => {
-      const d = srcList.get(k).lastModifiedDate;
-      return d && new Date(d).getTime() >= t;
-    });
+  if (ranged) {
+    const fromMs = from ? orgDayStart(from) : 0;
+    const toMs = to ? orgDayStart(to) + 864e5 : 0;
+    srcKeys = srcKeys.filter(k => inRange(srcList.get(k).lastModifiedDate, fromMs, toMs));
   }
   const common = srcKeys.filter(k => tgtList.has(k));
   if (!srcKeys.length && !tgtList.size) throw new Error("Nothing found for the kinds you picked.");
@@ -134,9 +140,11 @@ export async function runCompare({presets, since, onStatus}) {
   const sourceComps = componentsFromZip(s.files, bytesToText);
   const targetComps = componentsFromZip(t.files, bytesToText);
   // Listed but not in a zip (e.g. empty folders): keep presence for status.
-  for (const k of srcKeys) if (!sourceComps.has(k)) sourceComps.set(k, {...splitKey(k), files: {}, raw: {}});
-  for (const k of common) if (!targetComps.has(k)) targetComps.set(k, {...splitKey(k), files: {}, raw: {}});
-  if (!since) for (const k of tgtList.keys()) if (!targetComps.has(k) && !sourceComps.has(k)) targetComps.set(k, {...splitKey(k), files: {}, raw: {}});
+  // (Settings are assumed, not listed: only what a retrieve returned exists.)
+  const real = (list, k) => !(list.get(k) || {}).synthetic;
+  for (const k of srcKeys) if (!sourceComps.has(k) && real(srcList, k)) sourceComps.set(k, {...splitKey(k), files: {}, raw: {}});
+  for (const k of common) if (!targetComps.has(k) && real(tgtList, k)) targetComps.set(k, {...splitKey(k), files: {}, raw: {}});
+  if (!ranged) for (const k of tgtList.keys()) if (!targetComps.has(k) && !sourceComps.has(k) && real(tgtList, k)) targetComps.set(k, {...splitKey(k), files: {}, raw: {}});
   const info = list => Object.fromEntries([...list.entries()].map(([k, v]) => [k, {by: v.lastModifiedByName, at: v.lastModifiedDate}]));
   const rows = classifyComponents(sourceComps, targetComps, {sourceInfo: info(srcList), targetInfo: info(tgtList)});
   let edges = [];
@@ -145,14 +153,21 @@ export async function runCompare({presets, since, onStatus}) {
     edges = await dependencyEdges(src.conn, rows);
   } catch (e) { /* MetadataComponentDependency is optional */ }
   return {sourceHost: src.host, targetHost: tgt.host, rows, sourceComps, edges, at: new Date().toISOString(),
-    problems: [...s.problems, ...t.problems].filter(p => p.problem), since: since || ""};
+    problems: [...s.problems, ...t.problems].filter(p => p.problem), from, to, since: from || ""};
 }
 
 export function CompareView({goTo}) {
   const st = useRelease();
-  const [presets, setPresets] = useFfSession("release", "presets", ["apex", "ui", "flows", "objects", "pages"]);
-  const [since, setSince] = useFfSession("release", "since", "");
-  const [filter, setFilter] = React.useState({new: true, changed: true, deleted: true, same: false});
+  // "Compare all" by default (a deploy needs the full picture); narrow it with
+  // a comparison filter, a date range, or the filters under Differences.
+  const [filterId, setFilterId] = useFfSession("release", "cmpFilter", "all");
+  const filter = findFilter(filterId);
+  const [from, setFrom] = useFfSession("release", "since", "");
+  const [to, setTo] = useFfSession("release", "until", "");
+  const [sortSrc, setSortSrc] = React.useState(false);
+  const [tab, setTab] = React.useState("diff");
+  const [typeFilter, setTypeFilter] = React.useState("");
+  const [byFilter, setByFilter] = React.useState("");
   const [search, setSearch] = React.useState("");
   const [open, setOpen] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -177,7 +192,8 @@ export function CompareView({goTo}) {
     setBusy(true); setError(""); setNotes(null); setOpen(null); setLimit(PAGE);
     setStatusState({text: "Starting…", pct: 0, started: Date.now()});
     try {
-      const result = await runCompare({presets, since, onStatus: setStatus});
+      const result = await runCompare({presets: filter.presets, from, to, onStatus: setStatus});
+      result.filterLabel = `${filter.label} (${filterTypes(filter).length} types)`;
       setRelease({compare: result, selected: new Set(), compareOnly: null});
     } catch (e) {
       setError(e.message || String(e));
@@ -189,7 +205,29 @@ export function CompareView({goTo}) {
   const rows = cmp ? cmp.rows : [];
   const counts = React.useMemo(() => compareCounts(rows), [rows]);
   const q = search.trim().toLowerCase();
-  const shown = rows.filter(r => filter[r.status] && (!q || (r.fullName + " " + typeLabel(r.type)).toLowerCase().includes(q)));
+  const inTab = r => tab === "diff" ? r.status !== "same" : r.status === tab;
+  const byOf = r => [r.source && r.source.by, r.target && r.target.by].filter(Boolean);
+  const srcAt = r => trustedDate(r.source && r.source.at) || 0;
+  const filtered = rows.filter(r => inTab(r) && (!typeFilter || r.type === typeFilter) && (!byFilter || byOf(r).includes(byFilter)) &&
+    (!q || (r.fullName + " " + typeLabel(r.type)).toLowerCase().includes(q)));
+  const shown = sortSrc ? filtered.slice().sort((a, b) => srcAt(b) - srcAt(a)) : filtered;
+  const exportCsv = () => {
+    const cols = ["Status", "In target", "Type", "Name", "Changed in source", "Changed by (source)", "Changed in target", "Changed by (target)"];
+    const out = shown.map(r => ({
+      "Status": STATUS_BADGE[r.status].label,
+      "In target": (TARGET_ACTION[r.status] || TARGET_ACTION.same)[sel.has(r.key) ? "on" : "off"].replace(/^[^A-Za-z]+/, ""),
+      "Type": typeLabel(r.type), "Name": r.fullName,
+      "Changed in source": r.source && r.source.at || "", "Changed by (source)": r.source && r.source.by || "",
+      "Changed in target": r.target && r.target.at || "", "Changed by (target)": r.target && r.target.by || ""
+    }));
+    downloadText(`compare-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(cols, out));
+  };
+  const typeCounts = React.useMemo(() => {
+    const m = new Map();
+    for (const r of rows) if (inTab(r)) m.set(r.type, (m.get(r.type) || 0) + 1);
+    return [...m.entries()].sort((a, b) => typeLabel(a[0]).localeCompare(typeLabel(b[0])));
+  }, [rows, tab]);
+  const people = React.useMemo(() => [...new Set(rows.flatMap(byOf))].sort(), [rows]);
   const sel = st.selected;
   const gaps = React.useMemo(() => cmp ? dependencyGaps(rows, sel, {edges: cmp.edges}) : [], [cmp, sel, rows]);
   const toggle = key => {
@@ -253,15 +291,13 @@ export function CompareView({goTo}) {
       h(OrgBar, {disabled: busy}),
       st.compareOnly && st.compareOnly.length
         ? h("div", {className: "insp-hint-strip"}, `Comparing the ${st.compareOnly.length} component(s) picked in Changes. `,
-          h("button", {className: "field-action-btn", onClick: () => setRelease({compareOnly: null})}, "Compare by kind instead"))
-        : h(React.Fragment, null,
-          h("div", {className: "rel-label"}, "What to compare"),
-          h(PresetPicker, {value: presets, onChange: setPresets, disabled: busy})),
+          h("button", {className: "field-action-btn", onClick: () => setRelease({compareOnly: null})}, "Compare everything instead"))
+        : h(FilterPicker, {value: filter.id, onChange: setFilterId, disabled: busy}),
       h("div", {className: "soql-save-row rel-run-row"},
-        h("label", {className: "rel-since"}, "Only changed since ",
-          h("input", {type: "date", className: "soql-save-input", value: since, disabled: busy || !!(st.compareOnly && st.compareOnly.length) || st.sourceHost.startsWith("git:"),
-            onChange: e => setSince(e.target.value), "aria-label": "Only components changed in the source since"})),
-        since && h("button", {className: "field-action-btn", onClick: () => setSince("")}, "Any time"),
+        h(DateRange, {from, to, disabled: busy || !!(st.compareOnly && st.compareOnly.length) || st.sourceHost.startsWith("git:"),
+          onChange: (f, t) => { setFrom(f); setTo(t); },
+          picks: [{id: "all", label: "All time", from: "", to: ""}, {id: "0", label: "Today", from: orgDaysAgo(0), to: ""},
+            {id: "7", label: "7 days", from: orgDaysAgo(7), to: ""}, {id: "30", label: "30 days", from: orgDaysAgo(30), to: ""}]}),
         h("button", {className: "btn btn-primary btn-sm", disabled: busy || !st.sourceHost || !st.targetHost, onClick: run},
           busy ? "Comparing…" : cmp ? "Compare again" : "Compare")),
       busy && h("div", {className: "tr-progress"},
@@ -276,16 +312,25 @@ export function CompareView({goTo}) {
     cmp && h("div", {className: "org-card org-card-wide", "data-release-results": ""},
       h(CardHead, {icon: "🔍", title: `Differences · ${orgByHost(cmp.sourceHost) ? orgByHost(cmp.sourceHost).name : cmp.sourceHost} → ${orgByHost(cmp.targetHost) ? orgByHost(cmp.targetHost).name : cmp.targetHost}`},
         h("button", {className: "btn btn-secondary btn-sm", disabled: aiBusy || !rows.length, onClick: writeNotes,
-          title: "AI writes plain release notes from the selected changes (or all changes)"}, aiBusy ? "Writing…" : "✨ Release notes")),
+          title: "AI writes plain release notes from the selected changes (or all changes)"}, aiBusy ? "Writing…" : "✨ Release notes"),
+        h("button", {className: "btn btn-secondary btn-sm", disabled: !shown.length, onClick: exportCsv, title: "Download what's shown as a CSV"}, "⬇ Export results")),
       h("div", {className: "rel-filters"},
-        ["new", "changed", "deleted", "same"].map(k => h("button", {
-          key: k, type: "button", "aria-pressed": filter[k],
-          className: "insp-chip rel-chip rel-st-" + k + (filter[k] ? " on" : ""),
-          onClick: () => setFilter({...filter, [k]: !filter[k]})
-        }, `${STATUS_BADGE[k].label} · ${counts[k]}`)),
+        h("div", {className: "rel-tabs", role: "tablist", "aria-label": "Difference type"},
+          [["diff", "All differences", counts.new + counts.changed + counts.deleted], ...["new", "changed", "deleted", "same"].map(k => [k, k === "same" ? "No difference" : STATUS_BADGE[k].label, counts[k]])]
+            .map(([k, label, n]) => h("button", {
+              key: k, type: "button", role: "tab", "aria-selected": tab === k,
+              className: "insp-chip rel-chip rel-st-" + k + (tab === k ? " on" : ""),
+              onClick: () => { setTab(k); setLimit(PAGE); }
+            }, `${label} · ${n}`))),
+        h(SearchSelect, {value: typeFilter, className: "rel-type", ariaLabel: "Metadata type",
+          options: [{value: "", label: "All metadata types"}, ...typeCounts.map(([t, n]) => ({value: t, label: `${typeLabel(t)} (${n})`}))],
+          onChange: v => { setTypeFilter(v); setLimit(PAGE); }}),
+        people.length > 0 && h(SearchSelect, {value: byFilter, className: "rel-by", ariaLabel: "Changed by",
+          options: [{value: "", label: "Changed by anyone"}, ...people.map(p => ({value: p, label: p}))],
+          onChange: v => { setByFilter(v); setLimit(PAGE); }}),
         h("input", {className: "soql-save-input rel-search", placeholder: "Search name or type…", value: search,
           onChange: e => { setSearch(e.target.value); setLimit(PAGE); }, "aria-label": "Search differences"}),
-        cmp.since && h("span", {className: "insp-meta"}, "Changed since " + cmp.since)),
+        h("span", {className: "insp-meta"}, [cmp.filterLabel, cmp.from || cmp.to ? `changed ${cmp.from ? "from " + cmp.from : ""}${cmp.to ? " to " + cmp.to : ""}` : ""].filter(Boolean).join(" · "))),
       cmp.stale && h("div", {className: "insp-warn"}, "You deployed to the target since this compare, so these results are out of date. ",
         h("button", {className: "field-action-btn", disabled: busy, onClick: run}, "Compare again")),
       cmp.problems.length > 0 && h("details", {className: "insp-meta rel-problems"},
@@ -309,8 +354,10 @@ export function CompareView({goTo}) {
             h("thead", null, h("tr", null,
               h("th", {className: "rel-cb"}, h("input", {type: "checkbox", checked: allShownOn, onChange: e => selectShown(e.target.checked),
                 "aria-label": "Select all shown"})),
-              h("th", null, "Status"), h("th", null, "Type"), h("th", null, "Name"),
-              h("th", null, "Changed in source"), h("th", null, "Changed in target"))),
+              h("th", null, "Status"), h("th", {title: "What a deploy does to it in the target"}, "In target"), h("th", null, "Type"), h("th", null, "Name"),
+              h("th", {className: "rel-sort" + (sortSrc ? " on" : ""), onClick: () => setSortSrc(!sortSrc), title: "Sort by date changed in the source",
+                "aria-sort": sortSrc ? "descending" : "none"}, "Changed in source " + (sortSrc ? "↓" : "⇅")),
+              h("th", null, "Changed in target"))),
             h("tbody", null, shown.slice(0, limit).map(r => [
               h("tr", {key: r.key, className: "rel-row" + (open === r.key ? " open" : "") + (sel.has(r.key) ? " sel" : ""),
                 onClick: () => setOpen(open === r.key ? null : r.key)},
@@ -318,12 +365,13 @@ export function CompareView({goTo}) {
                   r.status !== "same" && h("input", {type: "checkbox", checked: sel.has(r.key), onChange: () => toggle(r.key),
                     "aria-label": (r.status === "deleted" ? "Delete in target: " : "Deploy ") + r.fullName})),
                 h("td", null, h(FFBadge, {kind: STATUS_BADGE[r.status].kind}, STATUS_BADGE[r.status].label)),
+                h("td", null, h(TargetAction, {status: r.status, selected: sel.has(r.key)})),
                 h("td", {className: "insp-meta"}, typeLabel(r.type)),
                 h("td", {className: "rel-name"}, (open === r.key ? "▾ " : "▸ ") + r.fullName),
                 h("td", {className: "insp-meta"}, r.source ? [r.source.by, fmtWhen(r.source.at)].filter(Boolean).join(" · ") : ""),
                 h("td", {className: "insp-meta"}, r.target ? [r.target.by, fmtWhen(r.target.at)].filter(Boolean).join(" · ") : "")),
               open === r.key && h("tr", {key: r.key + ":diff", className: "rel-diff-row"},
-                h("td", {colSpan: 6}, h(DiffView, {row: r})))
+                h("td", {colSpan: 7}, h(DiffView, {row: r})))
             ])))),
       shown.length > limit && h("button", {className: "btn btn-secondary btn-sm", onClick: () => setLimit(limit + PAGE)},
         `Show more (${shown.length - limit} left)`),

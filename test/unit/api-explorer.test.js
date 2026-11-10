@@ -6,26 +6,26 @@ import {
 } from "../../addon/core/api-explorer.js";
 
 test("normalizePath", () => {
-  assert.equal(normalizePath("sobjects/Account", "67.0"), "/services/data/v67.0/sobjects/Account");
-  assert.equal(normalizePath("v60.0/limits", "67.0"), "/services/data/v60.0/limits");
-  assert.equal(normalizePath("/services/apexrest/x", "67.0"), "/services/apexrest/x");
-  assert.equal(normalizePath("services/data/", "67.0"), "/services/data/");
-  assert.equal(normalizePath("https://acme.my.salesforce.com/services/data/v67.0/", "67.0"), "/services/data/v67.0/");
-  assert.equal(normalizePath("", "67.0"), "/services/data/v67.0/");
+  assert.equal(normalizePath("sobjects/Account", "68.0"), "/services/data/v68.0/sobjects/Account");
+  assert.equal(normalizePath("v60.0/limits", "68.0"), "/services/data/v60.0/limits");
+  assert.equal(normalizePath("/services/apexrest/x", "68.0"), "/services/apexrest/x");
+  assert.equal(normalizePath("services/data/", "68.0"), "/services/data/");
+  assert.equal(normalizePath("https://acme.my.salesforce.com/services/data/v68.0/", "68.0"), "/services/data/v68.0/");
+  assert.equal(normalizePath("", "68.0"), "/services/data/v68.0/");
 });
 
 test("withVersion fills strings and nested bodies", () => {
-  assert.equal(withVersion("/services/data/v{v}/x", "67.0"), "/services/data/v67.0/x");
+  assert.equal(withVersion("/services/data/v{v}/x", "68.0"), "/services/data/v68.0/x");
   const comp = REST_PRESETS.find(p => p.label.startsWith("Composite (create")).body;
-  assert.match(JSON.stringify(withVersion(comp, "67.0")), /\/services\/data\/v67\.0\/sobjects\/Account/);
-  assert.doesNotMatch(JSON.stringify(withVersion(comp, "67.0")), /\{v\}/);
+  assert.match(JSON.stringify(withVersion(comp, "68.0")), /\/services\/data\/v68.0\/sobjects\/Account/);
+  assert.doesNotMatch(JSON.stringify(withVersion(comp, "68.0")), /\{v\}/);
 });
 
 test("soapTemplate puts a session placeholder and the API namespace", () => {
-  const t = soapTemplate(SOAP_APIS[0], "67.0");
+  const t = soapTemplate(SOAP_APIS[0], "68.0");
   assert.match(t, /xmlns:urn="urn:partner\.soap\.sforce\.com"/);
   assert.ok(t.includes(SESSION_PLACEHOLDER));
-  assert.match(soapTemplate(SOAP_APIS[1], "67.0"), /<urn:asOfVersion>67\.0<\/urn:asOfVersion>/);
+  assert.match(soapTemplate(SOAP_APIS[1], "68.0"), /<urn:asOfVersion>68.0<\/urn:asOfVersion>/);
 });
 
 test("formatXml indents and keeps text inline", () => {
@@ -42,8 +42,8 @@ test("prettyBody detects JSON, XML and text", () => {
 });
 
 test("apiLinks finds clickable resource paths", () => {
-  const t = JSON.stringify({sobjects: "/services/data/v67.0/sobjects", nextRecordsUrl: "/services/data/v67.0/query/01g-2000", other: "x"});
-  assert.deepEqual(apiLinks(t), ["/services/data/v67.0/sobjects", "/services/data/v67.0/query/01g-2000"]);
+  const t = JSON.stringify({sobjects: "/services/data/v68.0/sobjects", nextRecordsUrl: "/services/data/v68.0/query/01g-2000", other: "x"});
+  assert.deepEqual(apiLinks(t), ["/services/data/v68.0/sobjects", "/services/data/v68.0/query/01g-2000"]);
 });
 
 test("addHistory de-duplicates and caps", () => {

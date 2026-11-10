@@ -106,12 +106,19 @@ async function saveViaContainer(draft, {checkOnly, onProgress}) {
 // Save an edit draft. Options: checkOnly (Apex/trigger/page compile only),
 // force (skip the "changed in the org since you opened it" check).
 // Returns {saved: [paths]} or throws; a conflict throws error.code "CONFLICT".
-async function saveEditDraft(draft, {checkOnly = false, force = false, onProgress} = {}) {
+async function saveEditDraft(draft, {checkOnly = false, force = false, skipLint = false, onProgress} = {}) {
   const changed = changedFiles(draft);
   if (!changed.length) throw new Error("Nothing changed yet.");
-  // Known compile mistakes, caught before Salesforce is asked.
-  const lint = lintFiles(changed, {apiVersion: (draft.form || {}).apiVersion});
-  if (lint.length) throw new Error(lintText(lint));
+  // Known compile mistakes, caught before Salesforce is asked; only ones this
+  // edit added (what was already in the org doesn't block a save).
+  const apiV = (draft.form || {}).apiVersion;
+  const had = new Set(lintFiles(changed.filter(f => f.original != null).map(f => ({...f, content: f.original})), {apiVersion: apiV}).map(p => p.path + "|" + p.message));
+  const lint = skipLint ? [] : lintFiles(changed, {apiVersion: apiV}).filter(p => !had.has(p.path + "|" + p.message));
+  if (lint.length) {
+    const err = new Error(lintText(lint));
+    err.code = "LINT";
+    throw err;
+  }
   try {
     if (!force && !checkOnly && draft.existing.lastModified) {
       const now = await orgLastModified(draft.kind, draft);

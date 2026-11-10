@@ -105,7 +105,7 @@ export function analyzePlan(plan, ctx = {}) {
 
   // Deletes that Salesforce refuses or that lose data.
   const delFlows = ofType(dels, "Flow");
-  if (delFlows.length) out.push({kind: "warn", id: "flow-delete", text: `Deleting flow(s) ${delFlows.join(", ")}: an active flow can't be deleted; deactivate it in the target first. All its versions are removed.`});
+  if (delFlows.length) out.push({kind: "warn", id: "flow-delete", text: `Deleting flow(s) ${delFlows.join(", ")}: Salesforce won't delete a flow that is active, has paused or waiting runs, or is called by other metadata. SandShift checks the target before sending. All its versions are removed.`});
   const delData = dels.filter(k => /^(CustomField|CustomObject):/.test(k));
   if (delData.length) out.push({kind: "warn", id: "data-loss", text: `Deleting ${delData.length} field(s)/object(s) also deletes their data, and a rollback can bring back the field but not the data. Export it first.`});
   const both = dels.filter(k => keys.includes(k));
