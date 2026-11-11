@@ -328,6 +328,26 @@ function innerFullName(text) {
   return m ? m[1] : "";
 }
 
+// The name Setup shows (masterLabel / label), which can differ from the API
+// name: renaming a duplicate rule, flow or field keeps its API name.
+const XML_ENTITIES = {amp: "&", lt: "<", gt: ">", quot: '"', apos: "'"};
+export function componentLabel(text) {
+  const xml = String(text || "");
+  if (!xml || xml.startsWith("binary ")) return "";
+  for (const el of topLevelElements(xml)) {
+    if (el.tag !== "masterLabel" && el.tag !== "label") continue;
+    const m = /^<[^>]*>([\s\S]*)<\/[^>]*>$/.exec(xml.slice(el.start, el.end));
+    return m ? m[1].trim().replace(/&(amp|lt|gt|quot|apos);/g, (x, n) => XML_ENTITIES[n]) : "";
+  }
+  return "";
+}
+
+// Show the label only when it says something the API name doesn't.
+export function labelDiffers(label, fullName) {
+  const norm = v => String(v || "").toLowerCase().replace(/__c$|[^a-z0-9]/g, "");
+  return !!label && norm(label) !== norm(String(fullName || "").split(".").pop());
+}
+
 // Split a parent file (objects/X.object, labels/CustomLabels.labels) into
 // the parent plus its child components.
 export function splitParentFile(parentType, parentName, xml) {
@@ -460,6 +480,14 @@ export function componentText(comp) {
 
 // source / target: Map(compKey → comp). Returns rows sorted by type, name.
 // status: "new" (only in source), "deleted" (only in target), "changed", "same".
+// XML metadata that differs only in indentation is the same component: a
+// field cut out of an org's .object file is indented deeper than the same
+// field in an SFDX repo's own .field-meta.xml. Code is compared as written.
+const unindent = text => text.split("\n").map(l => l.replace(/^\s+/, "")).join("\n");
+function sameXmlIgnoringIndent(a, b) {
+  return /^\s*</.test(a) && /^\s*</.test(b) && unindent(a) === unindent(b);
+}
+
 export function classifyComponents(source, target, {sourceInfo = {}, targetInfo = {}} = {}) {
   const keys = new Set([...source.keys(), ...target.keys()]);
   const rows = [];
@@ -469,8 +497,10 @@ export function classifyComponents(source, target, {sourceInfo = {}, targetInfo 
     const {type, fullName} = s || t;
     const sText = componentText(s);
     const tText = componentText(t);
-    const status = s && !t ? "new" : !s && t ? "deleted" : sText === tText ? "same" : "changed";
+    const status = s && !t ? "new" : !s && t ? "deleted" : sText === tText || sameXmlIgnoringIndent(sText, tText) ? "same" : "changed";
+    const label = componentLabel(sText) || componentLabel(tText);
     rows.push({key, type, fullName, status, sourceText: sText, targetText: tText,
+      label: labelDiffers(label, fullName) ? label : "",
       source: sourceInfo[key] || null, target: targetInfo[key] || null});
   }
   rows.sort((a, b) => a.type.localeCompare(b.type) || a.fullName.localeCompare(b.fullName));
@@ -571,7 +601,9 @@ export function chunkMembers(members, maxFiles = 5000) {
 
 // Two copies of one parent file (objects/X.object, labels/CustomLabels.labels)
 // from different retrieve parts → one file holding the elements of both.
-export function mergeParentXml(a, b) {
+// On a name clash the first copy wins; laterWins makes b's element replace a's
+// (an updated label must overwrite the copy already in the repo).
+export function mergeParentXml(a, b, {laterWins = false} = {}) {
   const root = /<(CustomObject|CustomLabels|Workflow|SharingRules|AssignmentRules|AutoResponseRules|EscalationRules|MatchingRules|Profile)\b/;
   const rootTag = (root.exec(a) || root.exec(b) || [])[1] || "CustomObject";
   const seen = new Map();
@@ -580,7 +612,7 @@ export function mergeParentXml(a, b) {
       const text = xml.slice(el.start, el.end);
       const name = rootTag === "Profile" ? "" : innerFullName(text);
       const key = el.tag + "|" + (name || text);
-      if (!seen.has(key)) seen.set(key, text);
+      if (laterWins || !seen.has(key)) seen.set(key, text);
     }
   }
   let els = [...seen.values()];

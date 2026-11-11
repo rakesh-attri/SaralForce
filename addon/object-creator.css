@@ -13247,3 +13247,113 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
 .rel-table th.rel-sort.on {
   color: #0176d3;
 }
+
+/* Compare: the name Setup shows, when the API name differs (renamed items). */
+.rel-setup-label {
+  display: block;
+  margin-left: 14px;
+  font-family: inherit;
+  font-size: 11px;
+  color: #5c6b82;
+}
+
+.rel-setup-label::before {
+  content: "Label: ";
+  color: #8a94a6;
+}
+
+/* Deploy: "Any manual steps?" dialog (on the sf-confirm look). */
+.sf-confirm-dialog.rel-steps-dialog {
+  max-width: 560px;
+}
+
+.rel-steps-group {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid #e3e8f0;
+  border-radius: 8px;
+  background: #f8fafd;
+  font-size: 13px;
+}
+
+.rel-steps-head {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.rel-steps-group ul {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.rel-steps-group li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e3e8f0;
+}
+
+.rel-steps-group li > span:first-child {
+  flex: 1;
+}
+
+.rel-steps-tag {
+  font-size: 11px;
+  color: #5c6b82;
+  background: #eef2f8;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.rel-steps-x {
+  border: none;
+  background: none;
+  color: #8a94a6;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.rel-steps-x:hover {
+  color: #ba0517;
+}
+
+.rel-steps-add {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.rel-steps-add input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid #c9d2e0;
+  border-radius: 6px;
+  background: #fff;
+  color: #181818;
+}
+
+.rel-steps-add input:focus {
+  outline: 2px solid #1b96ff;
+  outline-offset: 0;
+  border-color: #1b96ff;
+}
+
+.rel-steps-add .sf-confirm-btn:disabled,
+.rel-steps-dialog .sf-confirm-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rel-steps-noask {
+  display: block;
+  font-size: 12px;
+  color: #5c6b82;
+  margin: 4px 0 12px;
+}

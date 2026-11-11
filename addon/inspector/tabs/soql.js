@@ -1,7 +1,7 @@
 import {sfConn, apiVersion} from "../../inspector.js";
 import {getSavedConfig, getProviderConfig, hasValidConfig} from "../../llm/llm-service.js";
 import {safeCopyText} from "../../utils.js";
-import {toCsv, downloadText, flattenRecord} from "../shared/csv.js";
+import {toCsv, downloadText, flattenRecord, columnsOf} from "../shared/csv.js";
 import {runSoql, runSoqlMore} from "../shared/query.js";
 import {useSfTimeZoneTick} from "../shared/format.js";
 import {ffIcon, FF_I_DB, FF_I_CLOCK, FF_I_BOOKMARK, FF_I_SLIDERS, FF_I_DOWNLOAD, FF_I_DOC} from "../shared/icons.js";
@@ -177,10 +177,8 @@ function SoqlTab() {
     setDetailHint(null);
     try {
       const r = await runSoql(q, limit, {tooling: useTooling, allRows: useRecycle});
-      const flat = r.records.map(flattenRecord);
-      const colSet = new Set();
-      flat.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
-      setResult({...r, rows: flat, columns: [...colSet]});
+      const flat = r.records.map(r => flattenRecord(r));
+      setResult({...r, rows: flat, columns: columnsOf(flat)});
       setResultFilter("");
       setPage(0);
       setCeleb(c => c + 1);
@@ -214,11 +212,9 @@ function SoqlTab() {
     setError(null);
     try {
       const more = await runSoqlMore(result.nextUrl);
-      const flat = more.records.map(flattenRecord);
+      const flat = more.records.map(r => flattenRecord(r));
       setResult(prev => {
-        const colSet = new Set(prev.columns);
-        flat.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
-        return {...prev, rows: prev.rows.concat(flat), columns: [...colSet],
+        return {...prev, rows: prev.rows.concat(flat), columns: columnsOf(flat, prev.columns),
           fetched: prev.rows.length + flat.length, truncated: more.truncated, nextUrl: more.nextUrl};
       });
     } catch (e) {

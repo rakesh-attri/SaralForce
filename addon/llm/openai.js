@@ -1,4 +1,5 @@
 import {usageFromOpenAI} from "../core/ai-usage.js";
+import {sseData, parseChunk, truncatedError, blockedError, streamError} from "./stream.js";
 
 const API_BASE = "https://api.openai.com/v1";
 export const OPENAI_DEFAULT_MODEL = "gpt-5.6-terra";
@@ -50,6 +51,8 @@ export class OpenAIProvider {
     if (choice?.message?.refusal) {
       throw new Error(choice.message.refusal);
     }
+    if (choice?.finish_reason === "length") throw truncatedError(choice.message?.content);
+    if (choice?.finish_reason === "content_filter") throw blockedError("OpenAI", "content filter");
     return choice?.message?.content || "";
   }
 
@@ -70,40 +73,31 @@ export class OpenAIProvider {
   }
 
   async _handleStream(response, onChunk, onUsage) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
     let fullText = "";
-    let buffer = "";
     let usage = null;
+    let finish = null;
+    let refusal = "";
 
-    while (true) {
-      const {done, value} = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, {stream: true});
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
-          if (data === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.usage) usage = parsed.usage;
-            const content = parsed.choices?.[0]?.delta?.content;
-            if (content) {
-              fullText += content;
-              onChunk(fullText);
-            }
-          } catch (e) {
-            // Skip malformed chunks
-          }
-        }
+    for await (const data of sseData(response)) {
+      const parsed = parseChunk(data);
+      if (!parsed) continue;   // "[DONE]" and keep-alives
+      if (parsed.error) throw streamError("OpenAI", parsed.error);
+      if (parsed.usage) usage = parsed.usage;
+      const choice = parsed.choices?.[0];
+      if (!choice) continue;
+      if (choice.finish_reason) finish = choice.finish_reason;
+      if (choice.delta?.refusal) refusal += choice.delta.refusal;
+      const content = choice.delta?.content;
+      if (content) {
+        fullText += content;
+        onChunk(fullText);
       }
     }
 
     if (onUsage) onUsage(usageFromOpenAI(usage));
+    if (refusal && !fullText) throw new Error(refusal);
+    if (finish === "length") throw truncatedError(fullText);
+    if (finish === "content_filter") throw blockedError("OpenAI", "content filter");
     return fullText;
   }
 }

@@ -6,6 +6,8 @@ import {
 import {SearchSelect} from "../shared/combo.js";
 import {inRange, trustedDate} from "../../core/changes.js";
 import {toCsv, downloadText} from "../shared/csv.js";
+import {detectSteps} from "../../core/manual-steps.js";
+import {useStepsAsk} from "./release-steps-ask.js";
 import {bytesToText} from "../../core/zip.js";
 import {listComponents, retrieve, queryAll, loadCatalog} from "../shared/deploy-api.js";
 import {releaseNotesFromChanges} from "../shared/ai.js";
@@ -187,6 +189,7 @@ export function CompareView({goTo}) {
   const [pkg, setPkg] = useFfSession("metadata", "pkg", {});
   const [added, setAdded] = React.useState("");
   const cmp = st.compare && st.compare.sourceHost === st.sourceHost && st.compare.targetHost === st.targetHost ? st.compare : null;
+  const {askSteps, dialog: stepsDialog} = useStepsAsk();
 
   const run = async () => {
     setBusy(true); setError(""); setNotes(null); setOpen(null); setLimit(PAGE);
@@ -209,14 +212,14 @@ export function CompareView({goTo}) {
   const byOf = r => [r.source && r.source.by, r.target && r.target.by].filter(Boolean);
   const srcAt = r => trustedDate(r.source && r.source.at) || 0;
   const filtered = rows.filter(r => inTab(r) && (!typeFilter || r.type === typeFilter) && (!byFilter || byOf(r).includes(byFilter)) &&
-    (!q || (r.fullName + " " + typeLabel(r.type)).toLowerCase().includes(q)));
+    (!q || (r.fullName + " " + (r.label || "") + " " + typeLabel(r.type)).toLowerCase().includes(q)));
   const shown = sortSrc ? filtered.slice().sort((a, b) => srcAt(b) - srcAt(a)) : filtered;
   const exportCsv = () => {
-    const cols = ["Status", "In target", "Type", "Name", "Changed in source", "Changed by (source)", "Changed in target", "Changed by (target)"];
+    const cols = ["Status", "In target", "Type", "Name", "Label", "Changed in source", "Changed by (source)", "Changed in target", "Changed by (target)"];
     const out = shown.map(r => ({
       "Status": STATUS_BADGE[r.status].label,
       "In target": (TARGET_ACTION[r.status] || TARGET_ACTION.same)[sel.has(r.key) ? "on" : "off"].replace(/^[^A-Za-z]+/, ""),
-      "Type": typeLabel(r.type), "Name": r.fullName,
+      "Type": typeLabel(r.type), "Name": r.fullName, "Label": r.label || "",
       "Changed in source": r.source && r.source.at || "", "Changed by (source)": r.source && r.source.by || "",
       "Changed in target": r.target && r.target.at || "", "Changed by (target)": r.target && r.target.by || ""
     }));
@@ -237,7 +240,13 @@ export function CompareView({goTo}) {
   };
   const selectShown = on => {
     const next = new Set(sel);
-    for (const r of shown) if (r.status !== "same") { if (on) next.add(r.key); else next.delete(r.key); }
+    // "Select all" never queues deletes from the mixed view: target-only rows
+    // are ticked one by one, or all at once from the "Only in target" tab.
+    for (const r of shown) {
+      if (r.status === "same") continue;
+      if (!on) next.delete(r.key);
+      else if (r.status !== "deleted" || tab === "deleted") next.add(r.key);
+    }
     setRelease({selected: next});
   };
   const perms = React.useMemo(() => cmp ? permissionHolders(rows, sel) : [], [cmp, sel, rows]);
@@ -262,7 +271,16 @@ export function CompareView({goTo}) {
   const selRows = rows.filter(r => sel.has(r.key));
   const deploying = selRows.filter(r => r.status !== "deleted");
   const deleting = selRows.filter(r => r.status === "deleted");
-  const allShownOn = shown.some(r => r.status !== "same") && shown.filter(r => r.status !== "same").every(r => sel.has(r.key));
+  const bulkPick = shown.filter(r => r.status !== "same" && (r.status !== "deleted" || tab === "deleted"));
+  const allShownOn = bulkPick.length > 0 && bulkPick.every(r => sel.has(r.key));
+
+  // Ask for the hand steps here, once per selection (Deploy then won't ask again).
+  const nextToDeploy = async () => {
+    const keys = deploying.map(r => r.key);
+    const deletes = deleting.map(r => r.key);
+    const detected = detectSteps({items: keys, deletes, texts: new Map(deploying.map(r => [r.key, r.sourceText])), before: new Map()});
+    if (await askSteps({keys, deletes, detected, verb: "continue"})) goTo("deploy");
+  };
 
   const addToPackage = () => {
     setPkg(mergeMembers(pkg, membersFromKeys(deploying.map(r => r.key))));
@@ -367,7 +385,9 @@ export function CompareView({goTo}) {
                 h("td", null, h(FFBadge, {kind: STATUS_BADGE[r.status].kind}, STATUS_BADGE[r.status].label)),
                 h("td", null, h(TargetAction, {status: r.status, selected: sel.has(r.key)})),
                 h("td", {className: "insp-meta"}, typeLabel(r.type)),
-                h("td", {className: "rel-name"}, (open === r.key ? "▾ " : "▸ ") + r.fullName),
+                h("td", {className: "rel-name", title: r.label ? `Label in Setup: ${r.label} · API name: ${r.fullName}` : undefined},
+                  (open === r.key ? "▾ " : "▸ ") + r.fullName,
+                  r.label && h("span", {className: "rel-setup-label"}, r.label)),
                 h("td", {className: "insp-meta"}, r.source ? [r.source.by, fmtWhen(r.source.at)].filter(Boolean).join(" · ") : ""),
                 h("td", {className: "insp-meta"}, r.target ? [r.target.by, fmtWhen(r.target.at)].filter(Boolean).join(" · ") : "")),
               open === r.key && h("tr", {key: r.key + ":diff", className: "rel-diff-row"},
@@ -386,5 +406,6 @@ export function CompareView({goTo}) {
         h("button", {className: "btn btn-secondary btn-sm", disabled: !sel.size, onClick: saveDraft, title: "Save this selection to reuse later (Package → Drafts)"}, "Save draft"),
         h("button", {className: "btn btn-secondary btn-sm", disabled: !deploying.length, onClick: addToPackage}, "Add to package"),
         h("button", {className: "btn btn-secondary btn-sm", disabled: !sel.size, onClick: () => setRelease({selected: new Set()})}, "Clear"),
-        h("button", {className: "btn btn-primary btn-sm", disabled: !sel.size, onClick: () => goTo("deploy")}, "Next: validate & deploy →"))));
+        h("button", {className: "btn btn-primary btn-sm", disabled: !sel.size, onClick: nextToDeploy}, "Next: validate & deploy →"))),
+    stepsDialog);
 }

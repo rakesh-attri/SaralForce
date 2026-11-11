@@ -27,6 +27,23 @@ const ID_QUERY = {
   AuraDefinitionBundle: n => `SELECT Id FROM AuraDefinitionBundle WHERE DeveloperName = '${n}' AND NamespacePrefix = null`
 };
 
+const TYPE_LABEL = {ApexClass: "Apex class", ApexTrigger: "Apex trigger", ApexPage: "Visualforce page",
+  LightningComponentBundle: "Lightning web component", AuraDefinitionBundle: "Aura component"};
+
+// A Metadata API deploy replaces a component that has the same name. A "new"
+// draft must never do that silently, so look the names up first.
+async function existingMembers(members) {
+  const taken = [];
+  for (const [type, names] of Object.entries(members || {})) {
+    if (!ID_QUERY[type]) continue;
+    for (const name of names) {
+      const r = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=${encodeURIComponent(ID_QUERY[type](name))}`, {useCache: false});
+      if (r.records && r.records.length) taken.push({type, name});
+    }
+  }
+  return taken;
+}
+
 // Apex, triggers, Visualforce, LWC and Aura go as ONE Metadata API package:
 // Salesforce compiles every file together and saves all of them or none.
 // checkOnly = compile (and in production run the draft's tests) without saving.
@@ -40,6 +57,16 @@ async function deployDraftPackage(draft, {checkOnly = false, onProgress = () => 
   }
   // 2. Compile (and deploy) the whole draft at once.
   const pkg = draftPackage(draft, apiVersion);
+  if (!checkOnly && draft.mode !== "edit") {
+    onProgress("Checking names…");
+    const taken = await existingMembers(pkg.members);
+    if (taken.length) {
+      const err = new Error(`Already in this org: ${taken.map(t => `${t.name} (${TYPE_LABEL[t.type] || t.type})`).join(", ")}. ` +
+        "Deploying would replace it. Rename the new component, or open the existing one from the list to edit it.");
+      err.code = "EXISTS";
+      throw err;
+    }
+  }
   const isSandbox = await isSandboxOrg();
   const opts = draftTestOptions({isSandbox, hasApex: !!(pkg.members.ApexClass || pkg.members.ApexTrigger), tests: pkg.tests});
   onProgress(checkOnly ? "Compiling…" : "Deploying…");

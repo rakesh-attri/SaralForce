@@ -112,6 +112,7 @@ function makeOrgs() {
       PayGateway_Sandbox: comp("Shivam Ojha", 0.05 * day, {"remoteSiteSettings/PayGateway_Sandbox.remoteSite": meta("RemoteSiteSetting", "\n    <isActive>true</isActive>\n    <url>https://sandbox.pay.example.com</url>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")}, 0.05 * day)
     },
     ExternalDataSource: {},
+    DuplicateRule: {"Account.TestRule": comp("Shivam Ojha", 0.02 * day, {"duplicateRules/Account.TestRule.duplicateRule": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<DuplicateRule xmlns=\"http://soap.sforce.com/2006/04/metadata\">\n    <actionOnInsert>Allow</actionOnInsert>\n    <isActive>false</isActive>\n    <masterLabel>TestRule2</masterLabel>\n</DuplicateRule>\n"})},
     Profile: {"Sales User": comp("Priya Nair", 1 * day, {"profiles/Sales User.profile": profileXml([fp("Invoice__c.Amount__c", true), "<custom>true</custom>", "<userLicense>Salesforce</userLicense>"])})},
     MatchingRules: {Account: {...comp("Autoproc", 40 * day, {"matchingRules/Account.matchingRule": matchXml([mrule("Standard_Account_Match", "Exact", "Active"), mrule("TestRule1", "FuzzyCompanyName", "Inactive")])}),
       childAt: {"Account.TestRule1": {by: "Shivam Ojha", at: when(0.05 * day)}}}},
@@ -235,7 +236,7 @@ function listRows(org, type) {
 
 const RELEASE_TYPES = new Set(["ApexClass", "ApexTrigger", "LightningComponentBundle", "Flow", "CustomObject", "CustomField", "ValidationRule", "Layout",
   "NamedCredential", "RemoteSiteSetting", "ExternalDataSource", "WorkflowRule", "WorkflowAlert", "WorkflowFieldUpdate", "WorkflowOutboundMessage", "WorkflowTask",
-  "ExperienceBundle", "OmniScript", "DecisionTable", "Settings", "Profile", "MatchingRule"]);
+  "ExperienceBundle", "OmniScript", "DecisionTable", "Settings", "Profile", "MatchingRule", "DuplicateRule"]);
 
 function retrieveZip(org, members) {
   const files = new Map();

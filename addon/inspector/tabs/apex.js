@@ -40,10 +40,14 @@ System.debug('Uncomment the line above to run your batch');`}
 // request body (no URL length limit) and this run's own debug log comes
 // back in the response at the requested level. Resolves null when the SOAP
 // endpoint can't be used (then the REST + TraceFlag path takes over).
+const APEX_UNSURE = "The connection to Salesforce dropped before a result came back. The script may or may not have run: " +
+  "check the org (or the debug logs) before running it again.";
+
 async function apexExecuteSoap(code, {timeoutMs, level}) {
   const ctrl = new AbortController();
   const timer = timeoutMs ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
   let res;
+  const sentAt = Date.now();
   try {
     res = await fetch(`https://${sfConn.instanceHostname}/services/Soap/s/${apiVersion}`, {
       method: "POST",
@@ -53,7 +57,14 @@ async function apexExecuteSoap(code, {timeoutMs, level}) {
     });
   } catch (e) {
     if (e.name === "AbortError") throw new Error("Request timed out");
-    return null;
+    // A blocked endpoint fails at once while the org still answers REST: the
+    // script never ran, so the REST path may take over. Anything else may be
+    // a response lost after Salesforce ran the script; running it again
+    // through REST would execute it twice.
+    const quick = Date.now() - sentAt < 5000;
+    const orgUp = quick && await sfConn.rest(`/services/data/v${apiVersion}/limits`, {useCache: false}).then(() => true, () => false);
+    if (orgUp) return null;
+    throw new Error(APEX_UNSURE);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -64,7 +75,11 @@ async function apexExecuteSoap(code, {timeoutMs, level}) {
     if (res.status === 404 || /API_DISABLED|UNKNOWN_EXCEPTION.*Apex API/i.test(parsed.fault)) return null;
     throw new Error(parsed.fault);
   }
-  if (!res.ok && !/<(?:\w+:)?result\b/.test(text)) return null;
+  if (!res.ok && !/<(?:\w+:)?result\b/.test(text)) {
+    // A gateway error can arrive after the script already ran.
+    if (res.status >= 500) throw new Error(APEX_UNSURE);
+    return null;
+  }
   return {...parsed, via: "soap"};
 }
 
@@ -365,7 +380,7 @@ function ApexTab() {
       // XHR timeout surfaces as a network error — label it when the run
       // actually ran past the deadline.
       if (timeoutMs && Date.now() - startMs >= timeoutMs - 250) {
-        msg += " (stopped: timeout reached)";
+        msg += " (timeout reached: stopped waiting. Salesforce may still be running the script, so check before running it again)";
       }
       setError(msg);
       pushHistory(snippet, false);

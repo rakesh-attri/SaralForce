@@ -37,7 +37,7 @@ const subs = new Set();
 const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
 const BOOT = params.get("hostBoot") || "";
 const SESSION_ID = BOOT ? `release:${params.get("host") || ""}:${BOOT}` : "";
-const PERSIST = ["compare", "compareOnly", "selected", "deploy", "validation", "pendingPlan", "releaseNotes", "gitBranch", "runbook", "deployFrom"];
+const PERSIST = ["compare", "compareOnly", "selected", "deploy", "validation", "pendingPlan", "releaseNotes", "gitBranch", "runbook", "deployFrom", "stepsAsked"];
 let saveTimer = null;
 let restoring = !!SESSION_ID;
 
@@ -164,8 +164,10 @@ export function orgZone() {
   return getEffectiveTimeZone();
 }
 
+// Some types list 1970 (or no date) for "unknown": show nothing then.
 export function fmtWhen(iso) {
-  if (!iso) return "";
+  const ms = Date.parse(iso || "");
+  if (!Number.isFinite(ms) || ms < Date.UTC(2000, 0, 1)) return "";
   return whenInZone(iso, orgZone());
 }
 
