@@ -1,4 +1,4 @@
-import {sf} from "../../inspector.js";
+import {sf, sfConn} from "../../inspector.js";
 import {safeCopyText} from "../../utils.js";
 import {countCsvRecords} from "../../core/bulk.js";
 import {confirmDialog} from "../../ui/confirm.js";
@@ -72,7 +72,7 @@ function ImportTab() {
   const [runJob, setRunJob] = useFfSession("import", "runJob", null);
   const [bulkBusy, setBulkBusy] = React.useState(false);
   const [bulkError, setBulkError] = React.useState(null);
-  const [confirming, setConfirming] = React.useState(false);
+  const confirmOpenRef = React.useRef(false);
   const [resultFiles, setResultFiles] = React.useState(null);
   const [running, setRunning] = React.useState(false);
   // Data API run: {done, total} rows sent so far, and the Stop controller.
@@ -151,7 +151,7 @@ function ImportTab() {
     setCsvText(text);
     setFileName(name || "pasted.csv");
     setFileSize(size || text.length);
-    const parsed = parseCsvEx(text, {delimiter: csvDelimiter});
+    const parsed = parseCsvEx(text, {delimiter: csvDelimiter, headers: useFirstRowHeaders !== false});
     if (parsed.parseError) {
       setParseError(parsed.parseError);
       setHeaders([]);
@@ -161,14 +161,8 @@ function ImportTab() {
       return;
     }
     setParseError(null);
-    let hd = parsed.headers;
+    const hd = parsed.headers;
     let recs = parsed.records;
-    if (!useFirstRowHeaders) {
-      // Treat the first row as data: synthesize Column1..N headers.
-      const n = Math.max(...parsed.records.map(r => Object.keys(r).length), hd.length);
-      hd = Array.from({length: n}, (_, i) => `Column${i + 1}`);
-      recs = parsed.records;
-    }
     if (autoTrim) {
       recs = recs.map(r => {
         const out = {};
@@ -581,7 +575,6 @@ function ImportTab() {
 
     runRef.current = true;
     setRunning(true);
-    setConfirming(false);
     try {
       if (apiMode === "bulk") {
         const r = await runBulkImport(rows);
@@ -622,8 +615,38 @@ function ImportTab() {
 
   // Destructive ops need explicit confirmation (object + count shown).
   const needsConfirm = opDef.destructive;
-  const onClickRun = () => {
-    if (needsConfirm && !confirming) { setConfirming(true); return; }
+  // A separate dialog, not a second click on the same button: a double-click
+  // must never run a delete. Updates to production are confirmed too.
+  const onClickRun = async () => {
+    if (confirmOpenRef.current || runRef.current) return;
+    const host = sfConn.instanceHostname || "";
+    const isProd = localStorage.getItem(host + "_isSandbox") === "false";
+    const what = `${fmtNum(records.length)} ${objectApi.trim()} record(s)`;
+    const where = host ? ` in ${host}${isProd ? " (production)" : ""}` : "";
+    let ask = null;
+    if (needsConfirm) {
+      ask = {
+        title: `${opDef.label} ${what}?`,
+        message: `This will ${opDef.id === "hardDelete" ? "permanently delete" : "delete"} ${what}${where}. ` +
+          (opDef.recoverable
+            ? "Deleted records go to the Recycle Bin and can be restored within 15 days (subject to org setup)."
+            : "Hard Delete bypasses the Recycle Bin: the records cannot be recovered.") +
+          ` Sent through the ${apiMode === "bulk" ? "Bulk 2.0" : "Data"} API, with no automatic retries.`,
+        confirmLabel: opDef.label, danger: true
+      };
+    } else if (isProd && operation !== "insert") {
+      ask = {
+        title: `${opDef.label} in production?`,
+        message: `This will ${opDef.label.toLowerCase()} ${what}${where}. There is no undo.`,
+        confirmLabel: opDef.label, danger: true
+      };
+    }
+    if (ask) {
+      confirmOpenRef.current = true;
+      let ok = false;
+      try { ok = await confirmDialog(ask); } finally { confirmOpenRef.current = false; }
+      if (!ok) return;
+    }
     startRun();
   };
 
@@ -747,7 +770,6 @@ function ImportTab() {
             h("span", null, "Operation"),
             h("select", {value: operation, onChange: e => {
               setOperation(e.target.value);
-              setConfirming(false);
               setValidation(null);
             }},
               FF_IMPORT_OPS.map(o => h("option", {key: o.id, value: o.id,
@@ -1192,30 +1214,14 @@ function ImportTab() {
               : (dataProgress
                 ? `Importing… ${fmtNum(dataProgress.done)}/${fmtNum(dataProgress.total)}`
                 : "Importing…"))
-            : (confirming
-              ? `Click again to confirm ${opDef.label} of ${fmtNum(records.length)} rows`
-              : `${opDef.label} ${fmtNum(records.length)} row(s)`)),
-        confirming && h("button", {
-          className: "btn btn-secondary",
-          onClick: () => setConfirming(false)
-        }, "Cancel"),
+            : `${opDef.label} ${fmtNum(records.length)} row(s)`),
         running && apiMode === "data" && h("button", {
           className: "btn btn-secondary",
           title: "Stops after the records currently being sent; nothing is rolled back",
           onClick: () => { if (dataStopRef.current) dataStopRef.current.abort(); }
         }, "Stop"),
-        needsConfirm && !confirming && h("span", {className: "insp-meta"},
-          "Destructive operation — you'll be asked to confirm.")),
-      needsConfirm && confirming && h("div", {className: "dm-danger"},
-        h("div", {className: "dm-danger-t"},
-          `Confirm ${opDef.label}: ${records.length} ${objectApi.trim()} record(s)`),
-        h("div", {className: "dm-danger-b"},
-          opDef.recoverable
-            ? "Deleted records go to the Salesforce Recycle Bin and can be restored within 15 days (subject to org setup)."
-            : "Hard Delete removes records permanently — they bypass the Recycle Bin and CANNOT be recovered."),
-        h("div", {className: "dm-danger-b"},
-          `API: ${apiMode === "bulk" ? "Bulk 2.0" : "Data API"} · ` +
-          "No automatic retries will be attempted for this operation."))
+        needsConfirm && h("span", {className: "insp-meta"},
+          "Destructive operation — you'll be asked to confirm."))
     )
   );
 }

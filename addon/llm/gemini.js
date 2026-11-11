@@ -1,4 +1,5 @@
 import {usageFromGemini} from "../core/ai-usage.js";
+import {sseData, parseChunk, truncatedError, blockedError, streamError} from "./stream.js";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 export const GEMINI_DEFAULT_MODEL = "gemini-4-argon";
@@ -15,6 +16,13 @@ function headers(apiKey) {
 // Answer text only: skip thought-summary parts.
 function partsText(parts) {
   return (parts || []).filter(p => p && p.text && !p.thought).map(p => p.text).join("");
+}
+
+// Gemini ends a normal reply with STOP; anything else means it is partial or withheld.
+const GEMINI_BLOCKED = /^(SAFETY|RECITATION|BLOCKLIST|PROHIBITED_CONTENT|SPII|LANGUAGE|IMAGE_SAFETY)$/;
+function finishCheck(finish, text) {
+  if (finish === "MAX_TOKENS") throw truncatedError(text);
+  if (finish && GEMINI_BLOCKED.test(finish)) throw blockedError("Gemini", finish);
 }
 
 export class GeminiProvider {
@@ -76,7 +84,9 @@ export class GeminiProvider {
       const reason = data.promptFeedback?.blockReason;
       throw new Error(reason ? `Gemini blocked this request (${reason}).` : "Gemini returned no answer.");
     }
-    return partsText(candidate.content?.parts);
+    const text = partsText(candidate.content?.parts);
+    finishCheck(candidate.finishReason, text);
+    return text;
   }
 
   async listModels(apiKey) {
@@ -114,38 +124,28 @@ export class GeminiProvider {
       throw new Error(errorData.error?.message || `Gemini API error: ${response.status}`);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
     let fullText = "";
-    let buffer = "";
     let usage = null;   // each chunk repeats usageMetadata; the last is final
+    let finish = null;
 
-    while (true) {
-      const {done, value} = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, {stream: true});
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            const parsed = JSON.parse(line.slice(6));
-            if (parsed.usageMetadata) usage = parsed.usageMetadata;
-            const text = partsText(parsed.candidates?.[0]?.content?.parts);
-            if (text) {
-              fullText += text;
-              onChunk(fullText);
-            }
-          } catch (e) {
-            // Skip malformed chunks
-          }
-        }
+    for await (const data of sseData(response)) {
+      const parsed = parseChunk(data);
+      if (!parsed) continue;
+      if (parsed.error) throw streamError("Gemini", parsed.error);
+      if (parsed.usageMetadata) usage = parsed.usageMetadata;
+      const blocked = parsed.promptFeedback?.blockReason;
+      if (blocked) throw blockedError("Gemini", blocked);
+      const candidate = parsed.candidates?.[0];
+      if (candidate?.finishReason) finish = candidate.finishReason;
+      const text = partsText(candidate?.content?.parts);
+      if (text) {
+        fullText += text;
+        onChunk(fullText);
       }
     }
 
     if (onUsage) onUsage(usageFromGemini(usage));
+    finishCheck(finish, fullText);
     return fullText;
   }
 }

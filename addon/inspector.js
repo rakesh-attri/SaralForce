@@ -42,9 +42,12 @@ export let sfConn = {
 
   // After the Salesforce session expires and you log in again, the browser
   // holds a new session cookie: pick it up. True when a new session is in
-  // place. OAuth tokens can't be renewed this way.
+  // place. A rejected OAuth token has no refresh token and would otherwise
+  // override a valid browser session on every load: drop it, then fall back
+  // to the browser's own Salesforce session.
   renewSession() {
-    if (!this.instanceHostname || localStorage.getItem(this.instanceHostname + Constants.ACCESS_TOKEN)) return Promise.resolve(false);
+    if (!this.instanceHostname) return Promise.resolve(false);
+    localStorage.removeItem(this.instanceHostname + Constants.ACCESS_TOKEN);
     if (!renewing) {
       renewing = (async () => {
         const old = this.sessionId;

@@ -22,19 +22,42 @@ function downloadText(filename, text, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-function flattenRecord(rec) {
+const stripAttributes = (v) => {
+  if (Array.isArray(v)) return v.map(stripAttributes);
+  if (!v || typeof v !== "object") return v;
   const out = {};
+  for (const [k, x] of Object.entries(v)) if (k !== "attributes") out[k] = stripAttributes(x);
+  return out;
+};
+
+// One query record → one flat row. Parent relationships become dotted
+// columns (Account.Name, Owner.Manager.Name) like a Bulk result; child
+// sub-queries and compound values (address, location) stay as JSON text.
+function flattenRecord(rec, prefix = "", out = {}) {
   for (const [k, v] of Object.entries(rec || {})) {
     if (k === "attributes") continue;
-    if (v && typeof v === "object" && !Array.isArray(v)) {
-      out[k] = v.name || v.Id || v.url || JSON.stringify(v);
-    } else if (Array.isArray(v)) {
-      out[k] = JSON.stringify(v);
+    const key = prefix + k;
+    if (Array.isArray(v)) {
+      out[key] = JSON.stringify(stripAttributes(v));
+    } else if (v && typeof v === "object") {
+      if (Array.isArray(v.records)) out[key] = JSON.stringify(stripAttributes(v.records));
+      else if (v.attributes) flattenRecord(v, key + ".", out);
+      else out[key] = JSON.stringify(v);
     } else {
-      out[k] = v;
+      out[key] = v;
     }
   }
   return out;
 }
 
-export {toCsv, downloadText, flattenRecord, parseCsvEx, toCsvEx};
+// Column list for flattened rows, in first-seen order after `known`. A null
+// parent (Account: null) leaves a bare "Account" key on that row; it is
+// dropped once other rows supply the real "Account.*" columns.
+function columnsOf(rows, known = []) {
+  const cols = new Set(known);
+  for (const row of rows) for (const k of Object.keys(row)) cols.add(k);
+  const list = [...cols];
+  return list.filter(c => !list.some(o => o.startsWith(c + ".")));
+}
+
+export {toCsv, downloadText, flattenRecord, columnsOf, parseCsvEx, toCsvEx};

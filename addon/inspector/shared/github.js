@@ -103,7 +103,7 @@ export async function commitFiles(cfg, files, message, {branch, from, onStatus =
     const old = await gh(cfg, `/repos/${cfg.repo}/git/blobs/${existing.get(labelsPath)}`);
     const cur = files.get(labelsPath);
     files = new Map(files);
-    files.set(labelsPath, mergeParentXml(bytesToText(base64ToBytes(old.content || "")), typeof cur === "string" ? cur : bytesToText(cur)));
+    files.set(labelsPath, mergeParentXml(bytesToText(base64ToBytes(old.content || "")), typeof cur === "string" ? cur : bytesToText(cur), {laterWins: true}));
   }
   const list = [...files.entries()];
   let done = 0;

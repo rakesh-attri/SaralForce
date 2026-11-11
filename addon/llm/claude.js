@@ -1,4 +1,5 @@
 import {usageFromClaude} from "../core/ai-usage.js";
+import {sseData, parseChunk, truncatedError, streamError} from "./stream.js";
 
 const API_BASE = "https://api.anthropic.com/v1";
 export const CLAUDE_DEFAULT_MODEL = "claude-sonnet-5-5";
@@ -79,10 +80,12 @@ export class ClaudeProvider {
     const refusal = stopReasonError(data.stop_reason);
     if (refusal) throw refusal;
     // Thinking blocks come before the answer; join only the text blocks.
-    return (data.content || [])
+    const text = (data.content || [])
       .filter(block => block.type === "text")
       .map(block => block.text)
       .join("");
+    if (data.stop_reason === "max_tokens") throw truncatedError(text);
+    return text;
   }
 
   async listModels(apiKey) {
@@ -106,49 +109,33 @@ export class ClaudeProvider {
   }
 
   async _handleStream(response, onChunk, onUsage) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
     let fullText = "";
-    let buffer = "";
     let stopReason = null;
     // Input tokens arrive in message_start, output tokens in message_delta.
     const usage = {};
 
-    while (true) {
-      const {done, value} = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, {stream: true});
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        let parsed;
-        try {
-          parsed = JSON.parse(line.slice(6));
-        } catch (e) {
-          continue; // Skip malformed chunks
-        }
-        if (parsed.type === "message_start" && parsed.message?.usage) {
-          Object.assign(usage, parsed.message.usage);
-        } else if (parsed.type === "message_delta" && parsed.usage) {
-          Object.assign(usage, parsed.usage);
-        }
-        if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta") {
-          fullText += parsed.delta.text || "";
-          onChunk(fullText);
-        } else if (parsed.type === "message_delta" && parsed.delta?.stop_reason) {
-          stopReason = parsed.delta.stop_reason;
-        } else if (parsed.type === "error") {
-          throw new Error(parsed.error?.message || "Claude stream error");
-        }
+    for await (const data of sseData(response)) {
+      const parsed = parseChunk(data);
+      if (!parsed) continue;
+      if (parsed.type === "message_start" && parsed.message?.usage) {
+        Object.assign(usage, parsed.message.usage);
+      } else if (parsed.type === "message_delta" && parsed.usage) {
+        Object.assign(usage, parsed.usage);
+      }
+      if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta") {
+        fullText += parsed.delta.text || "";
+        onChunk(fullText);
+      } else if (parsed.type === "message_delta" && parsed.delta?.stop_reason) {
+        stopReason = parsed.delta.stop_reason;
+      } else if (parsed.type === "error") {
+        throw streamError("Claude", parsed.error);
       }
     }
 
     if (onUsage) onUsage(usageFromClaude(usage));
     const refusal = stopReasonError(stopReason);
     if (refusal && !fullText) throw refusal;
+    if (stopReason === "max_tokens") throw truncatedError(fullText);
     return fullText;
   }
 }

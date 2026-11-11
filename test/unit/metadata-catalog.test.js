@@ -133,3 +133,15 @@ test("deprecated types stay out of All types", () => {
   assert.ok(!allTypes().includes("FlowDefinition"));
   assert.ok(allTypes().includes("Flow"));
 });
+
+test("renamed items show their Setup label next to the API name", async () => {
+  const {componentLabel, labelDiffers, classifyComponents} = await import("../../addon/core/deploy.js");
+  const dup = '<?xml version="1.0" encoding="UTF-8"?>\n<DuplicateRule xmlns="http://soap.sforce.com/2006/04/metadata">\n    <actionOnInsert>Allow</actionOnInsert>\n    <masterLabel>TestRule2</masterLabel>\n</DuplicateRule>\n';
+  assert.equal(componentLabel(dup), "TestRule2");
+  assert.equal(componentLabel('<Flow xmlns="x">\n    <actionCalls>\n        <label>Send mail</label>\n    </actionCalls>\n    <label>Invoice &amp; Tax</label>\n</Flow>'), "Invoice & Tax");
+  assert.equal(labelDiffers("TestRule2", "Account.TestRule"), true);
+  assert.equal(labelDiffers("Invoice Approval", "Invoice_Approval"), false);
+  assert.equal(labelDiffers("Amount", "Invoice__c.Amount__c"), false);
+  const comps = new Map([["DuplicateRule:Account.TestRule", {type: "DuplicateRule", fullName: "Account.TestRule", files: {"duplicateRules/Account.TestRule.duplicateRule": dup}}]]);
+  assert.equal(classifyComponents(comps, new Map())[0].label, "TestRule2");
+});

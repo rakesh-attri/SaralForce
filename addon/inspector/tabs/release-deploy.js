@@ -20,6 +20,7 @@ import {flowDeleteReport} from "../../core/impact.js";
 import {useFfSession} from "../shared/session-state.js";
 import {FFBadge, FriendlyError} from "../shared/ui.js";
 import {confirmDialog} from "../../ui/confirm.js";
+import {useStepsAsk, selectionSig} from "./release-steps-ask.js";
 import {useRelease, setRelease, releaseState, gitComponents, orgByHost, orgLabel, downloadBytes, fmtWhen} from "./release-state.js";
 import {OrgBar, CardHead, AiAnswer, AiError} from "./release-ui.js";
 
@@ -377,9 +378,23 @@ export function DeployView({goTo}) {
   });
 
   // Pre-deployment steps of this selection (status from Manual steps).
-  const preSteps = pendingPreSteps(mergeRunbook(st.runbook || [], detectSteps({items: plan.keys, deletes: keysFromMembers(plan.destructive),
-    texts: new Map(plan.texts.map(t => [t.key, t.text])), before: new Map()})));
+  const detected = detectSteps({items: plan.keys, deletes: keysFromMembers(plan.destructive),
+    texts: new Map(plan.texts.map(t => [t.key, t.text])), before: new Map()});
+  const preSteps = pendingPreSteps(mergeRunbook(st.runbook || [], detected));
+  // Once per selection: ask for the hand steps (Compare may have asked already).
+  const {askSteps: askOnce, dialog: stepsDialog} = useStepsAsk();
+  const curSig = selectionSig(plan.keys, keysFromMembers(plan.destructive));
+  const [showOld, setShowOld] = React.useState(false);
+  // What was on screen when the run finished (a rollback clears its plan as it
+  // ends): picking something else later turns the result into "last run".
+  const dNow = st.deploy;
+  React.useEffect(() => {
+    if (dNow && dNow.finished && dNow.sig && !dNow.viewSig) setRelease(prev => prev.deploy ? {deploy: {...prev.deploy, viewSig: curSig}} : {});
+  }, [dNow && dNow.finished, dNow && dNow.startedAt]);
+  React.useEffect(() => { setShowOld(false); }, [curSig]);
+  const askSteps = checkOnly => askOnce({keys: plan.keys, deletes: keysFromMembers(plan.destructive), detected, verb: checkOnly ? "validate" : "deploy"});
   const preOk = async () => {
+    const preSteps = pendingPreSteps(mergeRunbook(releaseState().runbook || [], detected));
     if (!preSteps.length) return true;
     const ok = await confirmDialog({
       title: `${preSteps.length} pre-deployment step(s) not done`,
@@ -392,6 +407,7 @@ export function DeployView({goTo}) {
 
   const run = async (checkOnly, preset = null) => {
     if ((!source && plan.mode !== "plan" && !preset) || !target) return;
+    if (!preset && !(await askSteps(checkOnly))) return;
     if (!checkOnly && !(await preOk())) return;
     if (!checkOnly && !preset) {
       const ok = await confirmDialog({
@@ -403,7 +419,7 @@ export function DeployView({goTo}) {
     }
     setAi(null); setAiErr("");
     const label = checkOnly ? "Validation" : "Deploy";
-    const base = {label, checkOnly, targetHost: target.host, startedAt: Date.now(), items: count, deletes: delCount};
+    const base = {label, checkOnly, targetHost: target.host, startedAt: Date.now(), items: count, deletes: delCount, sig: curSig};
     setRelease({deploy: {...base, status: "Preparing the package…"}});
     let record = null;
     try {
@@ -500,11 +516,13 @@ export function DeployView({goTo}) {
     }
     const ok = await confirmDialog({
       title: "Quick deploy?",
-      message: `Release the validated package (${validation.items} item(s)) to ${orgLabel(target)} now. Tests are not run again.`,
+      message: `Release the validated package (${validation.items} item(s)` +
+        (validation.info && validation.info.deletes && validation.info.deletes.length ? `, and delete ${validation.info.deletes.length} component(s)` : "") +
+        `) to ${orgLabel(target)} now. Tests are not run again.`,
       confirmLabel: "Quick deploy", danger: isProd
     });
     if (!ok) return;
-    const base = {label: "Quick deploy", checkOnly: false, targetHost: target.host, startedAt: Date.now(), items: validation.items};
+    const base = {label: "Quick deploy", checkOnly: false, targetHost: target.host, startedAt: Date.now(), items: validation.items, sig: curSig};
     setRelease({deploy: {...base, status: "Starting quick deploy…"}});
     const info = validation.info || releaseInfo([]);
     let record = null;
@@ -592,7 +610,10 @@ export function DeployView({goTo}) {
 
   const s = d && d.summary;
   const failed = d && d.finished && (d.error || (s && !s.success));
+  // Older runs (no sig) count as stale once the selection or target changed.
+  const staleRun = !!(d && d.finished && !showOld && (!d.sig || (d.viewSig && d.viewSig !== curSig) || (target && d.targetHost !== target.host)));
   return h("div", {className: "org-grid"},
+    stepsDialog,
     h("div", {className: "org-card org-card-wide"},
       h(CardHead, {icon: "🚀", title: "Validate & deploy"}),
       from && BACK[from.view] && h("button", {className: "field-action-btn rel-back", onClick: () => goTo(from.view)}, `← Back to ${BACK[from.view]}`),
@@ -664,7 +685,14 @@ export function DeployView({goTo}) {
           onClick: () => run(true), title: "Check-only deploy: nothing changes in the target"},
           running && d.checkOnly ? "Validating…" : plan.mode === "plan" && pending && pending.kind === "rollback" ? "Validate (RB)" : "Validate"))),
 
-    d && h("div", {className: "org-card org-card-wide", "data-release-deploy": ""},
+    // A finished run for another selection (or org) is history, not this page's result.
+    d && d.finished && staleRun && h("div", {className: "insp-hint-strip rel-last-run"},
+      `Last run: ${d.label || "Deploy"} to ${orgByHost(d.targetHost) ? orgByHost(d.targetHost).name : d.targetHost || "?"}` +
+      ` · ${d.summary ? d.summary.status : d.error ? "Failed" : "Finished"} · for a different selection. `,
+      h("button", {className: "field-action-btn", onClick: () => setShowOld(true)}, "Show"), " ",
+      h("button", {className: "field-action-btn", onClick: () => setRelease({deploy: null})}, "Dismiss"), " ",
+      h("button", {className: "field-action-btn", onClick: () => goTo("history")}, "History")),
+    d && !(d.finished && staleRun) && h("div", {className: "org-card org-card-wide", "data-release-deploy": ""},
       h(CardHead, {icon: d.checkOnly ? "🧪" : "📦", title: `${d.label || "Deploy"} · ${target && d.targetHost === target.host ? orgLabel(target) : d.targetHost || ""}`},
         running && d.id && h("button", {className: "btn btn-secondary btn-sm", disabled: checking, onClick: checkNow,
           title: "Ask Salesforce for the current status now"}, checking ? "Checking…" : "Check status"),

@@ -40,7 +40,11 @@ export function parseCsv(text, opts) {
     rows.push(row);
   }
   if (!rows.length) return {headers: [], records: [], duplicates: []};
-  const headers = rows[0].map(x => String(x == null ? "" : x).trim());
+  // headers: false → the first row is data; columns are named Column1..N.
+  const noHeaders = o.headers === false;
+  const headers = noHeaders
+    ? Array.from({length: Math.max(...rows.map(r => r.length))}, (_, i) => `Column${i + 1}`)
+    : rows[0].map(x => String(x == null ? "" : x).trim());
   const seen = {};
   const duplicates = [];
   for (const hd of headers) {
@@ -49,7 +53,7 @@ export function parseCsv(text, opts) {
     if (seen[k] === 2) duplicates.push(hd);
   }
   const records = [];
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = noHeaders ? 0 : 1; i < rows.length; i++) {
     const r = rows[i];
     if (r.every(c => String(c || "").trim() === "")) continue;
     const obj = {};

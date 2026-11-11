@@ -145,8 +145,15 @@ async function ffBulkJobCancel(jobId, kind) {
 async function ffBulkPoll(getStatus, jobId, opts) {
   const o = opts || {};
   const terminal = o.terminal || ["JobComplete", "Failed", "Aborted"];
+  // Large jobs queue and run for a long time: keep watching for two hours,
+  // polling less often as the job ages so a slow job costs few API calls.
   const intervalMs = o.intervalMs || 2000;
-  const timeoutMs = o.timeoutMs || 300000;
+  const timeoutMs = o.timeoutMs || 7200000;
+  const waitMs = () => {
+    if (o.intervalMs) return intervalMs;
+    const age = Date.now() - start;
+    return age < 60000 ? 2000 : age < 600000 ? 5000 : 15000;
+  };
   const start = Date.now();
   const fetchStatus = async () => {
     try {
@@ -161,10 +168,12 @@ async function ffBulkPoll(getStatus, jobId, opts) {
   while (terminal.indexOf(job.state) === -1) {
     if (o.signal && o.signal.aborted) throw ffStoppedError();
     if (Date.now() - start > timeoutMs) {
-      throw new Error("Timed out waiting for Bulk job " + jobId + " (last state: " + job.state + ")");
+      throw new Error("Stopped watching Bulk job " + jobId + " after " + Math.round(timeoutMs / 60000) +
+        " minutes (last state: " + job.state + "). The job is still running in Salesforce: do not run it again. " +
+        "Check it under Setup → Bulk Data Load Jobs.");
     }
     if (o.onTick) o.onTick(job);
-    await ffSleep(intervalMs, o.signal);
+    await ffSleep(waitMs(), o.signal);
     job = await fetchStatus();
   }
   if (o.signal && o.signal.aborted) throw ffStoppedError();

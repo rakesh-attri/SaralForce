@@ -11,6 +11,8 @@
   let sfHost = null;
   let sidebarOpen = false;
   let sidebarContainer = null;
+  let opening = false;     // getSession in flight for openSidebar
+  let closeTimer = null;   // removes the sidebar after its slide-out
 
   // Host-page boot id: bumped once per host document load (top frame only)
   // and passed to the panel iframe. The panel stamps its minimize snapshot
@@ -34,6 +36,9 @@
   }
 
   function init() {
+    // One launcher per tab: Salesforce embeds same-site iframes (classic Setup
+    // pages, Visualforce) that would each get their own button and sidebar.
+    if (window.top !== window) return;
     if (document.getElementById("sf-object-creator-sidebar-host")) return;
 
     const currentUrl = window.location.href;
@@ -182,10 +187,20 @@
   }
 
   function openSidebar() {
-    if (sidebarOpen || !sfHost) return;
+    if (sidebarOpen || opening || !sfHost) return;
     if (launcherTip) dismissLauncherTip();
+    opening = true;
 
     chrome.runtime.sendMessage({message: "getSession", sfHost}, (session) => {
+      opening = false;
+      // A sidebar that is still sliding shut is removed now, so its timer
+      // cannot take the new one with it.
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+        closeTimer = null;
+        sidebarContainer?.remove();
+        sidebarContainer = null;
+      }
       if (!session) {
         alert("No active Salesforce session. Please log in first.");
         return;
@@ -373,9 +388,11 @@
       iframe.contentWindow.postMessage({type: "sfoc-save-state"}, PANEL_ORIGIN);
     }
     sidebarContainer.style.transform = "translateX(100%)";
-    setTimeout(() => {
-      sidebarContainer?.remove();
-      sidebarContainer = null;
+    const closing = sidebarContainer;
+    closeTimer = setTimeout(() => {
+      closeTimer = null;
+      closing.remove();
+      if (sidebarContainer === closing) sidebarContainer = null;
     }, 300);
     sidebarOpen = false;
     document.getElementById("sf-object-creator-btn")?.style.setProperty("opacity", "0.6");

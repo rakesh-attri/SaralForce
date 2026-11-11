@@ -6,10 +6,13 @@ const STYLE_ID = "sf-confirm-style";
 
 const CSS = `
 .sf-confirm-overlay {
-  --sfc-bg: var(--sf-surface, #ffffff);
-  --sfc-fg: var(--sf-text, #181818);
-  --sfc-muted: var(--sf-text-muted, #444b57);
-  --sfc-border: var(--sf-border, #d8dde6);
+  /* Fixed light colours: the page's --sf-text is the dark chat theme's white,
+     which made titles white on white here. Dark mode is set below. */
+  --sfc-bg: #ffffff;
+  --sfc-fg: #181818;
+  --sfc-muted: #444b57;
+  --sfc-border: #d8dde6;
+  color: var(--sfc-fg);
   --sfc-btn-bg: #ffffff;
   --sfc-btn-fg: #0b5cab;
   --sfc-primary: #0176d3;
@@ -51,7 +54,8 @@ html.dark .sf-confirm-overlay, html[data-theme="dark"] .sf-confirm-overlay {
 .sf-confirm-btn:focus-visible { outline: 2px solid var(--sfc-focus); outline-offset: 2px; }
 `;
 
-function ensureStyle() {
+// Also used by other dialogs built on the same look (sf-confirm-*).
+export function ensureStyle() {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;

@@ -6,7 +6,7 @@ import {diffLines, diffStats, sideBySide} from "../../addon/core/text-diff.js";
 import {
   pathToComponent, splitParentFile, componentsFromZip, classifyComponents, compareCounts,
   membersFromKeys, parsePackageXml, mergeMembers, dependencyGaps, allowedTestLevels, defaultTestLevel,
-  summarizeDeployResult, normalizeForCompare, chunkMembers, keepListRow, suggestTests, compKey, deployExtraFiles
+  summarizeDeployResult, normalizeForCompare, chunkMembers, keepListRow, suggestTests, compKey, deployExtraFiles, mergeParentXml
 } from "../../addon/core/deploy.js";
 
 test("zip: write then read round-trips text and binary", async () => {
@@ -240,4 +240,17 @@ test("compressed deploy zips round-trip and are smaller", async () => {
   const files = await readZip(zip);
   assert.equal(bytesToText(files.get("objects/A__c.object")), big);
   assert.deepEqual([...files.get("s.resource")], [1, 2, 3]);
+});
+
+test("mergeParentXml: laterWins replaces a label that changed, first copy wins otherwise", () => {
+  const labels = (...pairs) => `<?xml version="1.0" encoding="UTF-8"?>\n<CustomLabels xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+    pairs.map(([n, v]) => `    <labels>\n        <fullName>${n}</fullName>\n        <value>${v}</value>\n    </labels>`).join("\n") + "\n</CustomLabels>\n";
+  const repo = labels(["A", "OLD"], ["B", "keep"]);
+  const next = labels(["A", "NEW"], ["C", "added"]);
+  const merged = mergeParentXml(repo, next, {laterWins: true});
+  assert.match(merged, /<value>NEW<\/value>/);
+  assert.doesNotMatch(merged, /<value>OLD<\/value>/);
+  assert.match(merged, /<fullName>B<\/fullName>/);
+  assert.match(merged, /<fullName>C<\/fullName>/);
+  assert.match(mergeParentXml(repo, next), /<value>OLD<\/value>/);
 });

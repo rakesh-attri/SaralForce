@@ -4,7 +4,7 @@ import {applyDefaultLimit} from "../../core/soql.js";
 import {normalizeLocator, mergeCsvChunks} from "../../core/bulk.js";
 import {confirmDialog} from "../../ui/confirm.js";
 import {isDateOnlyString, looksLikeSfDateTime, parseSfInstant} from "../../sf-time.js";
-import {downloadText, flattenRecord, parseCsvEx, toCsvEx} from "../shared/csv.js";
+import {downloadText, flattenRecord, columnsOf, parseCsvEx, toCsvEx} from "../shared/csv.js";
 import {toXlsxBlob} from "../shared/xlsx.js";
 import {ffBulkQueryCreate, ffBulkQueryStatus, ffBulkQueryResults, ffBulkJobCancel, ffBulkPoll} from "../shared/bulk-api.js";
 import {ffStoppedError, ffIsStopped, useUnmountSignal} from "../shared/hooks.js";
@@ -374,7 +374,7 @@ function ExportTab() {
     const url = `/services/data/v${apiVersion}/` +
       (includeDeleted ? "queryAll" : "query") + "/?q=" + encodeURIComponent(q);
     const res = await sfConn.rest(url, {useCache: false});
-    const rows = (res.records || []).map(flattenRecord);
+    const rows = (res.records || []).map(r => flattenRecord(r));
     return {rows, total: res.totalSize, done: res.done !== false, next: res.done === false ? res.nextRecordsUrl : null};
   };
 
@@ -443,9 +443,7 @@ function ExportTab() {
         ? await runBulkQuery(q)
         : await runDataPreview(q);
       // Column order: sorted set from first row + any late additions.
-      const colSet = new Set();
-      r.rows.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
-      const columns = [...colSet];
+      const columns = columnsOf(r.rows);
       setPreview({columns, rows: r.rows, total: r.total, query: q,
         next: r.next, fetched: r.rows.length});
       pushHistory(q);
@@ -465,11 +463,9 @@ function ExportTab() {
     setError(null);
     try {
       const res = await sfConn.rest(preview.next, {useCache: false});
-      const more = (res.records || []).map(flattenRecord);
-      const colSet = new Set(preview.columns);
-      more.forEach(row => Object.keys(row).forEach(k => colSet.add(k)));
+      const more = (res.records || []).map(r => flattenRecord(r));
       setPreview({...preview, rows: preview.rows.concat(more),
-        columns: [...colSet], next: res.done === false ? res.nextRecordsUrl : null,
+        columns: columnsOf(more, preview.columns), next: res.done === false ? res.nextRecordsUrl : null,
         fetched: preview.rows.length + more.length});
     } catch (e) {
       setError(e.message);
@@ -524,9 +520,9 @@ function ExportTab() {
     return d.toISOString();
   };
 
-  const exportRows = () => {
-    if (!preview) return [];
-    return preview.rows.map(row => {
+  const exportRows = (pv = preview) => {
+    if (!pv) return [];
+    return pv.rows.map(row => {
       const out = {};
       for (const [k, v] of Object.entries(row)) {
         out[k] = (v === null || v === undefined || v === "") ? csvNullValue : applyDateFormat(v);
@@ -535,20 +531,55 @@ function ExportTab() {
     });
   };
 
-  const download = () => {
-    if (!preview) return;
-    const rows = exportRows();
+  // The Data API preview holds one server page. Fetch the rest first so the
+  // file has every row the query returns, not only the rows on screen.
+  const loadAllPages = async () => {
+    let rows = preview.rows;
+    let columns = preview.columns;
+    let next = preview.next;
+    const signal = unmountRef.current.signal;
+    while (next) {
+      setNote(`Loading all rows before download: ${fmtNum(rows.length)} of ${fmtNum(preview.total)}…`);
+      const res = await sfConn.rest(next, {useCache: false});
+      if (signal.aborted) return null;
+      const more = (res.records || []).map(r => flattenRecord(r));
+      rows = rows.concat(more);
+      columns = columnsOf(more, columns);
+      next = res.done === false ? res.nextRecordsUrl : null;
+    }
+    const full = {...preview, rows, columns, next: null, fetched: rows.length};
+    setPreview(full);
+    return full;
+  };
+
+  const download = async () => {
+    if (!preview || loading) return;
+    let pv = preview;
+    if (pv.next) {
+      setLoading(true);
+      setError(null);
+      try {
+        pv = await loadAllPages();
+      } catch (e) {
+        setError(`Could not load all rows (${e.message}). Nothing was downloaded.`);
+        return;
+      } finally {
+        if (!unmountRef.current.signal.aborted) setLoading(false);
+      }
+      if (!pv) return;
+    }
+    const rows = exportRows(pv);
     const base = (objectApi.trim() || "export").replace(/[^A-Za-z0-9_-]/g, "_");
     try {
       if (format === "JSON") {
         const json = includeHeaders === false ? rows
-          : Object.fromEntries(preview.columns.map(c => [c, rows.map(r => r[c])]));
+          : Object.fromEntries(pv.columns.map(c => [c, rows.map(r => r[c])]));
         downloadText(`${base}.json`, JSON.stringify(json, null, 2), "application/json;charset=utf-8");
       } else if (format === "Excel (.xlsx)") {
         ffDownloadBlob(`${base}.xlsx`,
-          toXlsxBlob(base, preview.columns, rows));
+          toXlsxBlob(base, pv.columns, rows));
       } else {
-        let text = toCsvEx(preview.columns, rows, {
+        let text = toCsvEx(pv.columns, rows, {
           delimiter: csvDelimiter, quoting: csvQuoting,
           headers: includeHeaders, nullValue: csvNullValue,
           lineEnding: csvLineEnding, guardFormulas: csvGuardFormulas !== false
