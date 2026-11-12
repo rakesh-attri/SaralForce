@@ -1,4 +1,5 @@
 import {askAi, askAiJson} from "../../core/llm.js";
+import {PROMPT_SENSITIVE_TYPES} from "../../core/deploy.js";
 import {ffDescribeObject, ffGetObjects} from "./describe.js";
 import {pickObjectsForPrompt} from "../../core/soql-complete.js";
 import {normalizeBundleReply, checkLwcBundle, bundleForPrompt, mergeRevision} from "../../core/lwc-ai.js";
@@ -441,7 +442,9 @@ const DEPLOY_FAILURE_SYSTEM =
   "Be concise: numbered list, no greetings.";
 
 // Types whose content is credentials or endpoints: only their names go to the AI.
-const SENSITIVE_TYPES = new Set(["NamedCredential", "ConnectedApp", "ExternalCredential", "AuthProvider", "Certificate", "RemoteSiteSetting"]);
+// Kept as a second guard for text built elsewhere; changesForPrompt already
+// leaves these out.
+const SENSITIVE_TYPES = PROMPT_SENSITIVE_TYPES;
 
 // changesText is core/deploy.js changesForPrompt output: "## STATUS Type Name"
 // headings, each followed by that component's content. Drops the content

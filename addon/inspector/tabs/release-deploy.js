@@ -1,10 +1,10 @@
 // Release Center → Deploy: validate, quick deploy, deploy now, cancel.
 import {
   allowedTestLevels, defaultTestLevel, hasApexChanges, membersFromKeys, keysFromMembers, mergeMembers,
-  buildDeployEntries, componentsFromZip, suggestTests, failuresForPrompt, typeLabel, splitKey,
+  buildDeployEntries, componentsFromZip, suggestTests, typeLabel, splitKey,
   expandMemberKeys, permissionRefs, pathToComponent, TYPE_BY_NAME, mergeZipFiles
 } from "../../core/deploy.js";
-import {retrieveAll} from "./release-compare.js";
+import {retrieveAll, SkippedTypes} from "./release-compare.js";
 import {packageCount} from "../../core/metadata.js";
 import {hasSecurityEnforced} from "../../core/bundle-order.js";
 import {bytesToText, writeZip, writeZipCompressed} from "../../core/zip.js";
@@ -15,6 +15,8 @@ import {listReleases, putRelease, saveSnapshot, saveBytes, newId} from "../share
 import {nextVersion, trimSummary} from "../../core/release-history.js";
 import {detectSteps, mergeRunbook, pendingPreSteps} from "../../core/manual-steps.js";
 import {explainDeployFailures} from "../shared/ai.js";
+import {analyzeFailures, groupText, failuresPromptText} from "../../core/deploy-errors.js";
+import {toCsv, downloadText} from "../shared/csv.js";
 import {activeFlows, deactivateFlows, flowDeleteBlockers, deleteFlowsTooling} from "../shared/manual-actions.js";
 import {flowDeleteReport} from "../../core/impact.js";
 import {useFfSession} from "../shared/session-state.js";
@@ -190,6 +192,70 @@ function FlowDeleteHelp({names, target, isProd, checkOnly, disabled}) {
         `Delete ${report.clear.length === 1 ? report.clear[0] : report.clear.length + " flows"} with the Tooling API`),
       h("a", {className: "field-action-btn", href: setupUrl(target.conn, "/lightning/setup/Pausedflows/home"), target: "_blank", rel: "noopener noreferrer"}, "Paused runs in Setup ↗"),
       h("span", {className: "insp-meta"}, `Then press ${checkOnly ? "Validate" : "Deploy"} again.`)));
+}
+
+// Failures grouped by root cause: what went wrong, why, and what to do, with
+// "add it to the deploy" when the missing item is in the source. The raw list
+// (full text, filter, CSV) is one click away.
+function DeployErrors({summary, context, canAdd, disabled, onAdd, onRevalidate}) {
+  const a = React.useMemo(() => analyzeFailures(summary, context), [summary, context.sourceKeys.length]);
+  const [open, setOpen] = React.useState(() => new Set(a.groups.slice(0, 3).map(g => g.key)));
+  const [added, setAdded] = React.useState(new Set());
+  const [showAll, setShowAll] = React.useState(false);
+  const [q, setQ] = React.useState("");
+  const [copied, setCopied] = React.useState("");
+  const toggle = k => { const n = new Set(open); if (n.has(k)) n.delete(k); else n.add(k); setOpen(n); };
+  const copy = (text, what) => {
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => { setCopied(what); setTimeout(() => setCopied(""), 1800); }).catch(() => {});
+  };
+  const top = a.groups[0];
+  const rows = summary.componentFailures.filter(f => !q || (f.type + " " + f.fullName + " " + f.problem).toLowerCase().includes(q.toLowerCase()));
+  const csv = () => downloadText(`deploy-errors-${new Date().toISOString().slice(0, 10)}.csv`,
+    toCsv(["Type", "Component", "Line", "Problem"], summary.componentFailures.map(f => ({"Type": typeLabel(f.type), "Component": f.fullName, "Line": f.line || "", "Problem": f.problem}))));
+  const card = (g, nested) => {
+    const isOpen = open.has(g.key);
+    const comps = g.components.map(c => `${typeLabel(c.type)} ${c.fullName}${c.count > 1 ? ` ×${c.count}` : ""}${c.lines.length ? ` (line ${[...new Set(c.lines)].slice(0, 3).join(", ")})` : ""}`);
+    return h("div", {key: g.key, className: "rel-err" + (nested ? " rel-err-nested" : "") + " rel-err-" + g.category},
+      h("button", {type: "button", className: "rel-err-head", "aria-expanded": isOpen, onClick: () => toggle(g.key)},
+        h("span", {className: "rel-err-caret"}, isOpen ? "▾" : "▸"),
+        h("span", {className: "rel-err-cat"}, g.categoryLabel),
+        h("span", {className: "rel-err-title"}, g.title),
+        h("span", {className: "rel-err-count"}, `${g.total || g.count} error${(g.total || g.count) === 1 ? "" : "s"}`)),
+      isOpen && h("div", {className: "rel-err-body"},
+        h("div", {className: "rel-err-line"}, h("b", null, "Affected: "), comps.slice(0, 5).join(" · "), comps.length > 5 ? ` · +${comps.length - 5} more` : ""),
+        g.why && h("div", {className: "rel-err-line"}, h("b", null, "Why: "), g.why),
+        g.fix && h("div", {className: "rel-err-line"}, h("b", null, "Fix: "), g.fix),
+        g.refStatus === "failed" && h("div", {className: "rel-err-line insp-meta"}, "The missing item is in this deploy but failed itself: fix that one first."),
+        g.refStatus === "absent" && g.category === "missing" && h("div", {className: "rel-err-line insp-meta"}, "It isn't in the source either: create it there first, or check the name."),
+        h("div", {className: "rel-err-line rel-err-said"}, h("b", null, "Salesforce says: "), g.sample),
+        h("div", {className: "rel-err-actions"},
+          g.addKey && canAdd && !added.has(g.addKey) && h("button", {className: "btn btn-primary btn-sm", disabled, onClick: () => { onAdd(g.addKey); setAdded(new Set([...added, g.addKey])); }},
+            `＋ Add ${g.ref ? g.ref.name : "it"} to the deploy`),
+          g.addKey && added.has(g.addKey) && h("span", {className: "insp-status-ok"}, "✓ Added to the selection"),
+          g.addKey && !canAdd && h("span", {className: "insp-meta"}, `${g.ref.name} is in the source: add it to the package.`),
+          h("button", {className: "field-action-btn", onClick: () => copy(groupText(g), g.key)}, copied === g.key ? "✓ Copied" : "Copy")),
+        g.children.length > 0 && h("div", {className: "rel-err-kids"},
+          h("div", {className: "insp-meta"}, `Also fails because of this (${g.children.reduce((n, c) => n + c.count, 0)}):`),
+          g.children.map(c => card(c, true)))));
+  };
+  return h("div", {className: "rel-errs"},
+    h("div", {className: "rel-err-summary"},
+      h("b", null, `${a.total} error${a.total === 1 ? "" : "s"} · ${a.rootCount} root cause${a.rootCount === 1 ? "" : "s"}`),
+      top && top.total > 1 && h("span", null, ` · fixing “${top.title}” clears ${top.total}`),
+      added.size > 0 && h("button", {className: "btn btn-primary btn-sm", disabled, onClick: onRevalidate}, "Validate again")),
+    a.groups.map(g => card(g, false)),
+    h("div", {className: "rel-err-actions"},
+      h("button", {className: "field-action-btn", onClick: () => setShowAll(!showAll)}, showAll ? "Hide the full list" : `Show all ${a.total} errors`),
+      h("button", {className: "field-action-btn", onClick: () => copy(a.groups.map(g => groupText(g)).join("\n\n"), "all")}, copied === "all" ? "✓ Copied" : "Copy summary"),
+      h("button", {className: "field-action-btn", onClick: csv}, "⬇ Export CSV")),
+    showAll && h(React.Fragment, null,
+      h("input", {className: "soql-save-input rel-search", placeholder: "Filter errors…", value: q, onChange: e => setQ(e.target.value), "aria-label": "Filter errors"}),
+      h("div", {className: "insp-table-wrap"},
+        h("table", {className: "insp-table rel-err-table"},
+          h("thead", null, h("tr", null, h("th", null, "Component"), h("th", null, "Line"), h("th", null, "Problem"))),
+          h("tbody", null, rows.slice(0, 500).map((f, i) => h("tr", {key: i},
+            h("td", null, `${typeLabel(f.type)} ${f.fullName}`), h("td", null, f.line || ""), h("td", null, f.problem)))))),
+      rows.length > 500 && h("div", {className: "insp-meta"}, `First 500 of ${rows.length}: export the CSV for all.`)));
 }
 
 function fmtElapsed(ms) {
@@ -591,7 +657,8 @@ export function DeployView({goTo}) {
   const explain = async () => {
     setAiBusy(true); setAiErr("");
     try {
-      setAi(await explainDeployFailures(failuresForPrompt(d.summary || {componentFailures: [], testFailures: [], coverageWarnings: [], errorMessage: d.error})));
+      const sum = d.summary || {componentFailures: [], testFailures: [], coverageWarnings: [], errorMessage: d.error};
+      setAi(await explainDeployFailures(failuresPromptText(sum, analyzeFailures(sum, errorContext))));
     } catch (e) {
       setAiErr(e.message || String(e));
     } finally {
@@ -610,6 +677,11 @@ export function DeployView({goTo}) {
 
   const s = d && d.summary;
   const failed = d && d.finished && (d.error || (s && !s.success));
+  // What was sent, and what the source has that the target lacks (addable).
+  const errorContext = {
+    deployKeys: (d && d.info && d.info.items) || plan.keys,
+    sourceKeys: plan.mode === "compare" && plan.cmp ? plan.cmp.rows.filter(r => r.status === "new" && !st.selected.has(r.key)).map(r => r.key) : []
+  };
   // Older runs (no sig) count as stale once the selection or target changed.
   const staleRun = !!(d && d.finished && !showOld && (!d.sig || (d.viewSig && d.viewSig !== curSig) || (target && d.targetHost !== target.host)));
   return h("div", {className: "org-grid"},
@@ -639,6 +711,7 @@ export function DeployView({goTo}) {
           sub: cmpReady ? `${st.selected.size} selected` : "Nothing compared yet"}),
         h(ModeOption, {id: "package", plan, running, setMode, icon: "📦", title: "Package",
           sub: `${packageCount(pkg)} item(s)${keysFromMembers(destructivePkg).length ? `, ${keysFromMembers(destructivePkg).length} to delete` : ""}`})),
+      plan.mode === "compare" && plan.cmp && h(SkippedTypes, {skipped: plan.cmp.skipped, sourceHost: plan.cmp.sourceHost, targetHost: plan.cmp.targetHost}),
       // The plan's warning only while that plan is the one being deployed.
       pending && plan.mode === "plan" && h("div", {className: "insp-warn rel-planbar"},
         h("b", null, pending.title), h("div", null, pending.detail),
@@ -718,11 +791,12 @@ export function DeployView({goTo}) {
         h("button", {className: "btn btn-primary btn-sm", onClick: () => goTo("manual")}, "Manual steps →")),
       d.finished && s && s.success && h("div", {className: "insp-status-ok rel-done"},
         d.checkOnly ? "✓ Validation passed. Nothing has changed in the target yet." : `✓ Deployed to ${target ? target.name : d.targetHost}.`),
-      s && s.componentFailures.length > 0 && h("div", {className: "insp-table-wrap"},
-        h("table", {className: "insp-table"},
-          h("thead", null, h("tr", null, h("th", null, "Component"), h("th", null, "Line"), h("th", null, "Problem"))),
-          h("tbody", null, s.componentFailures.map((f, i) => h("tr", {key: i},
-            h("td", null, `${typeLabel(f.type)} ${f.fullName}`), h("td", null, f.line || ""), h("td", null, f.problem)))))),
+      s && s.componentFailures.length > 0 && h(DeployErrors, {key: d.id || d.startedAt, summary: s, context: errorContext,
+        canAdd: plan.mode === "compare" && !!plan.cmp, disabled: running,
+        // Still this result's selection (plus the fix): keep it on screen.
+        onAdd: key => setRelease(prev => ({selected: new Set([...prev.selected, key]),
+          deploy: prev.deploy ? {...prev.deploy, viewSig: selectionSig([...plan.keys, key], keysFromMembers(plan.destructive))} : prev.deploy})),
+        onRevalidate: () => run(true)}),
       s && target && d.info && s.componentFailures.some(f => f.type === "Flow" && /cross-reference id/i.test(f.problem || "")) &&
         (d.info.deletes || []).some(k => k.startsWith("Flow:")) &&
         h(FlowDeleteHelp, {key: d.id || d.startedAt, target, isProd, checkOnly: d.checkOnly, disabled: running,

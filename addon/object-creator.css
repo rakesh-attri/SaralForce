@@ -13357,3 +13357,115 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
   color: #5c6b82;
   margin: 4px 0 12px;
 }
+
+/* Deploy errors grouped by root cause. */
+.rel-errs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.rel-err-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.rel-err {
+  border: 1px solid #e3e8f0;
+  border-left: 4px solid #8a94a6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rel-err-missing { border-left-color: #c23934; }
+.rel-err-reference { border-left-color: #dd7a01; }
+.rel-err-compile { border-left-color: #a96404; }
+.rel-err-feature,
+.rel-err-change { border-left-color: #0176d3; }
+.rel-err-access,
+.rel-err-conflict,
+.rel-err-package { border-left-color: #7f56d9; }
+
+.rel-err-nested {
+  margin-top: 6px;
+}
+
+.rel-err-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.rel-err-caret {
+  color: #8a94a6;
+  width: 10px;
+}
+
+.rel-err-cat {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5c6b82;
+  background: #eef2f8;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.rel-err-title {
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rel-err-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: #c23934;
+  white-space: nowrap;
+}
+
+.rel-err-body {
+  padding: 0 12px 10px 30px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.rel-err-line {
+  margin: 3px 0;
+  overflow-wrap: anywhere;
+}
+
+.rel-err-said {
+  color: #5c6b82;
+}
+
+.rel-err-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.rel-err-kids {
+  margin-top: 8px;
+}
+
+.rel-err-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

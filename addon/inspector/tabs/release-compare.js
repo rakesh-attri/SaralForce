@@ -29,7 +29,7 @@ export function keepObject(key) {
 
 // onStatus(text, percent): percent runs from `from` to `to` across the parts
 // (Salesforce reports no counts while it retrieves, so each poll creeps on).
-export async function retrieveAll(conn, keys, label, onStatus, {from = 0, to = 100} = {}) {
+export async function retrieveAll(conn, keys, label, onStatus, {from = 0, to = 100, signal} = {}) {
   const files = new Map();
   const problems = [];
   const parts = chunkMembers(membersFromKeys(keys));
@@ -37,7 +37,7 @@ export async function retrieveAll(conn, keys, label, onStatus, {from = 0, to = 1
     const pct = polls => Math.round(from + (to - from) * ((i + Math.min(0.92, polls * 0.08)) / parts.length));
     let polls = 0;
     onStatus(`Retrieving ${keys.length.toLocaleString()} component(s) from ${label}${parts.length > 1 ? ` (part ${i + 1} of ${parts.length})` : ""}…`, pct(0));
-    const res = await retrieve(conn, parts[i], {onProgress: s => onStatus(`Retrieving from ${label}${parts.length > 1 ? ` (part ${i + 1} of ${parts.length})` : ""}… ${s}`, pct(++polls))});
+    const res = await retrieve(conn, parts[i], {signal, onProgress: s => onStatus(`Retrieving from ${label}${parts.length > 1 ? ` (part ${i + 1} of ${parts.length})` : ""}… ${s}`, pct(++polls))});
     mergeZipFiles(files, res.files, bytesToText);
     problems.push(...res.messages);
     onStatus(`Retrieved part ${i + 1} of ${parts.length} from ${label}`, Math.round(from + (to - from) * ((i + 1) / parts.length)));
@@ -65,7 +65,7 @@ async function dependencyEdges(conn, rows) {
 }
 
 // A GitHub branch (source format) against an org.
-async function compareFromGit(src, tgt, {presets, onStatus, only}) {
+async function compareFromGit(src, tgt, {presets, onStatus, only, signal}) {
   onStatus(`Reading ${src.name}…`, 5);
   const comps = await gitComponents(src, t => onStatus(t, 15), {fresh: true});
   const types = only && only.length ? [...new Set(only.map(k => splitKey(k).type))] : presetTypes(presets);
@@ -73,11 +73,11 @@ async function compareFromGit(src, tgt, {presets, onStatus, only}) {
   const want = only && only.length ? new Set(only) : null;
   const srcKeys = [...comps.keys()].filter(k => types.includes(splitKey(k).type) && keepObject(k) && (!want || want.has(k)));
   onStatus(`Listing ${tgt.name}…`, 30);
-  const tgtList = await listComponents(tgt.conn, types, {onProgress: (n, of) => onStatus(`Listing ${tgt.name}… ${n}/${of}`, 30 + Math.round(15 * n / of))});
+  const tgtList = await listComponents(tgt.conn, types, {signal, onProgress: (n, of) => onStatus(`Listing ${tgt.name}… ${n}/${of}`, 30 + Math.round(15 * n / of))});
   for (const k of [...tgtList.keys()]) if (!keepObject(k) || (want && !want.has(k))) tgtList.delete(k);
   const sourceComps = new Map(srcKeys.map(k => [k, comps.get(k)]));
   const common = srcKeys.filter(k => tgtList.has(k));
-  const t = common.length ? await retrieveAll(tgt.conn, common, tgt.name, onStatus, {from: 45, to: 92}) : {files: new Map(), problems: []};
+  const t = common.length ? await retrieveAll(tgt.conn, common, tgt.name, onStatus, {from: 45, to: 92, signal}) : {files: new Map(), problems: []};
   onStatus("Comparing…", 95);
   const targetComps = componentsFromZip(t.files, bytesToText);
   for (const k of common) if (!targetComps.has(k)) targetComps.set(k, {...splitKey(k), files: {}, raw: {}});
@@ -86,12 +86,14 @@ async function compareFromGit(src, tgt, {presets, onStatus, only}) {
   for (const k of [...targetComps.keys()]) if (!sourceComps.has(k) && !tgtList.has(k)) targetComps.delete(k);
   const info = Object.fromEntries([...tgtList.entries()].map(([k, v]) => [k, {by: v.lastModifiedByName, at: v.lastModifiedDate}]));
   const rows = classifyComponents(sourceComps, targetComps, {targetInfo: info});
-  return {sourceHost: src.host, targetHost: tgt.host, rows, sourceComps, edges: [], at: new Date().toISOString(), problems: t.problems.filter(p => p.problem), since: ""};
+  return {sourceHost: src.host, targetHost: tgt.host, rows, sourceComps, edges: [], at: new Date().toISOString(), problems: t.problems.filter(p => p.problem), since: "",
+    skipped: {source: [], target: tgtList.skipped || []},
+    git: {truncated: !!comps.truncated, dropped: comps.skipped || [], ignored: comps.ignored || 0}};
 }
 
 // from / to: "YYYY-MM-DD" in the org's zone ("" = open). Items changed in the
 // source in that range are compared; items without a usable date stay in.
-export async function runCompare({presets = [ALL_TYPES], from = "", to = "", since = "", onStatus}) {
+export async function runCompare({presets = [ALL_TYPES], from = "", to = "", since = "", onStatus, signal}) {
   from = from || since;
   const ranged = !!(from || to);
   const st = releaseState();
@@ -99,14 +101,14 @@ export async function runCompare({presets = [ALL_TYPES], from = "", to = "", sin
   const tgt = orgByHost(st.targetHost);
   if (!src || !tgt) throw new Error("Pick a source and a target org.");
   const only = st.compareOnly;
-  if (src.isGit) return compareFromGit(src, tgt, {presets, onStatus, only});
+  if (src.isGit) return compareFromGit(src, tgt, {presets, onStatus, only, signal});
   await Promise.all([loadCatalog(src.conn), loadCatalog(tgt.conn)]);
   let srcList;
   let tgtList;
   if (only && only.length) {
     const types = [...new Set(only.map(k => splitKey(k).type))];
     onStatus("Listing components in both orgs…", 5);
-    [srcList, tgtList] = await Promise.all([listComponents(src.conn, types), listComponents(tgt.conn, types)]);
+    [srcList, tgtList] = await Promise.all([listComponents(src.conn, types, {signal}), listComponents(tgt.conn, types, {signal})]);
     const want = new Set(only);
     for (const k of [...srcList.keys()]) if (!want.has(k)) srcList.delete(k);
     for (const k of [...tgtList.keys()]) if (!want.has(k)) tgtList.delete(k);
@@ -114,9 +116,9 @@ export async function runCompare({presets = [ALL_TYPES], from = "", to = "", sin
     const types = presetTypes(presets);
     if (!types.length) throw new Error("Pick at least one kind of metadata.");
     onStatus(`Listing ${types.length} metadata types in ${src.name}…`, 1);
-    srcList = await listComponents(src.conn, types, {onProgress: (n, of) => onStatus(`Listing ${src.name}… ${n}/${of}`, Math.round(15 * n / of))});
+    srcList = await listComponents(src.conn, types, {signal, onProgress: (n, of) => onStatus(`Listing ${src.name}… ${n}/${of}`, Math.round(15 * n / of))});
     onStatus(`Listing ${types.length} metadata types in ${tgt.name}…`, 15);
-    tgtList = await listComponents(tgt.conn, types, {onProgress: (n, of) => onStatus(`Listing ${tgt.name}… ${n}/${of}`, 15 + Math.round(15 * n / of))});
+    tgtList = await listComponents(tgt.conn, types, {signal, onProgress: (n, of) => onStatus(`Listing ${tgt.name}… ${n}/${of}`, 15 + Math.round(15 * n / of))});
   }
   for (const list of [srcList, tgtList]) for (const k of [...list.keys()]) if (!keepObject(k)) list.delete(k);
   let srcKeys = [...srcList.keys()];
@@ -135,8 +137,8 @@ export async function runCompare({presets = [ALL_TYPES], from = "", to = "", sin
     onStatus(text, Math.round(30 + 62 * ((part.s * srcKeys.length + part.t * common.length) / total)));
   };
   const [s, t] = await Promise.all([
-    srcKeys.length ? retrieveAll(src.conn, srcKeys, src.name, both("s")) : {files: new Map(), problems: []},
-    common.length ? retrieveAll(tgt.conn, common, tgt.name, both("t")) : {files: new Map(), problems: []}
+    srcKeys.length ? retrieveAll(src.conn, srcKeys, src.name, both("s"), {signal}) : {files: new Map(), problems: []},
+    common.length ? retrieveAll(tgt.conn, common, tgt.name, both("t"), {signal}) : {files: new Map(), problems: []}
   ]);
   onStatus("Comparing…", 94);
   const sourceComps = componentsFromZip(s.files, bytesToText);
@@ -150,12 +152,51 @@ export async function runCompare({presets = [ALL_TYPES], from = "", to = "", sin
   const info = list => Object.fromEntries([...list.entries()].map(([k, v]) => [k, {by: v.lastModifiedByName, at: v.lastModifiedDate}]));
   const rows = classifyComponents(sourceComps, targetComps, {sourceInfo: info(srcList), targetInfo: info(tgtList)});
   let edges = [];
+  if (signal && signal.aborted) throw new Error("Cancelled");
   try {
     onStatus("Checking dependencies…", 97);
     edges = await dependencyEdges(src.conn, rows);
   } catch (e) { /* MetadataComponentDependency is optional */ }
   return {sourceHost: src.host, targetHost: tgt.host, rows, sourceComps, edges, at: new Date().toISOString(),
-    problems: [...s.problems, ...t.problems].filter(p => p.problem), from, to, since: from || ""};
+    problems: [...s.problems, ...t.problems].filter(p => p.problem), from, to, since: from || "",
+    skipped: {source: srcList.skipped || [], target: tgtList.skipped || []}};
+}
+
+// One compare at a time, surviving a switch to another sub-tab: progress is in
+// the shared release state (not persisted) and Cancel aborts the calls. A run
+// that was cancelled or replaced never writes its result.
+let activeCompare = null;
+
+export function cancelCompare() {
+  if (!activeCompare) return;
+  activeCompare.ctrl.abort();
+  activeCompare = null;
+  setRelease({comparing: null, compareError: "Compare cancelled. Nothing changed."});
+}
+
+// Types an org refused to list (not enabled, no access): compared as absent.
+export function SkippedTypes({skipped, sourceHost, targetHost}) {
+  if (!skipped) return null;
+  const name = host => (orgByHost(host) || {}).name || host;
+  const parts = [[sourceHost, skipped.source || []], [targetHost, skipped.target || []]].filter(([, list]) => list.length);
+  if (!parts.length) return null;
+  return h("div", {className: "insp-warn rel-skipped"},
+    h("b", null, "These types could not be listed and were skipped: "),
+    parts.map(([host, list]) => `${name(host)}: ${list.map(typeLabel).join(", ")}`).join(" · "),
+    ". Items of these types are not in this compare.");
+}
+
+// What a Git branch read left out: a cut-short listing, object subfolders that
+// aren't metadata SaralForce knows, and files .forceignore excludes.
+export function GitNotes({git}) {
+  if (!git) return null;
+  return h(React.Fragment, null,
+    git.truncated && h("div", {className: "insp-warn"}, h("b", null, "The branch listing is incomplete: "),
+      "GitHub cut the file list short (the repository is very large), so some files are missing from this compare. Point the GitHub folder in Settings at a smaller part of the repository."),
+    git.dropped && git.dropped.length > 0 && h("details", {className: "insp-meta rel-problems"},
+      h("summary", null, `${git.dropped.length} file(s) under objects/ were left out (not a known object part)`),
+      git.dropped.slice(0, 50).map(p => h("div", {key: p}, p))),
+    git.ignored > 0 && h("div", {className: "insp-meta"}, `${git.ignored} file(s) left out by .forceignore.`));
 }
 
 export function CompareView({goTo}) {
@@ -172,16 +213,15 @@ export function CompareView({goTo}) {
   const [byFilter, setByFilter] = React.useState("");
   const [search, setSearch] = React.useState("");
   const [open, setOpen] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
-  const [status, setStatusState] = React.useState({text: "", pct: null, started: 0});
-  const setStatus = (text, pct) => setStatusState(prev => ({text, pct: pct == null ? prev.pct : Math.max(prev.pct || 0, pct), started: prev.started || Date.now()}));
+  const busy = !!st.comparing;
+  const status = st.comparing || {text: "", pct: null, started: 0};
   const [, tick] = React.useState(0);
   React.useEffect(() => {
     if (!busy) return undefined;
     const t = setInterval(() => tick(n => n + 1), 1000);
     return () => clearInterval(t);
   }, [busy]);
-  const [error, setError] = React.useState("");
+  const error = st.compareError || "";
   const [limit, setLimit] = React.useState(PAGE);
   const [notes, setNotes] = React.useState(null);
   const [aiBusy, setAiBusy] = React.useState(false);
@@ -192,16 +232,24 @@ export function CompareView({goTo}) {
   const {askSteps, dialog: stepsDialog} = useStepsAsk();
 
   const run = async () => {
-    setBusy(true); setError(""); setNotes(null); setOpen(null); setLimit(PAGE);
-    setStatusState({text: "Starting…", pct: 0, started: Date.now()});
+    if (activeCompare) return;
+    const me = {ctrl: new AbortController()};
+    activeCompare = me;
+    setNotes(null); setOpen(null); setLimit(PAGE);
+    setRelease({comparing: {text: "Starting…", pct: 0, started: Date.now()}, compareError: ""});
+    const onStatus = (text, pct) => {
+      if (activeCompare !== me) return;
+      setRelease(prev => prev.comparing ? {comparing: {...prev.comparing, text, pct: pct == null ? prev.comparing.pct : Math.max(prev.comparing.pct || 0, pct)}} : {});
+    };
     try {
-      const result = await runCompare({presets: filter.presets, from, to, onStatus: setStatus});
+      const result = await runCompare({presets: filter.presets, from, to, onStatus, signal: me.ctrl.signal});
+      if (activeCompare !== me) return;
       result.filterLabel = `${filter.label} (${filterTypes(filter).length} types)`;
       setRelease({compare: result, selected: new Set(), compareOnly: null});
     } catch (e) {
-      setError(e.message || String(e));
+      if (activeCompare === me) setRelease({compareError: e.message || String(e)});
     } finally {
-      setBusy(false); setStatusState({text: "", pct: null, started: 0});
+      if (activeCompare === me) { activeCompare = null; setRelease({comparing: null}); }
     }
   };
 
@@ -317,7 +365,8 @@ export function CompareView({goTo}) {
           picks: [{id: "all", label: "All time", from: "", to: ""}, {id: "0", label: "Today", from: orgDaysAgo(0), to: ""},
             {id: "7", label: "7 days", from: orgDaysAgo(7), to: ""}, {id: "30", label: "30 days", from: orgDaysAgo(30), to: ""}]}),
         h("button", {className: "btn btn-primary btn-sm", disabled: busy || !st.sourceHost || !st.targetHost, onClick: run},
-          busy ? "Comparing…" : cmp ? "Compare again" : "Compare")),
+          busy ? "Comparing…" : cmp ? "Compare again" : "Compare"),
+        busy && h("button", {className: "btn btn-secondary btn-sm", onClick: cancelCompare, title: "Stop this compare; nothing changes in either org"}, "Cancel")),
       busy && h("div", {className: "tr-progress"},
         status.pct == null
           ? h("div", {className: "cov-progress"}, h("div", {className: "cov-progress-fill"}))
@@ -330,7 +379,7 @@ export function CompareView({goTo}) {
     cmp && h("div", {className: "org-card org-card-wide", "data-release-results": ""},
       h(CardHead, {icon: "🔍", title: `Differences · ${orgByHost(cmp.sourceHost) ? orgByHost(cmp.sourceHost).name : cmp.sourceHost} → ${orgByHost(cmp.targetHost) ? orgByHost(cmp.targetHost).name : cmp.targetHost}`},
         h("button", {className: "btn btn-secondary btn-sm", disabled: aiBusy || !rows.length, onClick: writeNotes,
-          title: "AI writes plain release notes from the selected changes (or all changes)"}, aiBusy ? "Writing…" : "✨ Release notes"),
+          title: "AI writes plain release notes from the selected changes (or all changes). Sent to your AI provider: each component's name and type, up to 15 added and 15 removed lines (or the first 600 characters of a new one). Credentials-type metadata (named credentials, connected apps, certificates…) is never sent."}, aiBusy ? "Writing…" : "✨ Release notes"),
         h("button", {className: "btn btn-secondary btn-sm", disabled: !shown.length, onClick: exportCsv, title: "Download what's shown as a CSV"}, "⬇ Export results")),
       h("div", {className: "rel-filters"},
         h("div", {className: "rel-tabs", role: "tablist", "aria-label": "Difference type"},
@@ -351,6 +400,8 @@ export function CompareView({goTo}) {
         h("span", {className: "insp-meta"}, [cmp.filterLabel, cmp.from || cmp.to ? `changed ${cmp.from ? "from " + cmp.from : ""}${cmp.to ? " to " + cmp.to : ""}` : ""].filter(Boolean).join(" · "))),
       cmp.stale && h("div", {className: "insp-warn"}, "You deployed to the target since this compare, so these results are out of date. ",
         h("button", {className: "field-action-btn", disabled: busy, onClick: run}, "Compare again")),
+      h(SkippedTypes, {skipped: cmp.skipped, sourceHost: cmp.sourceHost, targetHost: cmp.targetHost}),
+      h(GitNotes, {git: cmp.git}),
       cmp.problems.length > 0 && h("details", {className: "insp-meta rel-problems"},
         h("summary", null, `${cmp.problems.length} retrieve note(s) from Salesforce`),
         cmp.problems.slice(0, 50).map((p, i) => h("div", {key: i}, `${p.fileName}: ${p.problem}`))),

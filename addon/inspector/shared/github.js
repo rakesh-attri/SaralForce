@@ -162,7 +162,8 @@ export async function commitFiles(cfg, files, message, {branch, from, onStatus =
 }
 
 // Files under cfg.base on a branch: {files: Map(relativePath → Uint8Array),
-// sha, truncated}. truncated: GitHub cut the listing short, files are missing.
+// sha, truncated, forceignore}. truncated: GitHub cut the listing short, files
+// are missing. forceignore: the repository root's .forceignore text ("" if none).
 export async function readBranch(cfg, {branch, onStatus = () => {}, maxFiles = 4000} = {}) {
   const br = branch || cfg.branch;
   onStatus(`Reading ${cfg.repo}@${br}…`);
@@ -180,7 +181,13 @@ export async function readBranch(cfg, {branch, onStatus = () => {}, maxFiles = 4
     files.set(e.path.slice(prefix.length), base64ToBytes(b.content || ""));
     onStatus(`Reading files… ${++done}/${blobs.length}`);
   });
-  return {files, sha: head, truncated: !!tree.truncated};
+  const ignoreEntry = (tree.tree || []).find(e => e.type === "blob" && e.path === ".forceignore");
+  let forceignore = "";
+  if (ignoreEntry) {
+    const b = await gh(cfg, `/repos/${cfg.repo}/git/blobs/${ignoreEntry.sha}`);
+    forceignore = new TextDecoder().decode(base64ToBytes(b.content || ""));
+  }
+  return {files, sha: head, truncated: !!tree.truncated, forceignore, base};
 }
 
 // Commit to a new branch made from the configured one, then open (or find)

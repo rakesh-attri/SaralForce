@@ -4,7 +4,7 @@
 import {listOrgs, loadCatalog} from "../shared/deploy-api.js";
 import {putSession, getSession, pruneSessions} from "../shared/release-store.js";
 import {githubConfig, readBranch} from "../shared/github.js";
-import {componentsFromSource} from "../../core/source-format.js";
+import {componentsFromSource, forceIgnoreMatcher} from "../../core/source-format.js";
 import {bytesToText} from "../../core/zip.js";
 import {getEffectiveTimeZone} from "../../sf-time.js";
 import {kickSfTzFetch} from "../shared/format.js";
@@ -40,22 +40,33 @@ const SESSION_ID = BOOT ? `release:${params.get("host") || ""}:${BOOT}` : "";
 const PERSIST = ["compare", "compareOnly", "selected", "deploy", "validation", "pendingPlan", "releaseNotes", "gitBranch", "runbook", "deployFrom", "stepsAsked"];
 let saveTimer = null;
 let restoring = !!SESSION_ID;
+// The compare (every file's text) is stored on its own and only when it
+// changes, so ticking a row or a deploy poll writes a small record.
+const COMPARE_ID = SESSION_ID + "#compare";
+let savedCompare;
 
 function persistSoon() {
   if (!SESSION_ID || restoring) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const value = {};
-    for (const k of PERSIST) value[k] = state[k];
+    for (const k of PERSIST) if (k !== "compare") value[k] = state[k];
     putSession(SESSION_ID, value).catch(() => { /* storage full: work stays in memory */ });
+    if (state.compare !== savedCompare) {
+      savedCompare = state.compare;
+      putSession(COMPARE_ID, state.compare || null).catch(() => { savedCompare = undefined; });
+    }
   }, 300);
 }
 
 // Restore once per document, before anything new is computed.
-export const sessionRestored = !SESSION_ID ? Promise.resolve(false) : getSession(SESSION_ID).then(value => {
+export const sessionRestored = !SESSION_ID ? Promise.resolve(false) : Promise.all([getSession(SESSION_ID), getSession(COMPARE_ID)]).then(([value, compare]) => {
   restoring = false;
   pruneSessions().catch(() => {});
   if (!value) return false;
+  // Older sessions kept the compare inside the main record.
+  if (compare) value.compare = compare;
+  savedCompare = value.compare || null;
   // Closed while still preparing (nothing sent to Salesforce yet): don't
   // restore it as running, or the Deploy screen would stay locked.
   if (value.deploy && !value.deploy.finished && !value.deploy.id) {
@@ -131,8 +142,11 @@ const gitCache = new Map();
 export async function gitComponents(org, onStatus, {fresh = false} = {}) {
   const key = org.host;
   if (!fresh && gitCache.has(key)) return gitCache.get(key);
-  const {files} = await readBranch(org.git, {onStatus});
-  const comps = componentsFromSource(files, bytesToText);
+  const {files, truncated, forceignore, base} = await readBranch(org.git, {onStatus});
+  // .forceignore paths are from the repository root; files are under base.
+  const match = forceIgnoreMatcher(forceignore);
+  const comps = componentsFromSource(files, bytesToText, {ignore: p => match((base ? base + "/" : "") + p)});
+  comps.truncated = !!truncated;
   gitCache.set(key, comps);
   return comps;
 }
