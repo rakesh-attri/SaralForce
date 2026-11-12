@@ -292,6 +292,36 @@ export function TargetAction({status, selected}) {
 }
 
 // AI answer card with copy (shared by release notes and failure help).
+// AI answers: **bold**, `code`, bullet and numbered lines, headings. Builds
+// React elements only (never HTML), so the reply can't inject markup.
+function inline(text, key) {
+  const out = [];
+  const re = /\*\*([^*]+)\*\*|`([^`]+)`/g;
+  let last = 0;
+  let m;
+  let i = 0;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(m[1] != null ? h("b", {key: key + "b" + i++}, m[1]) : h("code", {key: key + "c" + i++}, m[2]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+export function RichText({text}) {
+  const lines = String(text || "").split("\n");
+  return h("div", {className: "rel-rich"}, lines.map((line, n) => {
+    const t = line.replace(/\s+$/, "");
+    const indent = (/^\s*/.exec(line)[0].length >= 2) ? " rel-rich-in" : "";
+    let m;
+    if (!t.trim()) return h("div", {key: n, className: "rel-rich-gap"});
+    if ((m = /^\s*#{1,4}\s+(.*)$/.exec(t))) return h("div", {key: n, className: "rel-rich-h"}, inline(m[1], n));
+    if ((m = /^\s*[-*•]\s+(.*)$/.exec(t))) return h("div", {key: n, className: "rel-rich-li" + indent}, h("span", {className: "rel-rich-dot"}, "•"), h("span", null, inline(m[1], n)));
+    if ((m = /^\s*(\d+)[.)]\s+(.*)$/.exec(t))) return h("div", {key: n, className: "rel-rich-li" + indent}, h("span", {className: "rel-rich-num"}, m[1] + "."), h("span", null, inline(m[2], n)));
+    return h("div", {key: n, className: "rel-rich-p" + indent}, inline(t, n));
+  }));
+}
+
 export function AiAnswer({title, text, onClose}) {
   const [copied, setCopied] = React.useState(false);
   return h("div", {className: "rel-ai"},
@@ -302,7 +332,7 @@ export function AiAnswer({title, text, onClose}) {
           try { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) { /* no clipboard */ }
         }}, copied ? "Copied" : "Copy"),
         onClose && h("button", {className: "btn btn-secondary btn-sm", onClick: onClose}, "Close"))),
-    h("div", {className: "rel-ai-body"}, text));
+    h("div", {className: "rel-ai-body rel-ai-rich"}, h(RichText, {text})));
 }
 
 export function AiError({error}) {

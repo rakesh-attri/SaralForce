@@ -79,3 +79,24 @@ test("the grouped AI prompt is far shorter than the raw list", () => {
   assert.match(grouped, /root cause/);
   assert.match(grouped, /Missing Apex class NxtPay_AccountPaymentController · 100 error/);
 });
+
+test("Salesforce's 'Page X does not exist' and 'The X External Credential doesn't exist.' are missing items", () => {
+  const page = classifyProblem("Page NxtPay_PaymentResult does not exist");
+  assert.equal(page.category, "missing");
+  assert.deepEqual(page.ref, {type: "ApexPage", name: "NxtPay_PaymentResult"});
+  assert.match(page.title, /^Missing .* NxtPay_PaymentResult$/);
+  assert.match(page.why, /Visualforce page/);
+  const ec = classifyProblem("The NxtPay_Stripe_External_Credential External Credential doesn't exist.");
+  assert.equal(ec.category, "missing");
+  assert.deepEqual({type: ec.ref.type, name: ec.ref.name}, {type: "ExternalCredential", name: "NxtPay_Stripe_External_Credential"});
+  assert.ok(ec.fix);
+  // The page is in the source and not selected: it can be added.
+  const a = analyzeFailures({componentFailures: Array.from({length: 100}, (_, i) => fail("ApexClass", "C" + i, "Page NxtPay_PaymentResult does not exist"))},
+    {sourceKeys: ["ApexPage:NxtPay_PaymentResult"]});
+  assert.equal(a.groups.length, 1);
+  assert.equal(a.groups[0].addKey, "ApexPage:NxtPay_PaymentResult");
+  // Unknown messages still get a why and a fix.
+  const other = classifyProblem("Something entirely new happened");
+  assert.equal(other.category, "other");
+  assert.ok(other.why && other.fix);
+});

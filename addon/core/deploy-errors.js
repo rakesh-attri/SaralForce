@@ -24,6 +24,23 @@ const RECORD_TYPES = new Set(["User", "Group", "Queue", "Role", "UserRole", "Bus
 
 const MISSING_FIX = "Add it to this deploy (Apex with its test class), or deploy it to the target first.";
 
+// Words Salesforce uses for a type in "Page X does not exist" / "The X External
+// Credential doesn't exist." → metadata type ("" when unknown).
+const TYPE_WORDS = {
+  "page": "ApexPage", "visualforce page": "ApexPage", "class": "ApexClass", "apex class": "ApexClass", "trigger": "ApexTrigger",
+  "component": "ApexComponent", "flow": "Flow", "field": "CustomField", "object": "CustomObject", "tab": "CustomTab",
+  "label": "CustomLabel", "custom label": "CustomLabel", "static resource": "StaticResource", "permission set": "PermissionSet",
+  "custom permission": "CustomPermission", "external credential": "ExternalCredential", "named credential": "NamedCredential",
+  "lightning web component": "LightningComponentBundle", "aura component": "AuraDefinitionBundle", "record type": "RecordType",
+  "email template": "EmailTemplate", "report type": "ReportType", "queue": "Queue", "group": "Group", "role": "Role",
+  "custom metadata type": "CustomObject", "platform event": "CustomObject"
+};
+const typeWord = w => TYPE_WORDS[String(w || "").toLowerCase().trim()] || "";
+const WHY_REFERRED = {
+  ApexPage: "Apex refers to this Visualforce page (Page.Name or a PageReference), but the target doesn't have it and this deploy doesn't include it.",
+  ExternalCredential: "A named credential uses this external credential, but the target doesn't have it and this deploy doesn't include it."
+};
+
 // [id, category, regex, ref(match) → {type, name}|null, title(ref, match), why, fix]
 const RULES = [
   ["apex-action", "missing", /Unable to find Apex action class referenced as '([^']+)'/i,
@@ -45,6 +62,12 @@ const RULES = [
   ["field", "missing", /(?:Field|Column)\s+['"]?([\w]+(?:\.[\w]+)?)['"]?\s+does not exist|No such column '(\w+)' on (?:entity|sobject of type) '?(\w+)'?/i,
     m => m[1] ? {type: "CustomField", name: m[1]} : {type: "CustomField", name: `${m[3]}.${m[2]}`}, r => `Missing field ${r.name}`,
     "Something in this deploy uses a field the target doesn't have.", MISSING_FIX],
+  ["type-name-missing", "missing", /\b(Visualforce page|Apex class|Page|Class|Component|Trigger|Flow|Field|Object|Tab|Custom label|Label|Static resource|Permission set|Custom permission|Record type|Email template)\s+([\w.]+)\s+(?:does not|doesn't) exist/i,
+    m => ({type: typeWord(m[1]), name: m[2]}), r => `Missing ${r.type ? typeLabel(r.type).toLowerCase() : "item"} ${r.name}`,
+    "", MISSING_FIX],
+  ["name-type-missing", "missing", /\bThe\s+([\w.]+)\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\s+(?:does not|doesn't) exist/,
+    m => ({type: typeWord(m[2]), name: m[1], word: m[2]}), r => `Missing ${r.type ? typeLabel(r.type).toLowerCase() : r.word.toLowerCase()} ${r.name}`,
+    "", MISSING_FIX],
   ["invalid-type", "missing", /Invalid type:\s*([\w.]+)/i,
     m => ({type: "", name: m[1]}), r => `Unknown type ${r.name}`,
     "Apex refers to a class or object the target doesn't have.", MISSING_FIX],
@@ -77,8 +100,15 @@ const RULES = [
     "Another item in the target already uses this API name (possibly of a different type or in a managed package).", "Rename it in the source, or remove the other item in the target."],
   ["not-in-zip", "package", /named in package\.xml, but was not found in zipped directory/i,
     () => null, () => "Listed in package.xml but missing from the files",
-    "The package names a component whose file isn't in it.", "Compare again (it may have been deleted in the source), or remove it from the package."]
+    "The package names a component whose file isn't in it.", "Compare again (it may have been deleted in the source), or remove it from the package."],
+  ["generic-missing", "missing", /does not exist|doesn't exist|cannot be found|could not be found|not found|is not defined/i,
+    () => null, () => "",
+    "Something in this deploy refers to an item the target doesn't have.", "Find the item Salesforce names below and add it to this deploy, or remove the reference."]
 ];
+
+// When no rule knows the message.
+export const OTHER_WHY = "SaralForce doesn't recognise this message yet.";
+export const OTHER_FIX = "Read what Salesforce says below, or press “Ask AI” about it.";
 
 const NO_NAMED_WHY = ref => RECORD_TYPES.has(ref.type)
   ? `The item${ref.field ? `'s ${ref.field}` : ""} names a ${ref.type.toLowerCase()} that the target doesn't have. Sandbox usernames end in the sandbox name, so they rarely match production.`
@@ -100,10 +130,11 @@ export function classifyProblem(problem) {
     const r = ref(m);
     // "no User named …" is a missing record, not missing metadata.
     const cat = id === "no-named" && RECORD_TYPES.has(r.type) ? "reference" : category;
-    return {id, category: cat, ref: r, title: title(r || {}, m),
-      why: id === "no-named" ? NO_NAMED_WHY(r) : why, fix: id === "no-named" ? NO_NAMED_FIX(r) : fix};
+    const whyText = id === "no-named" ? NO_NAMED_WHY(r) : why || (r && WHY_REFERRED[r.type]) ||
+      (r ? "Something in this deploy refers to it, but the target doesn't have it and this deploy doesn't include it." : "");
+    return {id, category: cat, ref: r, title: title(r || {}, m), why: whyText, fix: id === "no-named" ? NO_NAMED_FIX(r) : fix};
   }
-  return {id: "other", category: "other", ref: null, title: "", why: "", fix: ""};
+  return {id: "other", category: "other", ref: null, title: "", why: OTHER_WHY, fix: OTHER_FIX};
 }
 
 // Keys a referenced item could have (an untyped name may be a class or an object).

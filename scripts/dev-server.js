@@ -643,6 +643,10 @@ function mockLlm(req, res) {
             fixedCode: code.split("\n").filter(l => !l.includes("oops")).join("\n")})
           : JSON.stringify({ok: false, error: "Data problem", line: null, explanation: "This looks like a data or setup issue, not the code.", fixedCode: ""});
       })()
+      : /fix a failed validation or deployment in SandShift/.test(system)
+      ? (/separate deploy|same package/i.test(user)
+        ? "You can fix this **in the same package**: Salesforce orders the types itself, so add the missing items and validate again.\n\n1. Add **InvoiceTax** (press “＋ Add it to the deploy”).\n2. Validate again.\n\nA separate first deploy is only needed if InvoiceTax fails on its own."
+        : "**Root causes**\n\n1. **Missing Apex class InvoiceTax**: the LWC `invoiceCard` calls it.\n   - Fix: add it to this deploy and validate again.\n2. **User priya@demo.saralforce.dev doesn't exist**: change `siteAdmin` on **Customer_Portal1**.")
       : /writing the manual runbook/.test(system)
       ? JSON.stringify({steps: [
         {phase: "pre", title: "Tell finance users about the release window", detail: "Invoices can't be edited for 10 minutes while it deploys."},

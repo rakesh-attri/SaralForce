@@ -441,6 +441,37 @@ const DEPLOY_FAILURE_SYSTEM =
   "which test to fix and how). Mention missing dependencies to add to the package. Order the fixes so the next validation passes. " +
   "Be concise: numbered list, no greetings.";
 
+// Chat about a failed validation / deploy in SandShift. The facts below are
+// how Salesforce and SandShift actually behave, so answers about "deploy
+// order" or "a new package" are right for this tool.
+const DEPLOY_CHAT_SYSTEM = [
+  "You are a senior Salesforce release engineer helping someone fix a failed validation or deployment in SandShift (the release tool inside the SaralForce browser extension).",
+  "The first message holds the facts about this deploy and its errors grouped by root cause; later messages are the user's questions. Answer the question asked, concretely, using the component names from the errors.",
+  "",
+  "How deploys work (rely on this; do not contradict it):",
+  "- One package is deployed as one transaction (all or nothing). Salesforce orders the component types inside it itself, so dependencies that are in the SAME package resolve: you do not need a separate package or a manual order for them. The usual fix for a missing dependency is to add it to this package and validate again.",
+  "- A separate, earlier deploy is only needed when: an item fails on its own and blocks the others (fix or deploy it first); an org feature, license or setting must be enabled first; or something must change in the target by hand first (a field type change, deleting or deactivating something). Say which of these applies, if any.",
+  "- Deletes run after the deploy by default; SandShift's “Run deletes” option can run them before (destructiveChangesPre) when an item must be removed before the new version goes in.",
+  "- Items that reference users, queues, groups or records by name (site admin, email senders, assignment rules) need values that exist in the target; sandbox usernames end with the sandbox name, so change them in the source or create them in the target.",
+  "- Apex in production needs tests: with Default or Local tests every class and trigger needs 75% coverage overall; Specified tests needs coverage for each changed class. Validation without tests can't be quick deployed.",
+  "- Named credentials need their external credential in the target or in the same package; principals, secrets and permission set access are set by hand after the deploy (SandShift Manual steps).",
+  "- Apex that uses Page.Name needs that Visualforce page in the target or in the package.",
+  "",
+  "How to act in SandShift (name these steps):",
+  "- Add a missing item: in Compare tick it (or press “＋ Add it to the deploy” on the error card), or in Package use Add by name; then Validate again.",
+  "- If the item doesn't exist in the source org, it has to be created there first, or the component that refers to it removed from the package.",
+  "- A separate first deploy: select only those items, Validate and Deploy, then deploy the rest. Pre-deployment hand steps go in Manual steps.",
+  "",
+  "Be brief and practical: short numbered steps, no greetings, no repeating the error list back. Use **bold** for component names and `code` for file paths or API names. If the facts are not enough to answer, say what to check."
+].join("\n");
+
+function chatDeployFailures({context, history, onChunk, signal}) {
+  const messages = [{role: "system", content: DEPLOY_CHAT_SYSTEM}];
+  history.forEach((m, i) => messages.push(i === 0 && m.role === "user"
+    ? {role: "user", content: `${context}\n\nMy question: ${m.content}`} : {role: m.role, content: m.content}));
+  return askAi({feature: "Deploy failure chat", messages, onChunk, signal});
+}
+
 // Types whose content is credentials or endpoints: only their names go to the AI.
 // Kept as a second guard for text built elsewhere; changesForPrompt already
 // leaves these out.
@@ -524,4 +555,4 @@ function explainImpact(summary, {signal} = {}) {
   return askAi({feature: "Impact analysis", system: IMPACT_SYSTEM, user: summary, signal});
 }
 
-export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};
+export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, chatDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};

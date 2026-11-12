@@ -14,8 +14,8 @@ import {analyzePlan, sizeProblems, overwriteRisks} from "../../core/analyzers.js
 import {listReleases, putRelease, saveSnapshot, saveBytes, newId} from "../shared/release-store.js";
 import {nextVersion, trimSummary} from "../../core/release-history.js";
 import {detectSteps, mergeRunbook, pendingPreSteps} from "../../core/manual-steps.js";
-import {explainDeployFailures} from "../shared/ai.js";
-import {analyzeFailures, groupText, failuresPromptText} from "../../core/deploy-errors.js";
+import {chatDeployFailures} from "../shared/ai.js";
+import {analyzeFailures, groupText, failuresPromptText, classifyProblem} from "../../core/deploy-errors.js";
 import {toCsv, downloadText} from "../shared/csv.js";
 import {activeFlows, deactivateFlows, flowDeleteBlockers, deleteFlowsTooling} from "../shared/manual-actions.js";
 import {flowDeleteReport} from "../../core/impact.js";
@@ -24,7 +24,7 @@ import {FFBadge, FriendlyError} from "../shared/ui.js";
 import {confirmDialog} from "../../ui/confirm.js";
 import {useStepsAsk, selectionSig} from "./release-steps-ask.js";
 import {useRelease, setRelease, releaseState, gitComponents, orgByHost, orgLabel, downloadBytes, fmtWhen} from "./release-state.js";
-import {OrgBar, CardHead, AiAnswer, AiError} from "./release-ui.js";
+import {OrgBar, CardHead, AiError, RichText} from "./release-ui.js";
 
 const h = React.createElement;
 
@@ -197,7 +197,66 @@ function FlowDeleteHelp({names, target, isProd, checkOnly, disabled}) {
 // Failures grouped by root cause: what went wrong, why, and what to do, with
 // "add it to the deploy" when the missing item is in the source. The raw list
 // (full text, filter, CSV) is one click away.
-function DeployErrors({summary, context, canAdd, disabled, onAdd, onRevalidate}) {
+const CATEGORY_SHORT = {missing: "Missing", reference: "User/record", compile: "Compile", feature: "Feature", change: "Change", access: "Access", conflict: "Conflict", package: "Package", other: "Other"};
+
+// Chat with the AI about this run's failures. context() builds the facts
+// (target, tests, what was sent, grouped errors); ask {q, n} sends a question.
+function FailureChat({ask, context, onClose}) {
+  const [msgs, setMsgs] = React.useState([]);
+  const [text, setText] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState("");
+  const ctx = React.useRef(null);
+  const ctrl = React.useRef(null);
+  const endRef = React.useRef(null);
+  const send = async q => {
+    const question = String(q || "").trim();
+    if (!question || busy) return;
+    if (!ctx.current) ctx.current = context();
+    const history = [...msgs, {role: "user", content: question}];
+    setMsgs([...history, {role: "assistant", content: ""}]);
+    setText(""); setErr(""); setBusy(true);
+    ctrl.current = new AbortController();
+    try {
+      const reply = await chatDeployFailures({context: ctx.current, history, signal: ctrl.current.signal,
+        onChunk: t => setMsgs([...history, {role: "assistant", content: t}])});
+      setMsgs([...history, {role: "assistant", content: reply}]);
+    } catch (e) {
+      setMsgs(history);
+      if (!(e && e.name === "AbortError")) setErr(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  React.useEffect(() => { if (ask && ask.q) send(ask.q); }, [ask && ask.n]);
+  React.useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({block: "nearest"}); }, [msgs]);
+  React.useEffect(() => () => ctrl.current && ctrl.current.abort(), []);
+  const SUGGEST = ["Can I fix this in the same package, or do I need a separate deploy first?", "What should I add to this deploy?", "Which errors are caused by other errors?"];
+  return h("div", {className: "rel-ai rel-chat"},
+    h("div", {className: "rel-ai-h"},
+      h("span", null, "✨ Ask AI about these failures"),
+      h("div", {className: "audit-actions"},
+        busy && h("button", {className: "btn btn-secondary btn-sm", onClick: () => ctrl.current && ctrl.current.abort()}, "Stop"),
+        msgs.length > 0 && h("button", {className: "btn btn-secondary btn-sm", disabled: busy, onClick: () => { setMsgs([]); setErr(""); }}, "Clear"),
+        h("button", {className: "btn btn-secondary btn-sm", onClick: onClose}, "Close"))),
+    h("div", {className: "rel-chat-log"},
+      msgs.map((m, i) => h("div", {key: i, className: "rel-chat-msg rel-chat-" + m.role},
+        m.role === "user" ? h("div", {className: "rel-chat-q"}, m.content)
+          : m.content ? h(RichText, {text: m.content}) : h("div", {className: "insp-meta"}, "Thinking…"),
+        m.role === "assistant" && m.content && !busy && h("button", {className: "field-action-btn rel-chat-copy",
+          onClick: () => { try { navigator.clipboard.writeText(m.content); } catch (e) { /* no clipboard */ } }}, "Copy"))),
+      h("div", {ref: endRef})),
+    h(AiError, {error: err}),
+    !busy && h("div", {className: "rel-chat-suggest"}, SUGGEST.map(sg => h("button", {key: sg, type: "button", className: "insp-chip rel-chip", onClick: () => send(sg)}, sg))),
+    h("div", {className: "rel-chat-input"},
+      h("textarea", {rows: 2, value: text, placeholder: "Ask a follow-up… (Enter to send, Shift+Enter for a new line)", "aria-label": "Ask the AI",
+        onChange: e => setText(e.target.value),
+        onKeyDown: e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); } }}),
+      h("button", {className: "btn btn-primary btn-sm", disabled: busy || !text.trim(), onClick: () => send(text)}, busy ? "…" : "Send")),
+    h("div", {className: "insp-meta rel-chat-note"}, "Sent to your AI provider: this deploy's target, test level, component counts and the error messages (no file contents)."));
+}
+
+function DeployErrors({summary, context, canAdd, disabled, onAdd, onRevalidate, onAsk}) {
   const a = React.useMemo(() => analyzeFailures(summary, context), [summary, context.sourceKeys.length]);
   const [open, setOpen] = React.useState(() => new Set(a.groups.slice(0, 3).map(g => g.key)));
   const [added, setAdded] = React.useState(new Set());
@@ -210,6 +269,7 @@ function DeployErrors({summary, context, canAdd, disabled, onAdd, onRevalidate})
   };
   const top = a.groups[0];
   const rows = summary.componentFailures.filter(f => !q || (f.type + " " + f.fullName + " " + f.problem).toLowerCase().includes(q.toLowerCase()));
+  const fixOf = React.useMemo(() => { const m = new Map(); return p => { if (!m.has(p)) m.set(p, classifyProblem(p)); return m.get(p); }; }, [summary]);
   const csv = () => downloadText(`deploy-errors-${new Date().toISOString().slice(0, 10)}.csv`,
     toCsv(["Type", "Component", "Line", "Problem"], summary.componentFailures.map(f => ({"Type": typeLabel(f.type), "Component": f.fullName, "Line": f.line || "", "Problem": f.problem}))));
   const card = (g, nested) => {
@@ -233,6 +293,7 @@ function DeployErrors({summary, context, canAdd, disabled, onAdd, onRevalidate})
             `＋ Add ${g.ref ? g.ref.name : "it"} to the deploy`),
           g.addKey && added.has(g.addKey) && h("span", {className: "insp-status-ok"}, "✓ Added to the selection"),
           g.addKey && !canAdd && h("span", {className: "insp-meta"}, `${g.ref.name} is in the source: add it to the package.`),
+          onAsk && h("button", {className: "field-action-btn", onClick: () => onAsk(`How do I fix this: ${g.title}? (${g.total || g.count} error(s), e.g. on ${typeLabel(g.components[0].type)} ${g.components[0].fullName})`)}, "✨ Ask AI"),
           h("button", {className: "field-action-btn", onClick: () => copy(groupText(g), g.key)}, copied === g.key ? "✓ Copied" : "Copy")),
         g.children.length > 0 && h("div", {className: "rel-err-kids"},
           h("div", {className: "insp-meta"}, `Also fails because of this (${g.children.reduce((n, c) => n + c.count, 0)}):`),
@@ -249,12 +310,17 @@ function DeployErrors({summary, context, canAdd, disabled, onAdd, onRevalidate})
       h("button", {className: "field-action-btn", onClick: () => copy(a.groups.map(g => groupText(g)).join("\n\n"), "all")}, copied === "all" ? "✓ Copied" : "Copy summary"),
       h("button", {className: "field-action-btn", onClick: csv}, "⬇ Export CSV")),
     showAll && h(React.Fragment, null,
-      h("input", {className: "soql-save-input rel-search", placeholder: "Filter errors…", value: q, onChange: e => setQ(e.target.value), "aria-label": "Filter errors"}),
+      h("input", {className: "rel-err-filter", placeholder: "Filter by component or message…", value: q, onChange: e => setQ(e.target.value), "aria-label": "Filter errors"}),
       h("div", {className: "insp-table-wrap"},
         h("table", {className: "insp-table rel-err-table"},
-          h("thead", null, h("tr", null, h("th", null, "Component"), h("th", null, "Line"), h("th", null, "Problem"))),
-          h("tbody", null, rows.slice(0, 500).map((f, i) => h("tr", {key: i},
-            h("td", null, `${typeLabel(f.type)} ${f.fullName}`), h("td", null, f.line || ""), h("td", null, f.problem)))))),
+          h("thead", null, h("tr", null, h("th", null, "Component"), h("th", null, "Line"), h("th", null, "Problem"), h("th", null, "Fix"))),
+          h("tbody", null, rows.slice(0, 500).map((f, i) => {
+            const c = fixOf(f.problem);
+            return h("tr", {key: i},
+              h("td", null, `${typeLabel(f.type)} ${f.fullName}`), h("td", null, f.line || ""),
+              h("td", null, h("span", {className: "rel-err-cat"}, CATEGORY_SHORT[c.category] || "Other"), " ", f.problem),
+              h("td", {className: "rel-err-fix"}, c.fix));
+          })))),
       rows.length > 500 && h("div", {className: "insp-meta"}, `First 500 of ${rows.length}: export the CSV for all.`)));
 }
 
@@ -368,8 +434,6 @@ export function DeployView({goTo}) {
   const [suggesting, setSuggesting] = React.useState(false);
   const [suggestMsg, setSuggestMsg] = React.useState("");
   const [ai, setAi] = React.useState(null);
-  const [aiBusy, setAiBusy] = React.useState(false);
-  const [aiErr, setAiErr] = React.useState("");
   const d = st.deploy;
   const running = !!(d && !d.finished);
   useTick(running);
@@ -483,7 +547,7 @@ export function DeployView({goTo}) {
       });
       if (!ok) return;
     }
-    setAi(null); setAiErr("");
+    setAi(null);
     const label = checkOnly ? "Validation" : "Deploy";
     const base = {label, checkOnly, targetHost: target.host, startedAt: Date.now(), items: count, deletes: delCount, sig: curSig};
     setRelease({deploy: {...base, status: "Preparing the package…"}});
@@ -654,16 +718,26 @@ export function DeployView({goTo}) {
     }
   };
 
-  const explain = async () => {
-    setAiBusy(true); setAiErr("");
-    try {
-      const sum = d.summary || {componentFailures: [], testFailures: [], coverageWarnings: [], errorMessage: d.error};
-      setAi(await explainDeployFailures(failuresPromptText(sum, analyzeFailures(sum, errorContext))));
-    } catch (e) {
-      setAiErr(e.message || String(e));
-    } finally {
-      setAiBusy(false);
-    }
+  // "Explain failures" and each card's "Ask AI" open one chat about this run.
+  const askAi = q => setAi({q, n: Date.now()});
+  const explain = () => askAi("Explain these failures and how to fix them, most important first.");
+  const chatContext = () => {
+    const sum = d.summary || {componentFailures: [], testFailures: [], coverageWarnings: [], errorMessage: d.error};
+    const a = analyzeFailures(sum, errorContext);
+    const tgt = orgByHost(d.targetHost);
+    const items = (d.info && d.info.items) || plan.keys;
+    const dels = (d.info && d.info.deletes) || keysFromMembers(plan.destructive);
+    const byType = {};
+    for (const k of items) { const t = splitKey(k).type; byType[t] = (byType[t] || 0) + 1; }
+    const addable = a.groups.flatMap(g => [g, ...g.children]).filter(g => g.addKey).map(g => splitKey(g.addKey).fullName);
+    return [
+      `Target org: ${tgt ? tgt.name : d.targetHost} (${tgt && !tgt.isSandbox ? "production" : "sandbox"}). Run: ${d.checkOnly ? "validation (check only)" : "deploy"}. Test level: ${d.level || level}.`,
+      `Selection from: ${plan.mode === "compare" ? `Compare (source org ${source ? source.name : "?"})` : plan.mode === "plan" ? (pending && pending.kind) || "plan" : "Package"}.`,
+      `Sent: ${items.length} component(s): ${Object.entries(byType).sort((x, y) => y[1] - x[1]).map(([t, n]) => `${t} ${n}`).join(", ")}; ${dels.length} delete(s), run ${delWhen === "before" ? "before" : "after"} the deploy.`,
+      addable.length ? `In the source and not selected (SaralForce can add them): ${addable.join(", ")}.` : "",
+      "",
+      failuresPromptText(sum, a)
+    ].filter(x => x !== "").join("\n");
   };
 
   const downloadZip = async () => {
@@ -796,7 +870,7 @@ export function DeployView({goTo}) {
         // Still this result's selection (plus the fix): keep it on screen.
         onAdd: key => setRelease(prev => ({selected: new Set([...prev.selected, key]),
           deploy: prev.deploy ? {...prev.deploy, viewSig: selectionSig([...plan.keys, key], keysFromMembers(plan.destructive))} : prev.deploy})),
-        onRevalidate: () => run(true)}),
+        onRevalidate: () => run(true), onAsk: askAi}),
       s && target && d.info && s.componentFailures.some(f => f.type === "Flow" && /cross-reference id/i.test(f.problem || "")) &&
         (d.info.deletes || []).some(k => k.startsWith("Flow:")) &&
         h(FlowDeleteHelp, {key: d.id || d.startedAt, target, isProd, checkOnly: d.checkOnly, disabled: running,
@@ -812,10 +886,9 @@ export function DeployView({goTo}) {
       d.finished && validation && d.checkOnly && h("div", {className: "rel-actionbar"},
         h("span", {className: "insp-meta"}, validation.noTests ? "No tests ran in this validation, so Salesforce can't quick deploy it; this sends the exact validated files." : "Quick deploy releases this validated package in seconds, without running tests again (valid for 10 days)."),
         h("button", {className: "btn btn-primary btn-sm", onClick: quick}, validation.noTests ? "Deploy validated package" : "Quick deploy")),
-      failed && h("div", {className: "rel-actionbar"},
-        h("button", {className: "btn btn-secondary btn-sm", disabled: aiBusy, onClick: explain}, aiBusy ? "Thinking…" : "✨ Explain failures")),
-      ai && h(AiAnswer, {title: "How to fix", text: ai, onClose: () => setAi(null)}),
-      h(AiError, {error: aiErr}),
+      failed && !ai && h("div", {className: "rel-actionbar"},
+        h("button", {className: "btn btn-secondary btn-sm", onClick: explain, title: "Opens a chat with the AI about these failures"}, "✨ Explain failures / ask AI")),
+      failed && ai && h(FailureChat, {key: d.id || d.startedAt, ask: ai, context: chatContext, onClose: () => setAi(null)}),
       d.id && orgByHost(d.targetHost) && h("div", {className: "insp-meta"}, "Deploy id ", h("code", null, d.id), " · ",
         h("a", {href: setupUrl(orgByHost(d.targetHost).conn, "/lightning/setup/DeployStatus/home"), target: "_blank", rel: "noopener"}, "Deployment Status in Setup"))));
 }

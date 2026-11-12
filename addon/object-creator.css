@@ -12592,8 +12592,19 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
 
 .rel-paste summary {
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #181818;
+  padding: 4px 0;
+}
+
+.rel-paste summary:hover {
   color: #0176d3;
+}
+
+html.dark .rel-paste summary,
+html[data-theme="dark"] .rel-paste summary {
+  color: #e8ebf2;
 }
 
 .rel-textarea {
@@ -13468,4 +13479,150 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
 .rel-err-table td {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* AI answers: light markdown instead of raw ** and backticks. */
+.rel-ai-body.rel-ai-rich {
+  white-space: normal;
+}
+
+.rel-rich {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #1e2a3d;
+}
+
+.rel-rich-gap {
+  height: 6px;
+}
+
+.rel-rich-h {
+  font-weight: 700;
+  margin: 6px 0 2px;
+}
+
+.rel-rich-li {
+  display: flex;
+  gap: 6px;
+  margin: 2px 0;
+}
+
+.rel-rich-in {
+  margin-left: 18px;
+}
+
+.rel-rich-dot,
+.rel-rich-num {
+  flex: none;
+  min-width: 14px;
+  color: #5b21b6;
+  font-weight: 600;
+}
+
+.rel-rich code {
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  background: #eef2f8;
+  border-radius: 4px;
+  padding: 0 4px;
+  overflow-wrap: anywhere;
+}
+
+/* Deploy failures chat. */
+.rel-chat-log {
+  max-height: 420px;
+  overflow: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rel-chat-msg {
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.rel-chat-user {
+  align-self: flex-end;
+  max-width: 85%;
+  background: #0176d3;
+  color: #fff;
+}
+
+.rel-chat-q {
+  white-space: pre-wrap;
+  font-size: 12.5px;
+}
+
+.rel-chat-assistant {
+  background: #fff;
+  border: 1px solid #e3e8f0;
+}
+
+.rel-chat-copy {
+  margin-top: 4px;
+}
+
+.rel-chat-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 6px;
+}
+
+.rel-chat-input {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 0 12px 8px;
+}
+
+.rel-chat-input textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border: 1px solid #c9d2e0;
+  border-radius: 8px;
+  background: #fff;
+  color: #181818;
+}
+
+.rel-chat-input textarea:focus,
+.rel-err-filter:focus {
+  outline: 2px solid #1b96ff;
+  outline-offset: 0;
+  border-color: #1b96ff;
+}
+
+.rel-chat-note {
+  padding: 0 12px 8px;
+}
+
+/* Full error list: a normal one-line filter and a Fix column. */
+.rel-err-filter {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  box-sizing: border-box;
+  margin: 6px 0;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  border: 1px solid #c9d2e0;
+  border-radius: 8px;
+  background: #fff;
+  color: #181818;
+}
+
+.rel-err-table .rel-err-fix {
+  color: #2e5d2e;
+  min-width: 180px;
+}
+
+.rel-err-table .rel-err-cat {
+  margin-right: 4px;
 }
