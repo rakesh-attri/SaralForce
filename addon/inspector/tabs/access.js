@@ -12,7 +12,7 @@ import {ffGetObjects} from "../shared/describe.js";
 import {toCsv, downloadText} from "../shared/csv.js";
 import {logsAskLlm} from "../shared/ai.js";
 import {AnalysisReport} from "../shared/analysis-report.js";
-import {FFBadge} from "../shared/ui.js";
+import {FFBadge, EmptyState} from "../shared/ui.js";
 import {useFfSession} from "../shared/session-state.js";
 import {ApprovalsView} from "./approvals.js";
 import {SearchSelect} from "../shared/combo.js";
@@ -111,6 +111,11 @@ function CompareCard() {
         onClick: () => setPicked(picked.filter(x => x !== id))
       }, nameOf(id), " ×"))),
     error && h("div", {className: "insp-error"}, error),
+    !matrix && !loading && h(EmptyState, {art: "compare",
+      title: picked.length < 2 ? "Pick two or more to compare" : "Ready when you are",
+      text: picked.length < 2
+        ? "Search above and add profiles, permission sets or groups. You'll see what each grants side by side, with the differences highlighted."
+        : `Press Compare to see ${picked.length} of them side by side.`}),
     matrix && h("div", {className: "acc-toolbar"},
       h("label", {className: "sq3-check"},
         h("input", {type: "checkbox", checked: onlyDiff, onChange: e => setOnlyDiff(e.target.checked)}),
@@ -199,9 +204,8 @@ function RiskCard() {
         aiBusy ? "Summarizing…" : "✨ Summarize with AI"),
       h("button", {className: "btn btn-primary btn-sm", disabled: running, onClick: run},
         running ? "Checking…" : summary ? "Run again" : "Run check")),
-    !summary && !running && h("div", {className: "insp-hint-strip"},
-      "Lists active users who hold powerful system permissions (Modify All Data, View All Data, Manage Users, " +
-      "Author Apex …) and what grants them. Read-only."),
+    !summary && !running && h(EmptyState, {art: "shield", title: "Who holds powerful permissions?",
+      text: "Run the check to list active users with Modify All Data, View All Data, Manage Users, Author Apex and similar, and what grants them. Read-only."}),
     running && h("div", {className: "insp-status-info"}, progress || "Checking…"),
     error && h("div", {className: "insp-error"}, error),
     aiErr === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},

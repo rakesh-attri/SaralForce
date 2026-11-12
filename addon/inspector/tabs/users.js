@@ -5,7 +5,7 @@ import {confirmDialog} from "../../ui/confirm.js";
 import {ffIsSfId, openRecordInSf} from "../shared/record-links.js";
 import {useSfTimeZoneTick, fmtDateTime} from "../shared/format.js";
 import {ffIcon, FF_I_SLIDERS} from "../shared/icons.js";
-import {FFBadge} from "../shared/ui.js";
+import {FFBadge, EmptyState} from "../shared/ui.js";
 import {useFfSession} from "../shared/session-state.js";
 import {usersEnsureDebugLevel} from "../shared/apex-debug.js";
 import {loadPermSetList} from "../shared/access-data.js";
@@ -922,7 +922,8 @@ function UsersTab() {
           }, "View in Salesforce")
           )
         ) : h("div", {className: "sq3-card"},
-          h("div", {className: "insp-meta"}, "Select a user on the left to inspect details, permissions and login info.")),
+          h(EmptyState, {art: "users", title: "Pick a user",
+            text: "Select a user on the left to see their details, permissions, groups and login history."})),
         sel && h("div", {className: "sq3-card"},
           h("div", {className: "usr-tabs", role: "tablist"},
             USR_TABS.map(([id, label]) =>

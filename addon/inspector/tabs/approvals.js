@@ -5,7 +5,7 @@ import {escapeSoqlString} from "../../core/soql.js";
 import {queryAll} from "../shared/query.js";
 import {appTabsResolveCurrentUserId} from "../shared/apex-debug.js";
 import {fmtDateTime} from "../shared/format.js";
-import {FFBadge} from "../shared/ui.js";
+import {FFBadge, EmptyState} from "../shared/ui.js";
 import {ffIsSfId} from "../shared/record-links.js";
 import {useFfSession} from "../shared/session-state.js";
 
@@ -190,8 +190,9 @@ function ApprovalsView() {
       msg && h("div", {className: "insp-status-ok"}, msg),
       error && h("div", {className: "insp-error"}, error),
       !items && !error && h("div", {className: "insp-meta"}, "Loading…"),
-      items && !items.length && !error && h("div", {className: "insp-meta apv-empty"},
-        scope === "submitted" ? "You have not submitted anything recently." : "No pending items" + (scope === "mine" ? " for you." : " in this org.")),
+      items && !items.length && !error && h(EmptyState, {art: "inbox", compact: true, className: "apv-empty",
+        title: scope === "submitted" ? "Nothing submitted lately" : "All caught up",
+        text: scope === "submitted" ? "You have not submitted anything recently." : "No pending items" + (scope === "mine" ? " for you." : " in this org.")}),
       scope !== "submitted" && items && items.length > 0 && h("input", {
         className: "soql-save-input apv-comment",
         value: comment,
