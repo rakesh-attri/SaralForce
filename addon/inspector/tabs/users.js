@@ -54,6 +54,8 @@ function UsersTab() {
   const [expSite, setExpSite] = React.useState("");
   const [profileFilter, setProfileFilter] = useFfSession("users", "profileFilter", "");
   const [roleFilter, setRoleFilter] = useFfSession("users", "roleFilter", "");
+  // True when the last query hit its LIMIT, so the list is only a first page.
+  const [listCapped, setListCapped] = useFfSession("users", "listCapped", false);
   const [allProfiles, setAllProfiles] = React.useState([]);
   const [allRoles, setAllRoles] = React.useState([]);
   const [page, setPage] = React.useState(1);
@@ -89,7 +91,10 @@ function UsersTab() {
   // queried after a short pause so users beyond the loaded page are found.
   // An empty box brings back the default list. Stale replies are dropped.
   const searchSeq = React.useRef(0);
-  const search = async (termText = q, {keepSelection = false} = {}) => {
+  // The Profile / Role filters are part of the query, not applied over the
+  // loaded page: a profile with 500 users must not look like it has 2.
+  const search = async (termText = q,
+    {keepSelection = false, profileId = profileFilter, roleId = roleFilter} = {}) => {
     const raw = String(termText || "").trim();
     const mine = ++searchSeq.current;
     setError(null);
@@ -97,15 +102,21 @@ function UsersTab() {
     const term = escapeSoqlLike(raw);
     setLoading(true);
     try {
-      const soql = term
-        ? `SELECT ${USER_LIST_FIELDS} ` +
-          `FROM User WHERE Name LIKE '%${term}%' OR Username LIKE '%${term}%' ` +
-          `OR Email LIKE '%${term}%' OR Alias LIKE '%${term}%' ORDER BY Name LIMIT 50`
-        : `SELECT ${USER_LIST_FIELDS} FROM User ORDER BY Name LIMIT 25`;
+      const conds = [];
+      if (term) {
+        conds.push(`(Name LIKE '%${term}%' OR Username LIKE '%${term}%' ` +
+          `OR Email LIKE '%${term}%' OR Alias LIKE '%${term}%')`);
+      }
+      if (ffIsSfId(profileId)) conds.push(`ProfileId = '${profileId}'`);
+      if (ffIsSfId(roleId)) conds.push(`UserRoleId = '${roleId}'`);
+      const limit = conds.length ? 50 : 25;
+      const soql = `SELECT ${USER_LIST_FIELDS} FROM User` +
+        (conds.length ? ` WHERE ${conds.join(" AND ")}` : "") + ` ORDER BY Name LIMIT ${limit}`;
       const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
         encodeURIComponent(soql), {useCache: false});
       if (mine !== searchSeq.current) return;
       setUsers(mapUserRows(res.records));
+      setListCapped((res.records || []).length >= limit);
       setUserCols(["Name", "Username", "Email", "Alias", "Active"]);
       setPage(1);
     } catch (e) {
@@ -144,24 +155,18 @@ function UsersTab() {
         setAllProfiles((pRes.records || []).map(p => ({id: p.Id, name: p.Name})));
         setAllRoles((rRes.records || []).map(r => ({id: r.Id, name: r.Name})));
       } catch (e) { /* filters stay empty */ }
-      if (!cancelled && !users.length) {
-        try {
-          const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-            encodeURIComponent(`SELECT ${USER_LIST_FIELDS} FROM User ORDER BY Name LIMIT 25`),
-            {useCache: false});
-          if (cancelled) return;
-          const flat = mapUserRows(res.records);
-          setUsers(flat);
-          setUserCols(["Name", "Username", "Email", "Alias", "Active"]);
-          setPage(1);
-        } catch (e) { /* list stays empty until searched */ }
-      }
+      // Same query as a search, so restored filters apply to the first page.
+      if (!cancelled && !users.length) search(q, {keepSelection: true});
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Clicking A then B quickly must not let A's record land under B (Clone
+  // would copy the wrong user): replies for an older selection are dropped.
+  const selSeq = React.useRef(0);
   const selectUser = async (row) => {
+    const mine = ++selSeq.current;
     setSel(row);
     setDetail(null);
     setActionMsg(null);
@@ -171,7 +176,7 @@ function UsersTab() {
     setCloneResult(null);
     setUserTab("details");
     setDetailLoading(true);
-    loadUserExtras(row);
+    loadUserExtras(row, mine);
     try {
       const [rec, prof, roleQ] = await Promise.all([
         sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/${encodeURIComponent(row.Id)}`,
@@ -183,6 +188,7 @@ function UsersTab() {
           encodeURIComponent(`SELECT Name FROM UserRole WHERE Id = '${row.RoleId}'`),
           {useCache: false}).catch(() => null) : Promise.resolve(null)
       ]);
+      if (mine !== selSeq.current) return;
       setSrcRec(rec);
       setDetail({
         profile: prof && prof.records && prof.records[0] ? prof.records[0].Name : "unknown",
@@ -192,9 +198,9 @@ function UsersTab() {
         created: rec && rec.CreatedDate ? rec.CreatedDate : null
       });
     } catch (e) {
-      setDetail({profile: "unknown", role: "—", lastLogin: null, created: null});
+      if (mine === selSeq.current) setDetail({profile: "unknown", role: "—", lastLogin: null, created: null});
     } finally {
-      setDetailLoading(false);
+      if (mine === selSeq.current) setDetailLoading(false);
     }
   };
 
@@ -513,11 +519,12 @@ function UsersTab() {
   };
 
   // Detail-tab extras: assignments for the PS/Groups tabs + latest login IP.
-  const loadUserExtras = async (row) => {
+  const loadUserExtras = async (row, mine) => {
     setSrcPerms(null);
     setLoginIp(null);
     try {
       const perms = await fetchAssignments(row.Id);
+      if (mine !== selSeq.current) return;
       setSrcPerms(perms);
     } catch (e) { /* tabs show empty state */ }
     try {
@@ -529,12 +536,14 @@ function UsersTab() {
       const rows = (lh && lh.records || [])
         .sort((a, b) => String(b.LoginTime || "").localeCompare(String(a.LoginTime || "")));
       const hit = rows.find(r => r.Status === "Success" && r.SourceIp) || rows[0];
-      if (hit && hit.SourceIp) setLoginIp(hit.SourceIp);
+      if (hit && hit.SourceIp && mine === selSeq.current) setLoginIp(hit.SourceIp);
     } catch (e) { /* IP stays blank */ }
   };
 
   const openClone = async () => {
     if (!sel) return;
+    const user = sel;
+    const mine = selSeq.current;
     setCloneOpen(true);
     setCloneStep(1);
     setCloneErr(null);
@@ -550,13 +559,28 @@ function UsersTab() {
         sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
           encodeURIComponent("SELECT Id, Name FROM UserRole ORDER BY Name"), {useCache: false})
           .catch(() => ({records: []})),
-        fetchAssignments(sel.Id)
+        fetchAssignments(user.Id)
       ]);
+      // The source record is the only thing cloned from: reload it when it is
+      // missing (sidebar reopened, earlier load failed) and stop if it cannot
+      // be read. No made-up defaults for time zone, locale, role or name.
+      let rec = srcRec && srcRec.Id === user.Id ? srcRec : null;
+      if (!rec) {
+        rec = await sfConn.rest(`/services/data/v${apiVersion}/sobjects/User/${encodeURIComponent(user.Id)}`,
+          {useCache: false}).catch(() => null);
+      }
+      if (mine !== selSeq.current) return;
+      const missing = !rec || rec.Id !== user.Id ? ["the User record"]
+        : ["TimeZoneSidKey", "LocaleSidKey", "EmailEncodingKey", "LanguageLocaleKey"].filter(k => !rec[k]);
+      if (missing.length) {
+        throw new Error(`Cannot clone ${user.Name || user.Username}: could not read ${missing.join(", ")} ` +
+          "from Salesforce, so there is nothing reliable to copy. Check your access to this user and try again.");
+      }
+      setSrcRec(rec);
       setProfiles((profRes.records || []).map(p => ({id: p.Id, name: p.Name})));
       setRoles((roleRes.records || []).map(r => ({id: r.Id, name: r.Name})));
       const {ps, psg, groups} = perms;
       setSrcPerms({ps, psg, groups});
-      const rec = srcRec || {};
       setCf({
         firstName: rec.FirstName || "",
         lastName: rec.LastName || "",
@@ -565,23 +589,24 @@ function UsersTab() {
         alias: String(rec.Alias || "").slice(0, 8),
         nick: "",
         password: "",
-        profileId: rec.ProfileId || sel.ProfileId || "",
+        profileId: rec.ProfileId || user.ProfileId || "",
         roleId: rec.UserRoleId || "",
         psIds: [...ps, ...psg].map(p => p.id),
         grpIds: groups.map(g => g.id),
         active: true,
         locale: {
-          TimeZoneSidKey: rec.TimeZoneSidKey || "Asia/Kolkata",
-          LocaleSidKey: rec.LocaleSidKey || "en_US",
-          EmailEncodingKey: rec.EmailEncodingKey || "UTF-8",
-          LanguageLocaleKey: rec.LanguageLocaleKey || "en_US"
+          TimeZoneSidKey: rec.TimeZoneSidKey,
+          LocaleSidKey: rec.LocaleSidKey,
+          EmailEncodingKey: rec.EmailEncodingKey,
+          LanguageLocaleKey: rec.LanguageLocaleKey
         }
       });
     } catch (e) {
+      if (mine !== selSeq.current) return;
       setActionErr(e.message);
       setCloneOpen(false);
     } finally {
-      setSrcLoading(false);
+      if (mine === selSeq.current) setSrcLoading(false);
     }
   };
 
@@ -777,19 +802,31 @@ function UsersTab() {
             h("select", {
               value: profileFilter,
               title: "Filter by profile",
-              onChange: e => { setProfileFilter(e.target.value); setPage(1); }
+              onChange: e => {
+                setProfileFilter(e.target.value);
+                setPage(1);
+                clearTimeout(searchTimer.current);
+                search(q, {keepSelection: true, profileId: e.target.value});
+              }
             },
               h("option", {value: ""}, "All Profiles"),
               allProfiles.map(p => h("option", {key: p.id, value: p.id}, p.name))),
             h("select", {
               value: roleFilter,
               title: "Filter by role",
-              onChange: e => { setRoleFilter(e.target.value); setPage(1); }
+              onChange: e => {
+                setRoleFilter(e.target.value);
+                setPage(1);
+                clearTimeout(searchTimer.current);
+                search(q, {keepSelection: true, roleId: e.target.value});
+              }
             },
               h("option", {value: ""}, "All Roles"),
               allRoles.map(r => h("option", {key: r.id, value: r.id}, r.name)))
           ),
-          h("div", {className: "insp-meta"}, `Total Users: ${filteredUsers.length}`),
+          h("div", {className: "insp-meta"}, listCapped
+            ? `Showing the first ${filteredUsers.length} users (there are more: search or filter to narrow)`
+            : `Total Users: ${filteredUsers.length}`),
           error && h("div", {className: "insp-error"}, error),
           loading && !users.length && h("div", {className: "insp-meta"}, "Loading users…"),
           !loading && !filteredUsers.length && !error &&

@@ -220,6 +220,11 @@ const DRAFT_REVISE_SYSTEM =
   '{"files": {"<path exactly as given>": "<the FULL new content of that file>"}, "explanation": "<one or two plain sentences>"} ' +
   "Include only files you changed. You may add an Apex class as classes/<Name>.cls or a missing css/svg file of the component.";
 
+// Largest input the "return the full file" prompts accept; more is refused
+// rather than cut, because a cut input comes back as if it were the whole file.
+const MAX_DRAFT_CHARS = 60000;
+const MAX_APEX_CHECK_CHARS = 12000;
+
 async function schemaForRequest(object, request) {
   let names = object ? [object] : [];
   if (!names.length) {
@@ -322,6 +327,12 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
     try { schemaParts.push(describeForPrompt(await ffDescribeObject(n))); } catch (e) { /* not an object */ }
   }
   const schema = schemaParts.join("\n\n");
+  // The model is asked for the full new content of each file, so it must see
+  // all of it: a cut-off file would come back cut off and be saved that way.
+  const current = bundleForPrompt(draft.files);
+  if (current.length > MAX_DRAFT_CHARS) {
+    throw new Error(`These files are too large for AI editing (${current.length.toLocaleString()} characters, the limit is ${MAX_DRAFT_CHARS.toLocaleString()}). Edit them by hand.`);
+  }
   let merged = draft;
   let changed = [];
   const parsed = await askAiJson({
@@ -330,7 +341,7 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
     user: `Kind: ${draft.kind}\nName: ${draft.name}\nAPI version: ${(draft.form || {}).apiVersion || "latest"}\n` +
       (ask ? `Request: ${ask}\n` : "") + (error ? `Salesforce compile/deploy errors to fix (fix ALL of them):\n${error}\n` : "") +
       (schema ? `\n${schema}\n` : "") +
-      `\nCurrent files:\n${bundleForPrompt(draft.files)}`.slice(0, 60000),
+      `\nCurrent files:\n${current}`,
     validate: o => {
       const files = o && o.files && typeof o.files === "object" ? o.files : null;
       if (!files || !Object.keys(files).length) return "The JSON has no changed files.";
@@ -389,7 +400,10 @@ function explainTestFailure({className, method, message, stackTrace, testSource,
 // (or after Salesforce rejects it). Never executes anything itself.
 // Returns {ok, error, line, explanation, fixedCode}.
 async function apexAiCheck(sourceCode, serverError, {signal} = {}) {
-  const code = String(sourceCode || "").slice(0, 12000);
+  const code = String(sourceCode || "");
+  if (code.length > MAX_APEX_CHECK_CHARS) {
+    throw new Error(`This code is too large for an AI fix (${code.length.toLocaleString()} characters, the limit is ${MAX_APEX_CHECK_CHARS.toLocaleString()}).`);
+  }
   const parsed = await askAiJson({
     feature: "Apex check",
     system: APEX_CHECK_SYSTEM,
@@ -426,14 +440,38 @@ const DEPLOY_FAILURE_SYSTEM =
   "which test to fix and how). Mention missing dependencies to add to the package. Order the fixes so the next validation passes. " +
   "Be concise: numbered list, no greetings.";
 
-// Plain release notes from a compare selection (component names and short diffs only).
+// Types whose content is credentials or endpoints: only their names go to the AI.
+const SENSITIVE_TYPES = new Set(["NamedCredential", "ConnectedApp", "ExternalCredential", "AuthProvider", "Certificate", "RemoteSiteSetting"]);
+
+// changesText is core/deploy.js changesForPrompt output: "## STATUS Type Name"
+// headings, each followed by that component's content. Drops the content
+// under headings of sensitive types and keeps the heading.
+function redactSensitiveChanges(changesText) {
+  const out = [];
+  let hidden = false;
+  for (const line of String(changesText || "").split("\n")) {
+    const m = /^## (NEW|CHANGED|DELETED|SAME) (\S+) /.exec(line);
+    if (m) {
+      hidden = SENSITIVE_TYPES.has(m[2]);
+      out.push(line);
+      if (hidden) out.push("(content not sent: this type can hold credentials or endpoints)");
+    } else if (!hidden) out.push(line);
+  }
+  return out.join("\n");
+}
+
+// Plain release notes from a compare selection. What goes to the AI provider
+// is real metadata content, not just names: for each component its name, then
+// the changed lines (up to 15 added and 15 removed) or, when it is new, its
+// first 600 characters. That can include custom metadata records, label text
+// and other configuration. Sensitive types (SENSITIVE_TYPES) send names only.
 function releaseNotesFromChanges(changesText, {source, target, signal} = {}) {
   return askAi({
     feature: "Release notes",
     system: RELEASE_NOTES_SYSTEM,
     user: `Release from ${source || "source org"} to ${target || "target org"}.
 
-${changesText}`,
+${redactSensitiveChanges(changesText)}`,
     signal
   });
 }

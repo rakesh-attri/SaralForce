@@ -109,7 +109,8 @@ export let sfConn = {
         this.sessionId = message.key;
       }
     }
-    if (localStorage.getItem(sfHost + "_trialExpirationDate") == null) {
+    // No session: the query would only send "Bearer undefined" and get a 401.
+    if (this.sessionId && localStorage.getItem(sfHost + "_trialExpirationDate") == null) {
       sfConn.rest("/services/data/v" + apiVersion + "/query/?q=SELECT+IsSandbox,+InstanceName+,TrialExpirationDate+FROM+Organization").then(res => {
         localStorage.setItem(sfHost + "_isSandbox", res.records[0].IsSandbox);
         localStorage.setItem(sfHost + "_orgInstance", res.records[0].InstanceName);
@@ -146,12 +147,16 @@ export let sfConn = {
       body: params.toString()
     });
 
+    // A proxy or error page answers with HTML, not JSON.
+    const text = await response.text();
+    let tokenData = null;
+    try { tokenData = JSON.parse(text); } catch (e) { /* not JSON */ }
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error_description || "Failed to exchange code for token");
+      throw new Error((tokenData && tokenData.error_description) || `Failed to exchange code for token (HTTP ${response.status})`);
     }
-
-    const tokenData = await response.json();
+    if (!tokenData || !tokenData.access_token) {
+      throw new Error(`Salesforce did not return an access token (HTTP ${response.status}). A proxy or login page may be answering for it.`);
+    }
     return tokenData.access_token;
   },
 

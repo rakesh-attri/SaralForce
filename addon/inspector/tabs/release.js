@@ -113,6 +113,7 @@ function ChangesView({goTo}) {
   const [statusFilter, setStatusFilter] = React.useState({new: true, updated: true, deleted: true});
   const [destructive, setDestructive] = useFfSession("release", "destructive", {});
   const [tracking, setTracking] = React.useState(null);
+  const [skipped, setSkipped] = React.useState([]);
   const [by, setBy] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState("");
   const [rows, setRows] = React.useState(null);
@@ -147,6 +148,7 @@ function ChangesView({goTo}) {
       setRows(buildChanges([...list.values()], del.deleted, t, types, touched, until ? orgDayStart(until) + 864e5 : 0));
       setAudit(del.audit);
       setTracking(del.tracking);
+      setSkipped(list.skipped || []);
     } catch (e) {
       setError(e.message || String(e));
     } finally {
@@ -238,6 +240,8 @@ function ChangesView({goTo}) {
               h("td", {className: "rel-name"}, r.fullName),
               h("td", null, r.by),
               h("td", {className: "insp-meta"}, fmtWhen(r.at))))))),
+      skipped.length > 0 && h("div", {className: "insp-warn"},
+        `Not checked (Salesforce could not list these types in this org): ${skipped.map(typeLabel).join(", ")}.`),
       counts.deleted === 0 && tracking === false && h("div", {className: "insp-meta rel-note"},
         "Deletes come from the Setup audit trail here (this org has no source tracking), so some deletes may not be listed."),
       audit && audit.length > 0 && h("details", {className: "rel-problems"},
@@ -328,16 +332,29 @@ function PackageView({goTo}) {
   React.useEffect(() => { loadDrafts(); }, []);
   const saveDraft = async () => {
     const name = relName.trim() || `Draft ${`${new Date().toLocaleDateString(undefined, {day: "numeric", month: "short"})} ${new Date().toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"})}`}`;
-    await putDraft({name, members: pkg, destructive, sourceName: source ? source.name : ""});
-    setMsg(`Saved draft “${name}”.`);
-    loadDrafts();
+    setErr("");
+    try {
+      await putDraft({name, members: pkg, destructive, sourceName: source ? source.name : ""});
+      setMsg(`Saved draft “${name}”.`);
+      loadDrafts();
+    } catch (e) {
+      setMsg("");
+      setErr("Could not save the draft: " + (e.message || String(e)));
+    }
   };
   const loadDraft = d => {
     setPkg(mergeMembers(pkg, d.members || {}));
     setDestructive(mergeMembers(destructive, d.destructive || {}));
     setMsg(`Loaded “${d.name}” into the package.`);
   };
-  const dropDraft = async d => { await deleteDraft(d.id); loadDrafts(); };
+  const dropDraft = async d => {
+    try {
+      await deleteDraft(d.id);
+      loadDrafts();
+    } catch (e) {
+      setErr("Could not delete the draft: " + (e.message || String(e)));
+    }
+  };
   const delCount = keysFromMembers(destructive).length;
 
   const add = () => {

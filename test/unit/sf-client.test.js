@@ -147,3 +147,51 @@ test("401 renews the session once and retries with the new one", async () => {
   assert.equal(dead.calls.length, 1);
   assert.deepEqual(seen, ["unauthorized"]);
 });
+
+test("cancel and timeout still apply while the body downloads", async () => {
+  // Headers arrive at once; the body never does, until the signal aborts.
+  const stalled = (url, init) => ({
+    status: 200,
+    headers: {get: () => null},
+    text: () => new Promise((resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+    })
+  });
+  const controller = new AbortController();
+  const {sf, calls} = client(stalled);
+  const pending = sf.request("/big", {signal: controller.signal});
+  setTimeout(() => controller.abort(), 10);
+  await assert.rejects(pending, {name: "AbortError"});
+  assert.equal(calls.length, 1);
+  await assert.rejects(client(stalled).sf.request("/big", {timeoutMs: 20, retries: 0}), {name: "TimeoutError"});
+});
+
+test("errors carry the Salesforce errorCode", async () => {
+  const {sf} = client(() => response(400, [{errorCode: "MALFORMED_QUERY", message: "bad"}]));
+  await assert.rejects(sf.request("/q"), {code: "MALFORMED_QUERY"});
+  const plain = client(() => response(500, "oops"));
+  await assert.rejects(plain.sf.request("/q", {retries: 0}), (err) => err.code === undefined);
+});
+
+test("403 is an auth error only when it is about the session or API access", async () => {
+  const seen = [];
+  const run = (body) => client(() => response(403, body), {onAuthError: (kind) => seen.push(kind)}).sf.request("/q");
+  await assert.rejects(run([{errorCode: "REQUEST_LIMIT_EXCEEDED", message: "TotalRequests Limit exceeded."}]),
+    {name: "Forbidden", code: "REQUEST_LIMIT_EXCEEDED", message: "TotalRequests Limit exceeded."});
+  await assert.rejects(run([{errorCode: "INSUFFICIENT_ACCESS", message: "no"}]), {name: "Forbidden"});
+  assert.deepEqual(seen, []);
+  await assert.rejects(run([{errorCode: "API_DISABLED_FOR_ORG", message: "API is not enabled"}]), {code: "API_DISABLED_FOR_ORG"});
+  await assert.rejects(run("<html>Forbidden</html>"), {name: "Forbidden"});
+  assert.deepEqual(seen, ["forbidden", "forbidden"]);
+});
+
+test("a web page where JSON was expected is an error, not data", async () => {
+  const {sf} = client(() => response(200, "<!DOCTYPE html><html><body>Sign in</body></html>"));
+  await assert.rejects(sf.request("/q"), {name: "SalesforceRestError", status: 200, message: /web page instead of data/});
+  // Text responses, empty bodies and JSON strings are left alone.
+  assert.equal(await client(() => response(200, "<log/>")).sf.request("/log", {responseType: "text"}), "<log/>");
+  assert.equal(await client(() => response(200, "")).sf.request("/empty"), null);
+  assert.equal(await client(() => response(204, "")).sf.request("/none"), null);
+  assert.equal(await client(() => response(200, '"<b>"')).sf.request("/str"), "<b>");
+  assert.equal(await client(() => response(200, "707xx0000000001")).sf.request("/id"), "707xx0000000001");
+});

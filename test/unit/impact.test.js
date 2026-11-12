@@ -51,3 +51,14 @@ test("flow delete report: what blocks it and what is clear", () => {
   assert.match(r.text, /version 2 is active/);
   assert.match(r.text, /Old_Routing.*nothing found blocking it[\s\S]*Could not check what uses it/);
 });
+
+test("a failed or capped search is never a clean pass", () => {
+  const partial = impactVerdict({unchecked: ["Could not search Apex classes (boom)."]});
+  assert.equal(partial.level, "warn");
+  assert.match(partial.title, /Partial result/);
+  assert.match(partial.reasons.join(" "), /Could not search Apex classes/);
+  assert.equal(impactVerdict({unchecked: []}).level, "safe");
+  const blocked = impactVerdict({activeFlows: ["F"], unchecked: ["Only the first 2,000 Apex classes were searched; the org has more."]});
+  assert.equal(blocked.level, "block");
+  assert.match(blocked.reasons.join(" "), /Partial result: Only the first 2,000/);
+});

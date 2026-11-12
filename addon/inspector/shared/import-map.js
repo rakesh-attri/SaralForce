@@ -39,6 +39,53 @@ const FF_BOOL_FALSE = /^(false|0|no|n|off)$/i;
 const FF_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const FF_DATETIME_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/;
 
+const FF_NUMBER_TYPES = ["int", "double", "currency", "percent"];
+
+// Rewrites a cell into the form Salesforce accepts, for exactly the lenient
+// spellings ffValidateImport lets through: yes/y/on/1 and no/n/off/0 become
+// true/false, thousands separators are dropped from numbers, and a datetime
+// written "2026-01-31 9:00" becomes "2026-01-31T09:00:00". A time zone is
+// never added or changed. Anything else is returned untouched.
+function ffNormalizeImportValue(value, type) {
+  const v = String(value == null ? "" : value).trim();
+  const t = String(type || "").toLowerCase();
+  if (t === "boolean") {
+    if (FF_BOOL_TRUE.test(v)) return "true";
+    if (FF_BOOL_FALSE.test(v)) return "false";
+  } else if (FF_NUMBER_TYPES.includes(t)) {
+    if (v.includes(",") && !isNaN(Number(v.replace(/,/g, "")))) return v.replace(/,/g, "");
+  } else if (t === "datetime") {
+    const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}):(\d{2})(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/.exec(v);
+    if (m) return `${m[1]}T${m[2].padStart(2, "0")}:${m[3]}${m[4] || ":00"}${m[5] || ""}${m[6] || ""}`;
+  }
+  return value;
+}
+
+// Bulk API 2.0 ingest CSV for prepared rows: one header line of target field
+// API names, RFC-4180 quoting. Delete and Hard Delete jobs take the Id column
+// only (rows without an Id are left out). For the other operations a cell
+// explicitly blanked (body value null, "Ignore blank fields" off) is written
+// as #N/A, which is how Bulk API sets a field to null; an empty cell would be
+// ignored.
+function ffBuildBulkCsv(rows, targets, opts) {
+  const o = opts || {};
+  const isDelete = o.operation === "delete" || o.operation === "hardDelete";
+  const esc = (v) => {
+    if (v == null) return "";
+    const s = String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const eol = o.lineEnding === "\n" ? "\n" : "\r\n";
+  if (isDelete) {
+    return ["Id"].concat((rows || []).filter(r => r.idVal).map(r => esc(r.idVal))).join(eol);
+  }
+  const lines = [targets.map(esc).join(",")];
+  for (const row of rows || []) {
+    lines.push(targets.map(t => (row.body[t] === null && t !== "Id" ? "#N/A" : esc(row.body[t]))).join(","));
+  }
+  return lines.join(eol);
+}
+
 // Client-side import validation. Preliminary by design — only Salesforce
 // can enforce server-side validation, automation and duplicate rules.
 // Returns {issues, rowSeverity, okRows, warnRows, errorRows, hardErrors}.
@@ -91,20 +138,26 @@ function ffValidateImport(opts) {
       suggestion: "Choose the External ID field in Import Setup"});
   }
   const idMapped = Object.values(fieldMap).some(fa => fa === "Id");
-  if ((operation === "update" || operation === "delete") && !idMapped) {
+  if ((operation === "update" || operation === "delete" || operation === "hardDelete") && !idMapped) {
     issues.push({row: 0, field: "Id", severity: "error",
-      problem: `${operation === "update" ? "Update" : "Delete"} requires an Id column mapped to Id`,
+      problem: `${operation === "update" ? "Update" : operation === "delete" ? "Delete" : "Hard Delete"} requires an Id column mapped to Id`,
       suggestion: "Map a CSV column containing Salesforce record IDs to Id"});
   }
 
-  // Required fields (createable, not nillable, no default) for row-creating ops.
+  // Required fields (createable, not nillable, no default) for row-creating
+  // ops. A field that cannot be set on create is never required (Account.Name
+  // in person-account orgs). Upsert may only update existing rows, so there a
+  // missing required field is a warning, not an error.
+  const isRequired = f => f.createable !== false && f.nillable === false && f.defaultedOnCreate !== true;
+  const requiredSeverity = operation === "upsert" ? "warn" : "error";
   if (operation === "insert" || operation === "upsert") {
     const mappedTargets = new Set(Object.values(fieldMap).filter(Boolean));
     for (const f of fields) {
       if (!f || !f.name || f.name === "Id") continue;
-      if (f.nillable === false && f.defaultedOnCreate !== true && !mappedTargets.has(f.name)) {
-        issues.push({row: 0, field: f.name, severity: "error",
-          problem: `Required field ${f.name} is not mapped`,
+      if (isRequired(f) && !mappedTargets.has(f.name)) {
+        issues.push({row: 0, field: f.name, severity: requiredSeverity,
+          problem: `Required field ${f.name} is not mapped` +
+            (operation === "upsert" ? " (needed for rows that are created)" : ""),
           suggestion: `Map a CSV column to ${f.label || f.name}`});
       }
     }
@@ -124,11 +177,10 @@ function ffValidateImport(opts) {
       const f = fieldByName[fa];
       const raw = rec[hd];
       if (raw == null || String(raw).trim() === "") {
-        if (f.nillable === false && f.defaultedOnCreate !== true &&
-            (operation === "insert" || operation === "upsert")) {
-          issues.push({row: rowNo, field: fa, severity: "error",
+        if (isRequired(f) && (operation === "insert" || operation === "upsert")) {
+          issues.push({row: rowNo, field: fa, severity: requiredSeverity,
             problem: "Required field is blank", suggestion: `Provide a value for ${fa}`});
-          mark(idx, "error");
+          mark(idx, requiredSeverity);
         }
         continue;
       }
@@ -140,7 +192,7 @@ function ffValidateImport(opts) {
       };
       if (t === "boolean" && !FF_BOOL_TRUE.test(v) && !FF_BOOL_FALSE.test(v)) {
         err(`"${v}" is not a valid boolean`, "Use true/false (or 1/0)");
-      } else if (["int", "double", "currency", "percent"].includes(t) && isNaN(Number(v.replace(/,/g, "")))) {
+      } else if (FF_NUMBER_TYPES.includes(t) && isNaN(Number(v.replace(/,/g, "")))) {
         err(`"${v}" is not a valid number`, "Use a plain number, e.g. 1234.56");
       } else if (t === "date" && !FF_DATE_RE.test(v)) {
         err(`"${v}" is not a valid date`, "Use YYYY-MM-DD");
@@ -276,5 +328,5 @@ function ffDataResultFiles({headers, records, successes, failures, operation, li
   };
 }
 
-export {ffSuggestFieldMap, ffValidateImport, ffCollectionsChunkSize, ffBuildCollectionsChunk,
+export {ffSuggestFieldMap, ffValidateImport, ffNormalizeImportValue, ffBuildBulkCsv,ffCollectionsChunkSize, ffBuildCollectionsChunk,
   ffFormatSaveErrors, ffMapSaveResults, ffFailChunk, ffDataResultFiles};

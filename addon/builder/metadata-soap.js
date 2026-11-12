@@ -8,7 +8,8 @@
 //     signal,        // optional shared AbortSignal (deploy "Cancel")
 //     isAborted,     // () => boolean — the deploy was cancelled by the user
 //     onDebug,       // (action, requestXml, responseText) => void
-//     delay          // (ms) => Promise — cancellable wait used when polling
+//     delay,         // (ms) => Promise — cancellable wait used when polling
+//     timeoutMs      // optional per-request timeout (default 60s), for big uploads
 //   }
 //
 // fetch / DOMParser are only touched when a request is made, so the module
@@ -62,7 +63,9 @@ async function postEnvelope(ctx, envelope, label, requestXml) {
       shared.addEventListener("abort", onSharedAbort, {once: true});
     }
   }
-  const timeoutId = setTimeout(() => local.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutMs = ctx.timeoutMs > 0 ? ctx.timeoutMs : REQUEST_TIMEOUT_MS;
+  const secs = Math.round(timeoutMs / 1000);
+  const timeoutId = setTimeout(() => local.abort(), timeoutMs);
   try {
     return await fetch(url, {
       method: "POST",
@@ -77,8 +80,8 @@ async function postEnvelope(ctx, envelope, label, requestXml) {
     clearTimeout(timeoutId);
     if (fetchErr.name === "AbortError") {
       if (aborted(ctx)) throw new Error("Deployment cancelled");
-      note(ctx, label, requestXml, "TIMED OUT after 60s (no response body)");
-      throw new Error(`Request timed out after 60s (${label})`);
+      note(ctx, label, requestXml, `TIMED OUT after ${secs}s (no response body)`);
+      throw new Error(`Request timed out after ${secs}s (${label})`);
     }
     throw new Error("Network error: " + fetchErr.message);
   } finally {

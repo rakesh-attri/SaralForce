@@ -27,9 +27,13 @@ export function DataQualityPanel({describe, onFilter}) {
   const [ai, setAi] = React.useState(null);
   const [copied, setCopied] = React.useState(false);
 
-  React.useEffect(() => { setState(null); setAi(null); }, [describe.name]);
+  // Bumped on every run and on every object switch: a result for an older
+  // run (or the previous object) is dropped instead of shown.
+  const runSeq = React.useRef(0);
+  React.useEffect(() => { runSeq.current++; setState(null); setAi(null); }, [describe.name]);
 
   const analyze = async () => {
+    const mine = ++runSeq.current;
     setState({loading: true});
     setAi(null);
     try {
@@ -38,19 +42,21 @@ export function DataQualityPanel({describe, onFilter}) {
       const records = res.records || [];
       const profiles = profileFields(records, describe, fields);
       const dups = duplicateGroups(records, fields);
+      if (mine !== runSeq.current) return;
       setState({profiles, dups, result: qualityIssues(profiles, dups, records.length), n: records.length});
     } catch (e) {
-      if (!unmount.current.signal.aborted) setState({error: e.message});
+      if (!unmount.current.signal.aborted && mine === runSeq.current) setState({error: e.message});
     }
   };
   const review = async () => {
     if (!hasValidConfig()) { setAi({error: "NO_LLM_CONFIG"}); return; }
+    const mine = runSeq.current;
     setAi({loading: true});
     try {
       const text = await explainDataQuality(qualityForPrompt(describe.name, state.n, state.profiles, state.dups, state.result), {signal: unmount.current.signal});
-      setAi({text});
+      if (mine === runSeq.current) setAi({text});
     } catch (e) {
-      if (!unmount.current.signal.aborted) setAi({error: e.message});
+      if (!unmount.current.signal.aborted && mine === runSeq.current) setAi({error: e.message});
     }
   };
 

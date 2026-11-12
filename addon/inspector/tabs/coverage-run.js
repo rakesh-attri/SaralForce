@@ -137,7 +137,7 @@ export function TestRunPanel({testRun}) {
       h("span", {className: "insp-meta"}, `${p.done} of ${p.total} test class${p.total === 1 ? "" : "es"} finished` +
         (running ? ` · ${secs}s` : "") + (p.aborted ? ` · ${p.aborted} aborted` : ""))),
     !p && running && h("div", {className: "insp-meta"}, "Queuing tests…"),
-    run.status === "timeout" && h("div", {className: "insp-warn"}, "The run is still going — results so far are shown; run it again later for the rest."),
+    run.status === "timeout" && h("div", {className: "insp-warn"}, "Stopped waiting, but the run continues in Salesforce — results so far are shown. See the rest in Setup → Apex Test Execution. Running it again here starts a new run."),
     r && h("div", {className: "tr-summary"},
       h("span", {className: "tr-stat ok"}, `✓ ${r.passed} passed`),
       h("span", {className: "tr-stat bad"}, `✗ ${r.failed} failed`),

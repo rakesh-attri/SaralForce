@@ -444,7 +444,7 @@ function ApexTab() {
     } catch (e) { /* ignore */ }
   };
   const errLine = exec ? editorLine(exec.line, exec.lineOffset) : null;
-  const limits = log ? parseLimitUsage(log) : [];
+  const limits = React.useMemo(() => (log ? parseLimitUsage(log) : []), [log]);
 
   const downloadLog = () => {
     if (!log) return;
@@ -454,10 +454,26 @@ function ApexTab() {
   const ok = exec && exec.compiled && exec.success;
   const hasSel = selRange.end > selRange.start && selRange.end <= String(code || "").length;
   const lineCount = Math.max(1, String(code || "").split("\n").length);
-  // Parsed once per render for the Logs + Result tabs (same row markup as
-  // before, probe-visible classes preserved).
-  const logRows = log ? parseApexLog(log) : [];
-  const debugRows = logRows.filter(r => r.event === "USER_DEBUG");
+  // Parsed once per log (not per editor keystroke) for the Logs + Result
+  // tabs (same row markup as before, probe-visible classes preserved).
+  const logRows = React.useMemo(() => (log ? parseApexLog(log) : []), [log]);
+  const debugRows = React.useMemo(() => logRows.filter(r => r.event === "USER_DEBUG"), [logRows]);
+  const logEventCounts = React.useMemo(() => {
+    const counts = new Map();
+    for (const r of logRows) if (r.event) counts.set(r.event, (counts.get(r.event) || 0) + 1);
+    return counts;
+  }, [logRows]);
+  const logEvents = React.useMemo(() => [...logEventCounts.keys()].sort(), [logEventCounts]);
+  const logShown = React.useMemo(() => {
+    const f = logFilter.trim().toLowerCase();
+    return logRows.filter(r =>
+      (!debugOnly || r.event === "USER_DEBUG") &&
+      (!eventFilter || r.event === eventFilter) &&
+      (!f || `${r.ts} ${r.event} ${r.details}`.toLowerCase().includes(f)));
+  }, [logRows, logFilter, debugOnly, eventFilter]);
+  // A SOAP run returns its own exact log and writes no ApexLog row, so there
+  // is nothing newer to fetch: refreshing would swap in an unrelated log.
+  const soapRun = !!(exec && exec.via === "soap");
 
   return h("div", {className: "insp-panel"},
     h("div", {className: "apex-layout"},
@@ -764,21 +780,18 @@ function ApexTab() {
       logLoading
         ? "Fetching debug log…"
         : (log ? `Execution Log (${log.length} chars)` : "Debug log"),
-      !logLoading && h("button", {
+      !logLoading && !soapRun && h("button", {
         className: "field-action-btn",
         style: {marginLeft: "8px"},
         onClick: () => fetchLog()
-      }, log ? "Refresh log" : "Retry")
+      }, log ? "Refresh log" : "Retry"),
+      !logLoading && soapRun && log && " · returned with this run, nothing to refresh"
     ),
     logNote && h("div", {className: "insp-warn"}, logNote),
     log && (() => {
-      const allRows = parseApexLog(log);
-      const events = [...new Set(allRows.map(r => r.event).filter(Boolean))].sort();
-      const f = logFilter.trim().toLowerCase();
-      const shown = allRows.filter(r =>
-        (!debugOnly || r.event === "USER_DEBUG") &&
-        (!eventFilter || r.event === eventFilter) &&
-        (!f || `${r.ts} ${r.event} ${r.details}`.toLowerCase().includes(f)));
+      const allRows = logRows;
+      const events = logEvents;
+      const shown = logShown;
       return h("div", null,
         h("div", {className: "insp-toolbar insp-toolbar-wrap"},
           h("label", {className: "insp-check", title: "Show only USER_DEBUG lines (your System.debug output)"},
@@ -804,7 +817,7 @@ function ApexTab() {
               h("option", {value: ""}, `All events (${events.length})`),
               events.map(ev =>
                 h("option", {key: ev, value: ev},
-                  `${ev} (${allRows.filter(r => r.event === ev).length})`)
+                  `${ev} (${logEventCounts.get(ev)})`)
               )
             )
           ),

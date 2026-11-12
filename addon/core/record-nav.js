@@ -21,11 +21,34 @@ export function parentLinks(fields, values) {
   return out.sort((a, b) => a.label.localeCompare(b.label));
 }
 
+// Standard objects with no Name field: asking for Rel.Name on one of them
+// fails the whole query, so their own display field is read instead.
+const NAMELESS = {Case: "CaseNumber", Contract: "ContractNumber", Task: "Subject", Event: "Subject",
+  Solution: "SolutionName", Idea: "Title", ContentVersion: "Title", ContentDocument: "Title", Note: "Title"};
+
+// Display field to read through a lookup. Polymorphic lookups (Owner, What)
+// go through the Name object, which always has Name.
+export function parentNameField(link) {
+  const t = link && link.targets;
+  return (t && t.length === 1 && NAMELESS[t[0]]) || "Name";
+}
+
 // SOQL that reads the parents' names in one go ("Owner.Name, Account.Name").
 export function parentNameQuery(object, id, links) {
-  const cols = links.filter(l => l.relationshipName).map(l => `${l.relationshipName}.Name`);
+  const cols = links.filter(l => l.relationshipName).map(l => `${l.relationshipName}.${parentNameField(l)}`);
   if (!cols.length) return null;
   return `SELECT Id, ${[...new Set(cols)].join(", ")} FROM ${object} WHERE Id = '${id}'`;
+}
+
+// {lookupField: parentName} from the record parentNameQuery returned.
+export function parentNames(record, links) {
+  const names = {};
+  for (const l of links || []) {
+    const parent = l.relationshipName && record && record[l.relationshipName];
+    const n = parent && parent[parentNameField(l)];
+    if (n != null && n !== "") names[l.field] = String(n);
+  }
+  return names;
 }
 
 // Child relationships worth browsing (system companions left out).

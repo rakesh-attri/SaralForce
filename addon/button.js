@@ -35,6 +35,23 @@
     }
   }
 
+  // After the extension is updated or reloaded, content scripts in tabs that
+  // were already open are orphaned: chrome.runtime.id is gone and sendMessage
+  // throws. cb(response, failed): failed means the extension did not answer.
+  const RELOAD_HINT = "SaralForce was updated or reloaded. Reload this page to keep using it.";
+
+  function sendToExtension(msg, cb) {
+    try {
+      if (!chrome.runtime || !chrome.runtime.id) throw new Error("Extension context invalidated");
+      chrome.runtime.sendMessage(msg, (response) => {
+        const failed = !!chrome.runtime.lastError;
+        if (cb) cb(response, failed);
+      });
+    } catch (e) {
+      if (cb) cb(undefined, true);
+    }
+  }
+
   function init() {
     // One launcher per tab: Salesforce embeds same-site iframes (classic Setup
     // pages, Visualforce) that would each get their own button and sidebar.
@@ -46,7 +63,7 @@
 
     if (!sfHost) return;
 
-    chrome.runtime.sendMessage({message: "getSfHost", url: currentUrl}, (response) => {
+    sendToExtension({message: "getSfHost", url: currentUrl}, (response) => {
       if (response) {
         sfHost = response;
         createButton();
@@ -191,7 +208,7 @@
     if (launcherTip) dismissLauncherTip();
     opening = true;
 
-    chrome.runtime.sendMessage({message: "getSession", sfHost}, (session) => {
+    sendToExtension({message: "getSession", sfHost}, (session, failed) => {
       opening = false;
       // A sidebar that is still sliding shut is removed now, so its timer
       // cannot take the new one with it.
@@ -200,6 +217,10 @@
         closeTimer = null;
         sidebarContainer?.remove();
         sidebarContainer = null;
+      }
+      if (failed) {
+        alert(RELOAD_HINT);
+        return;
       }
       if (!session) {
         alert("No active Salesforce session. Please log in first.");
@@ -278,7 +299,9 @@
       settingsBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        chrome.runtime.sendMessage({message: "openOptions", host: sfHost || ""});
+        sendToExtension({message: "openOptions", host: sfHost || ""}, (res, failed) => {
+          if (failed) alert(RELOAD_HINT);
+        });
       });
       settingsBtn.addEventListener("mouseenter", () => settingsBtn.style.opacity = "1");
       settingsBtn.addEventListener("mouseleave", () => settingsBtn.style.opacity = "0.85");
@@ -483,7 +506,8 @@
         userId: (u && u.user_id) || "",
         orgName: org.Name || "",
         orgId: org.Id || (u && u.organization_id) || "",
-        sandbox: org.IsSandbox === true,
+        // Unknown when the Organization query failed: the panel fills it in.
+        sandbox: typeof org.IsSandbox === "boolean" ? org.IsSandbox : undefined,
         instanceUrl: base
       };
     });
@@ -532,7 +556,8 @@
     } else {
       addRow("", info.username);
       addRow("User ID", info.userId);
-      addRow("", `${info.orgName || "Org"} (${info.sandbox ? "Sandbox" : "Prod"})`, true);
+      const tag = typeof info.sandbox === "boolean" ? ` (${info.sandbox ? "Sandbox" : "Prod"})` : "";
+      addRow("", `${info.orgName || "Org"}${tag}`, true);
       addRow("", info.instanceUrl);
       addRow("Org ID", info.orgId);
     }
@@ -863,10 +888,10 @@
     }
     apiNamesBusy = true;
     apiNamesToast("Loading API names\u2026");
-    chrome.runtime.sendMessage({message: "getSession", sfHost}, (session) => {
-      if (!session || !session.key) {
+    sendToExtension({message: "getSession", sfHost}, (session, failed) => {
+      if (failed || !session || !session.key) {
         apiNamesBusy = false;
-        apiNamesToast("No active Salesforce session — log in first.", true);
+        apiNamesToast(failed ? RELOAD_HINT : "No active Salesforce session — log in first.", true);
         reportApiNamesState();
         return;
       }

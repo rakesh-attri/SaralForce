@@ -94,7 +94,12 @@ export function sessionTotals(list = log) {
     {calls: 0, input: 0, output: 0, total: 0});
 }
 
-const dayKey = (at) => new Date(at).toISOString().slice(0, 10);
+// Local calendar day, so "today" turns over at the user's midnight, not UTC's.
+export function dayKey(at) {
+  const d = new Date(at);
+  const p = v => String(v).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 // Saved totals: {day, today:{calls,total}, all:{calls,total}}; a new day resets "today".
 export function addToTotals(totals, entry) {

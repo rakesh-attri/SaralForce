@@ -30,7 +30,16 @@ export function codeMentions(code, apiName) {
 
 // {usedBy: groups, codeMatches: [{type, name}], dataCount: n|null, activeFlows: [names]}
 // → {level: "safe"|"warn"|"block", title, reasons: []}
-export function impactVerdict({usedBy = [], codeMatches = [], dataCount = null, activeFlows = [], forDelete = true, dataUnknown = false}) {
+// unchecked: plain sentences for searches that failed or hit a row cap; a
+// clean pass is never reported while any of them is open.
+export function impactVerdict({usedBy = [], codeMatches = [], dataCount = null, activeFlows = [], forDelete = true, dataUnknown = false, unchecked = []}) {
+  const v = verdictFromFindings({usedBy, codeMatches, dataCount, activeFlows, forDelete, dataUnknown});
+  if (!unchecked.length) return v;
+  if (v.level === "safe") return {level: "warn", title: "Partial result: could not check everything", reasons: [...unchecked, "Nothing was found in what could be checked, but that is not a clean pass."]};
+  return {...v, reasons: [...v.reasons, ...unchecked.map(u => "Partial result: " + u)]};
+}
+
+function verdictFromFindings({usedBy, codeMatches, dataCount, activeFlows, forDelete, dataUnknown}) {
   const refs = usedBy.reduce((n, g) => n + g.items.length, 0);
   const reasons = [];
   if (refs) reasons.push(`${refs} component(s) use it: ${usedBy.map(g => `${g.items.length} ${g.label.toLowerCase()}`).join(", ")}.`);

@@ -98,18 +98,35 @@ export function getSetting(key, fallback) {
   return fallback;
 }
 
+// Applies at once in memory. Resolves true once saved, false when the write
+// failed (quota, extension reloaded): the value then lasts this session only.
 export function setSetting(key, value) {
   cache.set(key, value);
+  const failed = (err) => {
+    console.warn(`[SaralForce] Could not save setting "${key}":`, (err && err.message) || err);
+    return false;
+  };
   if (hasChromeStorage()) {
-    chrome.storage.local.set({[key]: value});
-    return;
+    return new Promise(resolve => {
+      try {
+        chrome.storage.local.set({[key]: value}, () => {
+          const err = chrome.runtime && chrome.runtime.lastError;
+          resolve(err ? failed(err) : true);
+        });
+      } catch (e) {
+        resolve(failed(e));
+      }
+    });
   }
   const ls = legacyStore();
   if (ls) {
     try {
       ls.setItem(key, typeof value === "string" ? value : JSON.stringify(value));
-    } catch (e) { /* quota: the in-memory value still applies this session */ }
+    } catch (e) {
+      return Promise.resolve(failed(e));
+    }
   }
+  return Promise.resolve(true);
 }
 
 // Test hook: forget cached state so initSettings() runs again.

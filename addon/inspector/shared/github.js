@@ -41,13 +41,36 @@ async function gh(cfg, path, {method = "GET", body} = {}) {
   try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
   if (!res.ok) {
     const msg = (data && data.message) || ("HTTP " + res.status);
-    const err = new Error(res.status === 401 ? "GitHub rejected the token (expired or wrong)." :
+    const limited = rateLimitMessage(res.status, name => res.headers && res.headers.get(name));
+    const err = new Error(limited ? limited : res.status === 401 ? "GitHub rejected the token (expired or wrong)." :
       res.status === 404 ? `Not found on GitHub: check the repository name and that the token can see it (${msg}).` : "GitHub: " + msg);
     err.status = res.status;
     throw err;
   }
   return data;
 }
+
+// GitHub's rate limits answer 403 or 429 with x-ratelimit-remaining: 0 (the
+// hourly quota) or a retry-after header (too many requests at once).
+// header: name → value. Returns the message to show, or "" for other errors.
+export function rateLimitMessage(status, header, now = Date.now()) {
+  if (status !== 403 && status !== 429) return "";
+  const retryAfter = Number(header("retry-after"));
+  const reset = Number(header("x-ratelimit-reset"));
+  const out = header("x-ratelimit-remaining") === "0";
+  if (!out && !(retryAfter > 0)) return "";
+  let when = "";
+  if (retryAfter > 0) when = `Try again in ${retryAfter < 90 ? Math.ceil(retryAfter) + " second(s)" : Math.ceil(retryAfter / 60) + " minute(s)"}.`;
+  else if (reset > 0) {
+    const mins = Math.max(1, Math.ceil((reset * 1000 - now) / 60000));
+    when = `The limit resets at ${new Date(reset * 1000).toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"})} (in about ${mins} minute(s)).`;
+  }
+  return ("GitHub rate limit reached: too many requests for this token. " + (when || "Try again in a few minutes.")).trim();
+}
+
+// A recursive tree listing GitHub cut short (very large repositories).
+const TRUNCATED_WRITE = "This repository is too large for GitHub to list in one request, so SaralForce cannot safely work out what to merge or delete. " +
+  "Nothing was committed. Commit with Git instead, or use a smaller repository.";
 
 // Checks the token and repo; returns {fullName, defaultBranch, canPush, private}.
 export async function testGithub(cfg) {
@@ -56,8 +79,14 @@ export async function testGithub(cfg) {
 }
 
 export async function listBranches(cfg) {
-  const list = await gh(cfg, `/repos/${cfg.repo}/branches?per_page=100`);
-  return (list || []).map(b => b.name);
+  // 100 a page; stop at the first short page (at most 2,000 branches).
+  const names = [];
+  for (let page = 1; page <= 20; page++) {
+    const list = (await gh(cfg, `/repos/${cfg.repo}/branches?per_page=100&page=${page}`)) || [];
+    names.push(...list.map(b => b.name));
+    if (list.length < 100) break;
+  }
+  return names;
 }
 
 async function branchSha(cfg, branch, {create = false, from = ""} = {}) {
@@ -97,6 +126,8 @@ export async function commitFiles(cfg, files, message, {branch, from, onStatus =
   let existing = null;
   if ((labelsPath && mergeLabels) || deletePaths.length) {
     const full = await gh(cfg, `/repos/${cfg.repo}/git/trees/${commit.tree.sha}?recursive=1`);
+    // An incomplete listing would skip the label merge and the deletes silently.
+    if (full.truncated) throw new Error(TRUNCATED_WRITE);
     existing = new Map((full.tree || []).filter(e => e.type === "blob").map(e => [e.path, e.sha]));
   }
   if (labelsPath && mergeLabels && existing && existing.has(labelsPath)) {
@@ -118,11 +149,20 @@ export async function commitFiles(cfg, files, message, {branch, from, onStatus =
   const newTree = await gh(cfg, `/repos/${cfg.repo}/git/trees`, {method: "POST", body: {base_tree: commit.tree.sha, tree}});
   if (newTree.sha === commit.tree.sha) return {sha: head, url: `https://github.com/${cfg.repo}/commit/${head}`, files: list.length, unchanged: true};
   const created = await gh(cfg, `/repos/${cfg.repo}/git/commits`, {method: "POST", body: {message, tree: newTree.sha, parents: [head]}});
-  await gh(cfg, `/repos/${cfg.repo}/git/refs/heads/${refPath(br)}`, {method: "PATCH", body: {sha: created.sha}});
+  try {
+    await gh(cfg, `/repos/${cfg.repo}/git/refs/heads/${refPath(br)}`, {method: "PATCH", body: {sha: created.sha}});
+  } catch (e) {
+    // Someone pushed to the branch between reading it and moving it.
+    if (e.status !== 422 || !/fast[- ]forward/i.test(e.message || "")) throw e;
+    const err = new Error(`${br} changed on GitHub while SaralForce was committing (someone else pushed). Nothing was overwritten: try again.`);
+    err.status = 422;
+    throw err;
+  }
   return {sha: created.sha, url: created.html_url || `https://github.com/${cfg.repo}/commit/${created.sha}`, files: list.length};
 }
 
-// Files under cfg.base on a branch: Map(relativePath → Uint8Array).
+// Files under cfg.base on a branch: {files: Map(relativePath → Uint8Array),
+// sha, truncated}. truncated: GitHub cut the listing short, files are missing.
 export async function readBranch(cfg, {branch, onStatus = () => {}, maxFiles = 4000} = {}) {
   const br = branch || cfg.branch;
   onStatus(`Reading ${cfg.repo}@${br}…`);
@@ -161,11 +201,15 @@ export async function openPullRequest(cfg, files, {branch, title, body, onStatus
 }
 
 // Paths under cfg.base on a branch (no file contents): Set of relative paths.
+// The set has truncated = true when GitHub cut the listing short (very large
+// repositories): it is then incomplete and must not decide what to delete.
 export async function listPaths(cfg, {branch} = {}) {
   const head = await branchSha(cfg, branch || cfg.branch);
   const commit = await gh(cfg, `/repos/${cfg.repo}/git/commits/${head}`);
   const tree = await gh(cfg, `/repos/${cfg.repo}/git/trees/${commit.tree.sha}?recursive=1`);
   const base = String(cfg.base || "").replace(/^\/+|\/+$/g, "");
   const prefix = base ? base + "/" : "";
-  return new Set((tree.tree || []).filter(e => e.type === "blob" && e.path.startsWith(prefix)).map(e => e.path.slice(prefix.length)));
+  const paths = new Set((tree.tree || []).filter(e => e.type === "blob" && e.path.startsWith(prefix)).map(e => e.path.slice(prefix.length)));
+  paths.truncated = !!tree.truncated;
+  return paths;
 }

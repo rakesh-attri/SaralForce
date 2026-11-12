@@ -78,3 +78,25 @@ test("DX static resources and folders map back to the Metadata API", async () =>
   assert.deepEqual(sourcePathType("classes/A.cls"), {type: "ApexClass", fullName: "A"});
   assert.deepEqual(sourcePathType("layouts/Inv__c-Main.layout-meta.xml"), {type: "Layout", fullName: "Inv__c-Main"});
 });
+
+test("Jest tests and editor config are left out of bundles from Git", async () => {
+  const {isLocalOnlyFile} = await import("../../addon/core/source-format.js");
+  const files = new Map([
+    ["lwc/card/card.js", textToBytes("export default class {}")],
+    ["lwc/card/card.js-meta.xml", textToBytes("<LightningComponentBundle/>")],
+    ["lwc/card/__tests__/card.test.js", textToBytes("test()")],
+    ["lwc/card/__tests__/data/mock.json", textToBytes("{}")],
+    ["lwc/jsconfig.json", textToBytes("{}")],
+    ["lwc/.eslintrc.json", textToBytes("{}")],
+    ["aura/.eslintrc.json", textToBytes("{}")],
+    ["staticresources/lib/__tests__/a.js", textToBytes("var a;")],
+    ["staticresources/lib.resource-meta.xml", textToBytes("<StaticResource/>")]
+  ]);
+  const md = sourceToMdapi(files, bytesToText);
+  assert.deepEqual([...md.keys()].filter(p => p.startsWith("lwc/") || p.startsWith("aura/")).sort(), ["lwc/card/card.js", "lwc/card/card.js-meta.xml"]);
+  const comps = componentsFromSource(files, bytesToText);
+  assert.deepEqual([...comps.keys()].filter(k => k.startsWith("LightningComponentBundle")), ["LightningComponentBundle:card"]);
+  // A static resource may hold any file.
+  assert.ok(!isLocalOnlyFile("staticresources/lib/__tests__/a.js"));
+  assert.ok(md.has("staticresources/lib.resource"));
+});

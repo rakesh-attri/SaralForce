@@ -1,7 +1,25 @@
 // Service worker: session pickup derived in part from Salesforce-Inspector-reloaded
 // (https://github.com/tprouvot/Salesforce-Inspector-reloaded)
 // MIT License, Copyright (c) 2023 Thomas Prouvot. See LICENSE.
-let inspectorTabId = null;
+
+// Id of the reusable Inspector tab. The worker sleeps between events, so it is
+// kept in storage (session where available) rather than in a variable.
+const INSPECTOR_TAB_KEY = "sfoc_inspector_tab_id";
+const tabStore = chrome.storage.session || chrome.storage.local;
+
+function getInspectorTabId(cb) {
+  tabStore.get(INSPECTOR_TAB_KEY, items => {
+    void chrome.runtime.lastError;
+    const id = items && items[INSPECTOR_TAB_KEY];
+    cb(typeof id === "number" ? id : null);
+  });
+}
+
+function setInspectorTabId(id) {
+  const done = () => void chrome.runtime.lastError;
+  if (id == null) tabStore.remove(INSPECTOR_TAB_KEY, done);
+  else tabStore.set({[INSPECTOR_TAB_KEY]: id}, done);
+}
 
 const SESSION_COOKIE_DOMAINS = ["salesforce.com", "cloudforce.com", "salesforce.mil", "cloudforce.mil", "sfcrmproducts.cn", "force.com"];
 
@@ -140,30 +158,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const props = {url, active: true};
       if (openerTabId != null) props.openerTabId = openerTabId;
       chrome.tabs.create(props, (tab) => {
-        if (tab && tab.id != null) inspectorTabId = tab.id;
+        if (tab && tab.id != null) setInspectorTabId(tab.id);
         sendResponse({ok: true});
       });
     };
-    if (inspectorTabId != null && !recSuffix) {
-      chrome.tabs.get(inspectorTabId, () => {
-        if (!chrome.runtime.lastError) {
-          chrome.tabs.update(inspectorTabId, {active: true});
+    if (recSuffix) {
+      // A record context always opens fresh so the previous tab keeps its
+      // work; the new tab becomes the reused one from here on.
+      openFresh();
+      return true;
+    }
+    getInspectorTabId(tabId => {
+      if (tabId == null) {
+        openFresh();
+        return;
+      }
+      chrome.tabs.get(tabId, tab => {
+        // A stored id can outlive its tab: it must still be one of our pages.
+        const ours = !chrome.runtime.lastError && tab &&
+          (!tab.url || tab.url.startsWith(chrome.runtime.getURL("")));
+        if (ours) {
+          chrome.tabs.update(tabId, {active: true});
           sendResponse({ok: true, reused: true});
         } else {
-          inspectorTabId = null;
           openFresh();
         }
       });
-    } else {
-      // A record context always opens fresh so the previous tab keeps its
-      // work; the new tab becomes the reused one from here on.
-      inspectorTabId = null;
-      openFresh();
-    }
+    });
     return true;
   } else if (request.message == "reloadPage") {
     chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-      chrome.tabs.reload(tabs[0].id);
+      const tab = tabs && tabs[0];
+      if (tab && tab.id != null) chrome.tabs.reload(tab.id);
     });
   }
   return false;

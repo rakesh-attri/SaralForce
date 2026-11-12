@@ -1,11 +1,12 @@
 import {sf, sfConn} from "../../inspector.js";
 import {safeCopyText} from "../../utils.js";
 import {countCsvRecords} from "../../core/bulk.js";
+import {decodeCsvBytes} from "../../core/csv.js";
 import {confirmDialog} from "../../ui/confirm.js";
 import {downloadText, parseCsvEx, toCsvEx} from "../shared/csv.js";
 import {ffBulkIngestCreate, ffBulkIngestUpload, ffBulkIngestClose, ffBulkIngestStatus, ffBulkIngestResults, ffBulkJobCancel, ffBulkPoll} from "../shared/bulk-api.js";
 import {ffIsStopped, useUnmountSignal} from "../shared/hooks.js";
-import {ffSuggestFieldMap, ffValidateImport, ffCollectionsChunkSize, ffBuildCollectionsChunk, ffMapSaveResults, ffFailChunk, ffDataResultFiles} from "../shared/import-map.js";
+import {ffSuggestFieldMap, ffValidateImport, ffNormalizeImportValue, ffBuildBulkCsv,ffCollectionsChunkSize, ffBuildCollectionsChunk, ffMapSaveResults, ffFailChunk, ffDataResultFiles} from "../shared/import-map.js";
 import {useSfTimeZoneTick, fmtDateTime, fmtNum} from "../shared/format.js";
 import {ffIcon, FF_I_CLOCK, FF_I_BOOKMARK, FF_I_DOC, FF_I_ZAP} from "../shared/icons.js";
 import {ffLoadJson, ffSaveJson, useFfSession} from "../shared/session-state.js";
@@ -43,7 +44,7 @@ function ImportTab() {
   const [allowPartial, setAllowPartial] = useFfSession("import", "allowPartial", true);
 
   // ── Data (center) ───────────────────────────────────────────
-  const [, setCsvText] = useFfSession("import", "csvText", "");
+  const [csvText, setCsvText] =useFfSession("import", "csvText", "");
   const [fileName, setFileName] = useFfSession("import", "fileName", "");
   const [fileSize, setFileSize] = useFfSession("import", "fileSize", 0);
   const [headers, setHeaders] = useFfSession("import", "headers", []);
@@ -107,10 +108,15 @@ function ImportTab() {
     } catch (e) { /* ignore */ }
   };
 
-  // Auto-describe when an object is set (field dropdowns need it).
+  // Auto-describe when an object is set (field dropdowns need it). Only the
+  // latest request may touch meta/error: a slower answer for an earlier name
+  // (typing "CaseComment" passes through "Case") is returned but not applied.
+  const describeSeq = React.useRef(0);
   const describeObject = React.useCallback(async (obj) => {
     const key = String(obj || "").trim();
     if (!key) return null;
+    const seq = ++describeSeq.current;
+    const latest = () => seq === describeSeq.current;
     try {
       const d = await ffDescribeObject(key);
       const fieldList = (d.fields || []).map(f => ({
@@ -125,24 +131,35 @@ function ImportTab() {
         picklistValues: f.picklistValues || []
       }));
       const m = {name: d.name, label: d.label, fields: fieldList};
-      setMeta(m);
-      rememberObject(key);
+      if (latest()) {
+        setMeta(m);
+        rememberObject(key);
+      }
       return m;
     } catch (e) {
-      setError(`Describe failed for ${key}: ${e.message}`);
-      setMeta(null);
+      if (latest()) {
+        setError(`Describe failed for ${key}: ${e.message}`);
+        setMeta(null);
+      }
       return null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Debounced, so typing a name does not describe (and fail on) every prefix.
   React.useEffect(() => {
-    if (objectApi.trim()) describeObject(objectApi);
+    if (!objectApi.trim()) return undefined;
+    const timer = setTimeout(() => describeObject(objectApi), 400);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectApi]);
 
   // ── CSV ingest (file + paste share one loader) ──────────────
-  const loadCsvText = (text, name, size) => {
+  // extra.reparse: same text parsed again after a CSV setting changed (keeps
+  // the mappings of columns that still exist). extra.encoding: how a file was
+  // decoded, reported when it was not UTF-8.
+  const loadCsvText = (text, name, size, extra) => {
+    const {reparse = false, encoding = ""} = extra || {};
     setError(null);
     setNote(null);
     setResult(null);
@@ -182,16 +199,30 @@ function ImportTab() {
     }
     for (const col of hd) {
       const hit = byName[String(col).trim().toLowerCase()];
-      if (hit) autoMap[col] = hit;
+      if (reparse && fieldMap[col]) autoMap[col] = fieldMap[col];
+      else if (hit) autoMap[col] = hit;
     }
     setFieldMap(autoMap);
     // Guess object from filename: Account.csv → Account (if nothing set).
-    if (name) {
+    if (name && !reparse) {
       const base = name.replace(/\.[^.]+$/, "");
       if (/^[A-Za-z][A-Za-z0-9_]*$/.test(base)) setObjectApi(prev => prev || base);
     }
-    setNote(`Parsed ${fmtNum(recs.length)} row(s) · ${hd.length} column(s)`);
+    setNote(`Parsed ${fmtNum(recs.length)} row(s) · ${hd.length} column(s)` +
+      (encoding && encoding !== "UTF-8"
+        ? ` · the file is not UTF-8 and was read as ${encoding}; check accented characters in the preview`
+        : ""));
   };
+
+  // Changing the delimiter or the header option re-parses the loaded CSV.
+  const csvOptsRef = React.useRef({csvDelimiter, useFirstRowHeaders});
+  React.useEffect(() => {
+    const prev = csvOptsRef.current;
+    csvOptsRef.current = {csvDelimiter, useFirstRowHeaders};
+    if (prev.csvDelimiter === csvDelimiter && prev.useFirstRowHeaders === useFirstRowHeaders) return;
+    if (csvText && !runRef.current) loadCsvText(csvText, fileName, fileSize, {reparse: true});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [csvDelimiter, useFirstRowHeaders]);
 
   const onFile = async (file) => {
     if (!file) return;
@@ -199,8 +230,10 @@ function ImportTab() {
       setError("File larger than 50 MB — split it or use Bulk API 2.0 with a smaller file.");
       return;
     }
-    const text = await file.text();
-    loadCsvText(text, file.name, file.size);
+    // Excel's plain CSV is Windows-1252, not UTF-8: decodeCsvBytes falls back
+    // to it instead of silently importing replacement characters.
+    const {text, encoding} = decodeCsvBytes(await file.arrayBuffer());
+    loadCsvText(text, file.name, file.size, {encoding});
   };
 
   const onDrop = (e) => {
@@ -360,6 +393,9 @@ function ImportTab() {
           hasValue = true;
           continue;
         }
+        // Send what Validate Data accepts in the form Salesforce accepts
+        // (yes → true, 1,234.56 → 1234.56, "2026-01-31 10:00" → ISO).
+        v = ffNormalizeImportValue(v, fieldByName[fa].type);
         if (fa === "Id") idVal = v;
         if (fa === externalId) extVal = v;
         body[fa] = v;
@@ -383,7 +419,9 @@ function ImportTab() {
 
   // ── Data API execution (batched, per-record results) ────────
   // sObject Collections: one call per chunk of up to 200 records
-  // (allOrNone=false), each SaveResult mapped back to its source row. Chunks
+  // (allOrNone = !allowPartial, so with partial success off a call with any
+  // failure is rolled back as a whole and the run stops there; calls already
+  // completed stay saved), each SaveResult mapped back to its source row. Chunks
   // run sequentially; Stop (or closing the view) takes effect between chunks,
   // so an in-flight call always completes and its results are reported.
   // No automatic retry (non-idempotent writes).
@@ -404,7 +442,7 @@ function ImportTab() {
         try {
           const results = await sf.collections(
             operation, send.map(s => s.record),
-            {sobject: obj, externalIdField: externalId, allOrNone: false});
+            {sobject: obj, externalIdField: externalId, allOrNone: !allowPartial});
           const mapped = ffMapSaveResults(send, results, operation);
           successes.push(...mapped.successes);
           failures.push(...mapped.failures);
@@ -428,28 +466,25 @@ function ImportTab() {
   };
 
   // ── Bulk 2.0 ingest execution ───────────────────────────────
-  // Serialize mapped rows as Bulk 2.0 ingest CSV: one header line of target
-  // field API names, RFC-4180 quoting, chosen line ending.
+  // Serialize mapped rows as Bulk 2.0 ingest CSV (see ffBuildBulkCsv): Id only
+  // for deletes, #N/A for explicitly blanked cells, chosen line ending.
   const buildBulkCsv = (rows) => {
     const targets = [...new Set(Object.values(fieldMap).filter(fa => fa && fieldByName[fa]))];
-    const esc = (v) => {
-      if (v == null) return "";
-      const s = String(v);
-      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const eol = csvLineEnding === "\n" ? "\n" : "\r\n";
-    const lines = [targets.map(esc).join(",")];
-    for (const row of rows) {
-      lines.push(targets.map(t => esc(row.body[t])).join(","));
-    }
-    return lines.join(eol);
+    return ffBuildBulkCsv(rows, targets, {operation, lineEnding: csvLineEnding});
   };
 
-  const runBulkImport = async (rows) => {
+  const runBulkImport = async (allRows) => {
     setBulkBusy(true);
     setBulkError(null);
     setResultFiles(null);
     try {
+      // A delete row without an Id has nothing to send.
+      const rows = operation === "delete" || operation === "hardDelete"
+        ? allRows.filter(r => r.idVal) : allRows;
+      if (!rows.length) { setError("No row has an Id — map the Id column first."); return null; }
+      if (rows.length < allRows.length) {
+        setNote(`${fmtNum(allRows.length - rows.length)} row(s) without an Id were skipped.`);
+      }
       const csv = buildBulkCsv(rows);
       const job = await ffBulkIngestCreate({
         operation, object: objectApi.trim(),
@@ -600,7 +635,8 @@ function ImportTab() {
           setNote(`Stopped by user: ${fmtNum(r.notSent)} row(s) were not sent. ` +
             "Rows already sent stay changed.");
         } else if (r.failures.length && !allowPartial) {
-          setNote("Stopped early: Allow partial success is disabled.");
+          setNote("Stopped early: Allow partial success is off, so the call that had a failure " +
+            "was rolled back and nothing after it was sent. Calls completed before it stay saved.");
         }
       }
     } catch (e) {
@@ -847,10 +883,17 @@ function ImportTab() {
             h("input", {type: "checkbox", checked: autoTrim,
               onChange: e => setAutoTrim(e.target.checked)}),
             h("span", null, "Auto-trim spaces")),
-          h("label", {className: "sq3-check"},
+          h("label", {className: "sq3-check",
+            title: "Data API only. Off: each call (up to 200 rows) is all-or-nothing and the import " +
+              "stops at the first call with a failure. Calls already completed are not rolled back."},
             h("input", {type: "checkbox", checked: allowPartial,
               onChange: e => setAllowPartial(e.target.checked)}),
-            h("span", null, "Allow partial success"))
+            h("span", null, "Allow partial success")),
+          !allowPartial && h("span", {className: "insp-meta"},
+            apiMode === "bulk"
+              ? "Not used by Bulk API 2.0: a Bulk job always saves the rows that succeed."
+              : "All-or-nothing per call (up to 200 rows), not for the whole file: " +
+                "calls completed before a failure stay saved.")
         )
       ),
 

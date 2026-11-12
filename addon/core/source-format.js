@@ -97,6 +97,16 @@ export function toSourceFiles(comps, base = "force-app/main/default") {
   return out;
 }
 
+// Files that live in a component folder in Git but are not part of the
+// bundle (Jest tests and mocks, editor and lint config): Salesforce rejects
+// them. The same files the default .forceignore of an SFDX project excludes.
+export function isLocalOnlyFile(path) {
+  const parts = String(path).split("/");
+  if (parts[0] !== "lwc" && parts[0] !== "aura") return false;
+  const file = parts[parts.length - 1];
+  return parts.includes("__tests__") || parts.includes("__mocks__") || file === "jsconfig.json" || file === ".eslintrc.json";
+}
+
 // Folders of known types (grows when the org's types are loaded).
 const isTypeDir = dir => METADATA_TYPES.some(t => t.dir === dir);
 
@@ -112,6 +122,7 @@ export function sourceToMdapi(files, decode) {
   for (const [path, bytes] of files) {
     const parts = path.split("/");
     if (!isTypeDir(parts[0])) continue;
+    if (isLocalOnlyFile(path)) continue;
     if (parts[0] === "objects" && parts.length >= 3) {
       const name = parts[1];
       if (parts.length === 3 && parts[2] === `${name}.object-meta.xml`) { obj(name).parent = decode(bytes); continue; }

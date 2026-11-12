@@ -2,7 +2,7 @@
 // Tooling, Composite/Collections, Bulk 2.0, raw SOAP envelopes). Adds what
 // the old per-call XHR code lacked: AbortSignal cancellation, timeouts,
 // retries for idempotent reads, Retry-After, and a single place that turns
-// 401/403 into session errors. Pure apart from the injected fetch, so it is
+// 401/403 into session errors (err.code carries the Salesforce errorCode). Pure apart from the injected fetch, so it is
 // unit-tested with a fake.
 
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
@@ -67,15 +67,16 @@ function retryAfterMs(headers, attempt) {
   return Math.min(500 * 2 ** attempt, 8000) + Math.floor(Math.random() * 250);
 }
 
+// Resolves {data, notJson}: notJson marks a body that should have been JSON.
 async function readBody(response, responseType) {
-  if (response.status === 204) return null;
+  if (response.status === 204) return {data: null};
   const text = await response.text();
-  if (responseType === "text") return text;
-  if (!text) return null;
+  if (responseType === "text") return {data: text};
+  if (!text) return {data: null};
   try {
-    return JSON.parse(text);
+    return {data: JSON.parse(text)};
   } catch (e) {
-    return text; // e.g. an HTML error page from a proxy
+    return {data: text, notJson: true}; // e.g. an HTML error page from a proxy
   }
 }
 
@@ -93,6 +94,14 @@ export function formatSalesforceErrors(detail) {
 function firstMessage(detail) {
   return Array.isArray(detail) && detail.length > 0 && detail[0] ? detail[0].message : null;
 }
+
+function firstCode(detail) {
+  return (Array.isArray(detail) && detail.length > 0 && detail[0] && detail[0].errorCode) || undefined;
+}
+
+// 403s that concern the session or API access itself. Any other errorCode
+// (REQUEST_LIMIT_EXCEEDED, INSUFFICIENT_ACCESS...) is about one request.
+const AUTH_FORBIDDEN = new Set(["INVALID_SESSION_ID", "API_DISABLED_FOR_ORG", "API_CURRENTLY_DISABLED"]);
 
 // renewSession (optional, async → true when a new session is in place): on a
 // 401 the request is retried once with the renewed session.
@@ -132,8 +141,11 @@ export function createSfClient({getHost, getSessionId, getApiVersion, fetchImpl,
       headers.Authorization = "Bearer " + usedSid;
       const linked = linkSignals(opts.signal, opts.timeoutMs);
       let response;
+      let read = null;
       try {
         response = await doFetch(fullUrl, {method, headers, body, signal: linked.signal});
+        // Cancel and timeout stay armed while the body downloads.
+        if (!(RETRYABLE_STATUS.has(response.status) && attempt < maxRetries)) read = await readBody(response, responseType);
       } catch (fetchErr) {
         linked.cleanup();
         if (opts.signal && opts.signal.aborted) throw abortError(opts.signal);
@@ -149,14 +161,22 @@ export function createSfClient({getHost, getSessionId, getApiVersion, fetchImpl,
       }
       linked.cleanup();
 
-      if (RETRYABLE_STATUS.has(response.status) && attempt < maxRetries) {
+      if (!read) {
         await delay(retryAfterMs(response.headers, attempt), opts.signal);
         continue;
       }
 
-      const data = await readBody(response, responseType);
+      const data = read.data;
       const status = response.status;
       if (status >= 200 && status < 400) {
+        // A web page where JSON was expected: a proxy or login page answered.
+        if (read.notJson && /^\s*</.test(data)) {
+          const err = new Error(`Salesforce returned a web page instead of data (HTTP ${status}). A proxy, firewall or login page may be answering for it.`);
+          err.name = "SalesforceRestError";
+          err.status = status;
+          err.detail = data;
+          throw err;
+        }
         return opts.returnResponse ? {status, headers: response.headers, body: data} : data;
       }
       if (status === 401) {
@@ -168,6 +188,7 @@ export function createSfClient({getHost, getSessionId, getApiVersion, fetchImpl,
         const err = new Error(firstMessage(data) || "New access token needed");
         err.name = "Unauthorized";
         err.status = status;
+        err.code = firstCode(data);
         err.detail = data;
         if (!opts.suppressSessionError && onAuthError) onAuthError("unauthorized", err.message);
         throw err;
@@ -176,13 +197,15 @@ export function createSfClient({getHost, getSessionId, getApiVersion, fetchImpl,
         const err = new Error(firstMessage(data) || "Error");
         err.name = "Forbidden";
         err.status = status;
+        err.code = firstCode(data);
         err.detail = data;
-        if (!opts.suppressSessionError && onAuthError) onAuthError("forbidden", err.message);
+        if (!opts.suppressSessionError && onAuthError && (!err.code || AUTH_FORBIDDEN.has(err.code))) onAuthError("forbidden", err.message);
         throw err;
       }
       const err = new Error(formatSalesforceErrors(data) || `HTTP ${status}`);
       err.name = "SalesforceRestError";
       err.status = status;
+      err.code = firstCode(data);
       err.detail = data;
       throw err;
     }

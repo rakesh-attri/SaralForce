@@ -83,3 +83,38 @@ export function applyDefaultLimit(query, n) {
   const at = (from === -1 ? 0 : from) + m.index;
   return `${q.slice(0, at).trimEnd()} LIMIT ${limit} ${q.slice(at)}`;
 }
+
+// API name of the object in the outer FROM clause, or "" when there is none.
+// FROM inside a sub-query, a function call or a string literal is ignored, so
+// `SELECT Id, (SELECT Id FROM Contacts) FROM Account` gives "Account".
+export function soqlFromObject(query) {
+  const top = maskNested(maskStrings(String(query || "")));
+  const m = /\bFROM\s+([A-Za-z0-9_]+)/i.exec(top);
+  return m ? m[1] : "";
+}
+
+const FORMAT_MAJORS = ["select", "from", "where", "group by", "order by", "having", "limit", "offset"];
+const FORMAT_MINORS = ["and", "or", "not", "in", "like", "asc", "desc", "nulls first", "nulls last"];
+// A complete string literal, including backslash escapes such as \'.
+const STRING_LITERAL_RE = /('(?:[^'\\]|\\[\s\S])*')/g;
+
+// Lightweight formatter: upper-cases keywords and starts each major clause on
+// its own line. String literals are left untouched, so the query semantics
+// never change.
+export function formatSoql(query) {
+  const src = String(query || "");
+  if (!src.trim()) return src;
+  const kwRe = kw => new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi");
+  const out = src.split(STRING_LITERAL_RE).map((seg, i) => {
+    if (i % 2 === 1) return seg;
+    let s = seg.replace(/\s+/g, " ");
+    for (const kw of [...FORMAT_MAJORS, ...FORMAT_MINORS].sort((a, b) => b.length - a.length)) {
+      s = s.replace(kwRe(kw), kw.toUpperCase());
+    }
+    for (const kw of FORMAT_MAJORS.slice(1)) {
+      s = s.replace(kwRe(kw), `\n${kw.toUpperCase()}`);
+    }
+    return s;
+  }).join("");
+  return out.trim();
+}

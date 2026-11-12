@@ -1,6 +1,9 @@
 // ── Minimal XLSX writer (no dependencies) ─────────────────────────────────
 // Stored-method ZIP + CRC32 + SpreadsheetML with inline strings. Produces a
 // genuine .xlsx workbook that Excel, LibreOffice and Google Sheets open.
+// JS numbers become numeric cells; everything else (including numeric-looking
+// strings such as IDs and phone numbers) stays text.
+const FF_XLSX_MAX_ROWS = 1048576; // Excel's sheet limit, header row included
 const FF_CRC_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {
@@ -83,6 +86,10 @@ function ffXmlEscape(s) {
 }
 
 function toXlsxBlob(sheetName, columns, rows) {
+  if (rows.length + 1 > FF_XLSX_MAX_ROWS) {
+    throw new Error(`${rows.length.toLocaleString("en-US")} rows do not fit in one Excel sheet ` +
+      `(limit ${(FF_XLSX_MAX_ROWS - 1).toLocaleString("en-US")} rows plus the header). Export as CSV instead.`);
+  }
   const enc = new TextEncoder();
   const colRef = (i) => {
     let s = "";
@@ -101,6 +108,7 @@ function toXlsxBlob(sheetName, columns, rows) {
   rows.forEach((row, ri) => {
     parts.push(`<row r="${ri + 2}">${columns.map((c, i) => {
       const v = row[c];
+      if (typeof v === "number" && Number.isFinite(v)) return `<c r="${colRef(i)}${ri + 2}"><v>${v}</v></c>`;
       return cell(ri + 2, i, v == null ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v)));
     }).join("")}</row>`);
   });
