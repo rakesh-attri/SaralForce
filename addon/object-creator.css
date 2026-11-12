@@ -12592,8 +12592,19 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
 
 .rel-paste summary {
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #181818;
+  padding: 4px 0;
+}
+
+.rel-paste summary:hover {
   color: #0176d3;
+}
+
+html.dark .rel-paste summary,
+html[data-theme="dark"] .rel-paste summary {
+  color: #e8ebf2;
 }
 
 .rel-textarea {
@@ -13356,4 +13367,262 @@ html[data-theme="dark"] .plan-row-inorg.changed td {
   font-size: 12px;
   color: #5c6b82;
   margin: 4px 0 12px;
+}
+
+/* Deploy errors grouped by root cause. */
+.rel-errs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.rel-err-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.rel-err {
+  border: 1px solid #e3e8f0;
+  border-left: 4px solid #8a94a6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rel-err-missing { border-left-color: #c23934; }
+.rel-err-reference { border-left-color: #dd7a01; }
+.rel-err-compile { border-left-color: #a96404; }
+.rel-err-feature,
+.rel-err-change { border-left-color: #0176d3; }
+.rel-err-access,
+.rel-err-conflict,
+.rel-err-package { border-left-color: #7f56d9; }
+
+.rel-err-nested {
+  margin-top: 6px;
+}
+
+.rel-err-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.rel-err-caret {
+  color: #8a94a6;
+  width: 10px;
+}
+
+.rel-err-cat {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5c6b82;
+  background: #eef2f8;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.rel-err-title {
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rel-err-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: #c23934;
+  white-space: nowrap;
+}
+
+.rel-err-body {
+  padding: 0 12px 10px 30px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.rel-err-line {
+  margin: 3px 0;
+  overflow-wrap: anywhere;
+}
+
+.rel-err-said {
+  color: #5c6b82;
+}
+
+.rel-err-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.rel-err-kids {
+  margin-top: 8px;
+}
+
+.rel-err-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* AI answers: light markdown instead of raw ** and backticks. */
+.rel-ai-body.rel-ai-rich {
+  white-space: normal;
+}
+
+.rel-rich {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #1e2a3d;
+}
+
+.rel-rich-gap {
+  height: 6px;
+}
+
+.rel-rich-h {
+  font-weight: 700;
+  margin: 6px 0 2px;
+}
+
+.rel-rich-li {
+  display: flex;
+  gap: 6px;
+  margin: 2px 0;
+}
+
+.rel-rich-in {
+  margin-left: 18px;
+}
+
+.rel-rich-dot,
+.rel-rich-num {
+  flex: none;
+  min-width: 14px;
+  color: #5b21b6;
+  font-weight: 600;
+}
+
+.rel-rich code {
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  background: #eef2f8;
+  border-radius: 4px;
+  padding: 0 4px;
+  overflow-wrap: anywhere;
+}
+
+/* Deploy failures chat. */
+.rel-chat-log {
+  max-height: 420px;
+  overflow: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rel-chat-msg {
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.rel-chat-user {
+  align-self: flex-end;
+  max-width: 85%;
+  background: #0176d3;
+  color: #fff;
+}
+
+.rel-chat-q {
+  white-space: pre-wrap;
+  font-size: 12.5px;
+}
+
+.rel-chat-assistant {
+  background: #fff;
+  border: 1px solid #e3e8f0;
+}
+
+.rel-chat-copy {
+  margin-top: 4px;
+}
+
+.rel-chat-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 6px;
+}
+
+.rel-chat-input {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 0 12px 8px;
+}
+
+.rel-chat-input textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border: 1px solid #c9d2e0;
+  border-radius: 8px;
+  background: #fff;
+  color: #181818;
+}
+
+.rel-chat-input textarea:focus,
+.rel-err-filter:focus {
+  outline: 2px solid #1b96ff;
+  outline-offset: 0;
+  border-color: #1b96ff;
+}
+
+.rel-chat-note {
+  padding: 0 12px 8px;
+}
+
+/* Full error list: a normal one-line filter and a Fix column. */
+.rel-err-filter {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  box-sizing: border-box;
+  margin: 6px 0;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  border: 1px solid #c9d2e0;
+  border-radius: 8px;
+  background: #fff;
+  color: #181818;
+}
+
+.rel-err-table .rel-err-fix {
+  color: #2e5d2e;
+  min-width: 180px;
+}
+
+.rel-err-table .rel-err-cat {
+  margin-right: 4px;
 }

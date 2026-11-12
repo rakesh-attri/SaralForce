@@ -65,13 +65,46 @@ function ffClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
+// Drops the heavy keys BEFORE cloning, so a 50 MB import is never serialised.
 function ffTrim(snapshot) {
-  const out = ffClone(snapshot);
+  const light = {...snapshot};
   for (const [scope, keys] of Object.entries(FF_TRIM_KEYS)) {
-    if (!out[scope]) continue;
-    keys.forEach(k => delete out[scope][k]);
+    if (!light[scope] || typeof light[scope] !== "object") continue;
+    light[scope] = {...light[scope]};
+    keys.forEach(k => delete light[scope][k]);
   }
-  return out;
+  return ffClone(light);
+}
+
+// True when the JSON of val is certainly at least `budget` characters. Counts
+// a lower bound (string lengths, key names, one per value) and stops at the
+// budget, so the cost is bounded however big the state is.
+function ffAtLeast(val, budget) {
+  let n = 0;
+  const stack = [val];
+  while (stack.length) {
+    const v = stack.pop();
+    if (typeof v === "string") n += v.length + 2;
+    else if (v && typeof v === "object") {
+      if (typeof v.toJSON === "function") n += 2;
+      else if (Array.isArray(v)) {
+        n += 1 + v.length;
+        if (n >= budget) return true;
+        for (let i = 0; i < v.length; i++) stack.push(v[i]);
+      }
+      else {
+        n += 2;
+        for (const k of Object.keys(v)) {
+          const c = v[k];
+          if (c === undefined || typeof c === "function" || typeof c === "symbol") continue;
+          n += k.length + 3;
+          stack.push(c);
+        }
+      }
+    } else n += 1;
+    if (n >= budget) return true;
+  }
+  return false;
 }
 
 export function ffTakeSnapshot() {
@@ -84,6 +117,8 @@ export function ffTakeSnapshot() {
     }
   }
   try {
+    // Certainly over the budget: trim without serialising the whole state first.
+    if (ffAtLeast(merged, 2000000)) return ffTrim(merged);
     const full = ffClone(merged);
     // Stay well under the 5MB sessionStorage budget for this key.
     if (JSON.stringify(full).length < 2000000) return full;

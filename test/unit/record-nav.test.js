@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {parentLinks, parentNameQuery, childLists, historySource, historyRows, nameFieldOf} from "../../addon/core/record-nav.js";
+import {parentLinks, parentNameQuery, parentNameField, parentNames, childLists, historySource, historyRows, nameFieldOf} from "../../addon/core/record-nav.js";
 
 const FIELDS = [
   {name: "Id", type: "id"},
@@ -57,4 +57,22 @@ test("historyRows labels fields and drops id-only twins", () => {
 test("nameFieldOf", () => {
   assert.equal(nameFieldOf(DESCRIBE), "Name");
   assert.equal(nameFieldOf({fields: [{name: "Id"}]}), "Id");
+});
+
+test("parent names: objects without a Name field use their own display field", () => {
+  const links = [
+    {field: "ParentId", relationshipName: "Parent", targets: ["Case"], id: "500000000000001AAA"},
+    {field: "ContractId", relationshipName: "Contract", targets: ["Contract"], id: "800000000000001AAA"},
+    {field: "OwnerId", relationshipName: "Owner", targets: ["Group", "User"], id: "005000000000001AAA"},
+    {field: "AccountId", relationshipName: "Account", targets: ["Account"], id: "001000000000001AAA"},
+    {field: "Odd__c", relationshipName: null, targets: ["Case"], id: "500000000000002AAA"},
+  ];
+  assert.deepEqual(links.map(parentNameField), ["CaseNumber", "ContractNumber", "Name", "Name", "CaseNumber"]);
+  assert.equal(parentNameQuery("Case", "500000000000009AAA", links),
+    "SELECT Id, Parent.CaseNumber, Contract.ContractNumber, Owner.Name, Account.Name FROM Case WHERE Id = '500000000000009AAA'");
+  const rec = {Parent: {CaseNumber: "00001026"}, Contract: null, Owner: {Name: "Support Queue"}, Account: {Name: ""}};
+  assert.deepEqual(parentNames(rec, links), {ParentId: "00001026", OwnerId: "Support Queue"});
+  assert.deepEqual(parentNames(null, links), {});
+  // One lookup at a time (the retry path) reads only that lookup.
+  assert.equal(parentNameQuery("Case", "x", [links[0]]), "SELECT Id, Parent.CaseNumber FROM Case WHERE Id = 'x'");
 });

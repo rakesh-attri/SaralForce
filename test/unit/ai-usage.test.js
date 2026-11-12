@@ -2,7 +2,7 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {
   usageFromOpenAI, usageFromClaude, usageFromGemini, estimateTokens, buildEntry, formatUsage,
-  recordAiCall, aiUsageLog, clearAiUsageLog, sessionTotals, addToTotals
+  recordAiCall, aiUsageLog, clearAiUsageLog, sessionTotals, addToTotals, dayKey
 } from "../../addon/core/ai-usage.js";
 
 test("provider usage shapes map to input/output/reasoning", () => {
@@ -37,12 +37,19 @@ test("real usage, errors and the 50-call ring", () => {
   assert.equal(aiUsageLog().length, 0);
 });
 
-test("saved totals reset 'today' on a new day", () => {
-  const day1 = Date.parse("2026-11-03T10:00:00Z");
+// Local-time dates throughout, so these hold in any timezone.
+test("saved totals reset 'today' on a new local day", () => {
+  const day1 = new Date(2026, 10, 3, 10, 0, 0).getTime();
   let t = addToTotals(null, {at: day1, total: 100});
-  t = addToTotals(t, {at: day1, total: 50});
+  t = addToTotals(t, {at: new Date(2026, 10, 3, 23, 59, 0).getTime(), total: 50});
+  assert.equal(t.day, "2026-11-03");
   assert.deepEqual(t.today, {calls: 2, total: 150});
-  t = addToTotals(t, {at: Date.parse("2026-11-04T10:00:00Z"), total: 10});
+  t = addToTotals(t, {at: new Date(2026, 10, 4, 0, 1, 0).getTime(), total: 10});
   assert.deepEqual(t.today, {calls: 1, total: 10});
   assert.deepEqual(t.all, {calls: 3, total: 160});
+});
+
+test("the day key is the local calendar day", () => {
+  assert.equal(dayKey(new Date(2026, 0, 5, 0, 0, 0).getTime()), "2026-01-05");
+  assert.equal(dayKey(new Date(2026, 11, 31, 23, 59, 59).getTime()), "2026-12-31");
 });

@@ -2,6 +2,7 @@ import {sfConn, apiVersion} from "../../inspector.js";
 import {getSavedConfig, getProviderConfig, hasValidConfig} from "../../llm/llm-service.js";
 import {safeCopyText} from "../../utils.js";
 import {toCsv, downloadText, flattenRecord, columnsOf} from "../shared/csv.js";
+import {soqlFromObject, formatSoql as formatSoqlText} from "../../core/soql.js";
 import {runSoql, runSoqlMore} from "../shared/query.js";
 import {useSfTimeZoneTick} from "../shared/format.js";
 import {ffIcon, FF_I_DB, FF_I_CLOCK, FF_I_BOOKMARK, FF_I_SLIDERS, FF_I_DOWNLOAD, FF_I_DOC} from "../shared/icons.js";
@@ -128,10 +129,8 @@ function SoqlTab() {
     };
   }, []);
 
-  // Object detected after the last FROM — offer its fields.
-  const fromMatch = /\bfrom\s+([a-zA-Z0-9_]*)$/i.exec(query) ||
-    /\bfrom\s+([a-zA-Z0-9_]+)/i.exec(query);
-  const fromObj = fromMatch ? fromMatch[1] : "";
+  // Object of the outer FROM (sub-queries and literals ignored) — offer its fields.
+  const fromObj = soqlFromObject(query);
 
   React.useEffect(() => {
     let stale = false;
@@ -167,7 +166,12 @@ function SoqlTab() {
     });
   };
 
+  // One query at a time: a second start (Ctrl+Enter, History) while one is
+  // in flight is ignored, so an older response can never replace a newer one.
+  const runningRef = React.useRef(false);
   const run = async (overrideQuery) => {
+    if (runningRef.current) return;
+    runningRef.current = true;
     const q = String(overrideQuery ?? query);
     setLoading(true);
     setError(null);
@@ -201,6 +205,7 @@ function SoqlTab() {
       // Smart fix, only when the user opted in via the checkbox.
       if (useLlm) askLlmForFix(q, e.message);
     } finally {
+      runningRef.current = false;
       setLoading(false);
     }
   };
@@ -250,7 +255,8 @@ function SoqlTab() {
       setDetailHint("Select Id in your query to use Show all data.");
       return;
     }
-    const m = /\bfrom\s+([a-zA-Z0-9_]+)/i.exec(String((result && result.query) || ""));
+    const outer = soqlFromObject((result && result.query) || "");
+    const m = outer ? [null, outer] : null;
     if (!m) {
       setDetailHint("Show all data needs a simple SELECT ... FROM <Object> query.");
       return;
@@ -320,7 +326,9 @@ function SoqlTab() {
     const rows = selected.size
       ? result.rows.filter((_, i) => selected.has(i))
       : result.rows;
-    downloadText("soql-results.csv", toCsv(result.columns, rows));
+    // UTF-8 byte-order mark: without it Excel reads the file as ANSI and
+    // garbles non-ASCII text.
+    downloadText("soql-results.csv", String.fromCharCode(0xFEFF) + toCsv(result.columns, rows));
   };
 
   // Field categories for the explorer pills (mutually exclusive).
@@ -360,29 +368,11 @@ function SoqlTab() {
       h("path", {d}));
   };
 
-  // Quote-aware lightweight formatter: case + whitespace only, the query
-  // semantics never change.
+  // Quote-aware lightweight formatter (core/soql.js): case + whitespace only,
+  // the query semantics never change.
   const formatSoql = () => {
-    const src = String(query || "");
-    if (!src.trim()) return;
-    const segs = src.split(/('[^']*')/g);
-    const majors = ["select", "from", "where", "group by", "order by",
-      "having", "limit", "offset"];
-    const minors = ["and", "or", "not", "in", "like", "asc", "desc",
-      "nulls first", "nulls last"];
-    const out = segs.map((seg, i) => {
-      if (i % 2 === 1) return seg;
-      let s = seg.replace(/\s+/g, " ");
-      for (const kw of [...majors, ...minors].sort((a, b) => b.length - a.length)) {
-        const re = new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi");
-        s = s.replace(re, kw.toUpperCase());
-      }
-      for (const kw of majors.slice(1)) {
-        s = s.replace(new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi"), `\n${kw.toUpperCase()}`);
-      }
-      return s;
-    }).join("");
-    setQuery(out.trim());
+    if (!String(query || "").trim()) return;
+    setQuery(formatSoqlText(query));
   };
 
   const clearQuery = () => {
@@ -585,6 +575,9 @@ function SoqlTab() {
     return hv % 8;
   };
 
+  // SELECT COUNT() returns no records, only the count in totalSize.
+  const countOnly = !!result && !result.rows.length &&
+    /^\s*select\s+count\s*\(\s*\)/i.test(result.query || "");
   const rf = resultFilter.trim().toLowerCase();
   const visibleRows = !result ? []
     : !rf ? result.rows
@@ -1023,7 +1016,9 @@ function SoqlTab() {
             h("span", {className: "sq3-card-ico", "aria-hidden": "true"}, ffIcon(FF_I_DB)),
             h("span", {className: "insp-card-title"}, "Results")),
           h("div", {className: "insp-meta"},
-            rf
+            countOnly
+              ? `count: ${result.totalSize.toLocaleString()}`
+              : rf
               ? `showing ${visibleRows.length.toLocaleString()} of ${result.rows.length.toLocaleString()} row(s)`
               : result.rows.length && result.totalSize !== result.rows.length
               ? `${result.rows.length.toLocaleString()} of ${result.totalSize.toLocaleString()} row(s) fetched`
@@ -1064,7 +1059,10 @@ function SoqlTab() {
             }, fetchingMore ? "Fetching…" : "Fetch more rows"),
             result.nextUrl ? " or use " : "Use ",
             "Data Export (Bulk API) for very large sets."),
-        result && (rf && !visibleRows.length
+        result && (countOnly
+          ? h("div", {className: "insp-ok", role: "status"},
+              `COUNT() = ${result.totalSize.toLocaleString()} record(s)`)
+          : rf && !visibleRows.length
           ? h("div", {className: "insp-empty"}, "No matching rows.")
           : h(ResultTable, {
               columns: result.columns,

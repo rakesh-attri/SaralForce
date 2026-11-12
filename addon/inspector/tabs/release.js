@@ -113,6 +113,7 @@ function ChangesView({goTo}) {
   const [statusFilter, setStatusFilter] = React.useState({new: true, updated: true, deleted: true});
   const [destructive, setDestructive] = useFfSession("release", "destructive", {});
   const [tracking, setTracking] = React.useState(null);
+  const [skipped, setSkipped] = React.useState([]);
   const [by, setBy] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState("");
   const [rows, setRows] = React.useState(null);
@@ -147,6 +148,7 @@ function ChangesView({goTo}) {
       setRows(buildChanges([...list.values()], del.deleted, t, types, touched, until ? orgDayStart(until) + 864e5 : 0));
       setAudit(del.audit);
       setTracking(del.tracking);
+      setSkipped(list.skipped || []);
     } catch (e) {
       setError(e.message || String(e));
     } finally {
@@ -238,6 +240,8 @@ function ChangesView({goTo}) {
               h("td", {className: "rel-name"}, r.fullName),
               h("td", null, r.by),
               h("td", {className: "insp-meta"}, fmtWhen(r.at))))))),
+      skipped.length > 0 && h("div", {className: "insp-warn"},
+        `Not checked (Salesforce could not list these types in this org): ${skipped.map(typeLabel).join(", ")}.`),
       counts.deleted === 0 && tracking === false && h("div", {className: "insp-meta rel-note"},
         "Deletes come from the Setup audit trail here (this org has no source tracking), so some deletes may not be listed."),
       audit && audit.length > 0 && h("details", {className: "rel-problems"},
@@ -328,16 +332,29 @@ function PackageView({goTo}) {
   React.useEffect(() => { loadDrafts(); }, []);
   const saveDraft = async () => {
     const name = relName.trim() || `Draft ${`${new Date().toLocaleDateString(undefined, {day: "numeric", month: "short"})} ${new Date().toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"})}`}`;
-    await putDraft({name, members: pkg, destructive, sourceName: source ? source.name : ""});
-    setMsg(`Saved draft “${name}”.`);
-    loadDrafts();
+    setErr("");
+    try {
+      await putDraft({name, members: pkg, destructive, sourceName: source ? source.name : ""});
+      setMsg(`Saved draft “${name}”.`);
+      loadDrafts();
+    } catch (e) {
+      setMsg("");
+      setErr("Could not save the draft: " + (e.message || String(e)));
+    }
   };
   const loadDraft = d => {
     setPkg(mergeMembers(pkg, d.members || {}));
     setDestructive(mergeMembers(destructive, d.destructive || {}));
     setMsg(`Loaded “${d.name}” into the package.`);
   };
-  const dropDraft = async d => { await deleteDraft(d.id); loadDrafts(); };
+  const dropDraft = async d => {
+    try {
+      await deleteDraft(d.id);
+      loadDrafts();
+    } catch (e) {
+      setErr("Could not delete the draft: " + (e.message || String(e)));
+    }
+  };
   const delCount = keysFromMembers(destructive).length;
 
   const add = () => {
@@ -353,6 +370,23 @@ function PackageView({goTo}) {
   const addNames = list => {
     const m = {[type]: list};
     if (toDelete) setDestructive(mergeMembers(destructive, m)); else setPkg(mergeMembers(pkg, m));
+  };
+
+  // Upload (button or drop): the file's text goes in the box to check first.
+  const fileRef = React.useRef(null);
+  const [pasteOpen, setPasteOpen] = React.useState(false);
+  const readFile = async file => {
+    if (!file) return;
+    setErr(""); setMsg("");
+    if (file.size > 5 * 1024 * 1024) { setErr(`${file.name} is larger than 5 MB: that isn't a package.xml.`); return; }
+    const text = await file.text();
+    if (!/<Package\b/.test(text)) { setErr(`${file.name} doesn't look like a package.xml (no <Package> element).`); return; }
+    setPaste(text);
+    setPasteOpen(true);
+    const n = keysFromMembers(parsePackageXml(text)).length;
+    setMsg(/^destructive/i.test(file.name)
+      ? `Read ${file.name}: ${n} item(s). It's a delete list: press “Add as deletes”.`
+      : `Read ${file.name}: ${n} item(s). Check it, then press “Add to package” (or “Add as deletes”).`);
   };
 
   const load = (asDelete) => {
@@ -409,11 +443,17 @@ function PackageView({goTo}) {
           matches.length > 60 && h("span", {className: "insp-meta"}, `+${matches.length - 60} more · type to narrow`),
           matches.filter(n => !inPkg(n)).length > 1 && h("button", {className: "field-action-btn", onClick: () => addNames(matches.filter(n => !inPkg(n)))},
             `Add all ${matches.filter(n => !inPkg(n)).length}`))),
-      h("details", {className: "rel-paste"},
-        h("summary", null, "Paste a package.xml or destructiveChanges.xml"),
+      h("details", {className: "rel-paste", open: pasteOpen, onToggle: e => setPasteOpen(e.currentTarget.open)},
+        h("summary", null, "Paste or upload a package.xml or destructiveChanges.xml"),
         h("textarea", {className: "soql-save-input rel-textarea", rows: 6, value: paste, onChange: e => setPaste(e.target.value),
-          placeholder: "<Package>…</Package>", "aria-label": "package.xml text"}),
+          placeholder: "<Package>…</Package>  (or drop a package.xml file here)", "aria-label": "package.xml text",
+          onDragOver: e => e.preventDefault(),
+          onDrop: e => { e.preventDefault(); readFile(e.dataTransfer.files && e.dataTransfer.files[0]); }}),
         h("div", {className: "soql-save-row"},
+          h("button", {className: "btn btn-secondary btn-sm", onClick: () => fileRef.current && fileRef.current.click(),
+            title: "Read a package.xml or destructiveChanges.xml from your computer"}, "⬆ Upload file…"),
+          h("input", {ref: fileRef, type: "file", accept: ".xml,text/xml,application/xml", hidden: true,
+            onChange: e => { readFile(e.target.files[0]); e.target.value = ""; }, "aria-label": "Upload package.xml"}),
           h("button", {className: "btn btn-secondary btn-sm", disabled: !paste.trim(), onClick: () => load(false)}, "Add to package"),
           h("button", {className: "btn btn-secondary btn-sm", disabled: !paste.trim(), onClick: () => load(true)}, "Add as deletes"))),
       drafts.length > 0 && h("div", {className: "rel-label"}, `Drafts · ${drafts.length}`),

@@ -84,8 +84,8 @@ function sameOrgHost(a, b) {
   return String(a).replace(/\.lightning\.force\./, ".my.salesforce.") === String(b).replace(/\.lightning\.force\./, ".my.salesforce.");
 }
 
-function ctxFor(conn, {signal} = {}) {
-  return {conn: {instanceHostname: conn.host, sessionId: conn.sessionId}, apiVersion, signal, delay: sleep};
+function ctxFor(conn, {signal, timeoutMs} = {}) {
+  return {conn: {instanceHostname: conn.host, sessionId: conn.sessionId}, apiVersion, signal, delay: sleep, timeoutMs};
 }
 
 async function mdCall(conn, inner, opts) {
@@ -148,8 +148,12 @@ export function loadCatalog(conn) {
 
 // ── listMetadata ──────────────────────────────────────────────────────
 // queries: [{type, folder?}] → rows with dates and authors (managed skipped).
+// rows.skipped: [{type, folder, message}] for queries Salesforce refused (a
+// type this org doesn't have), so callers can say the listing is incomplete.
 export async function listMetadata(conn, queries, {signal, onProgress} = {}) {
   const rows = [];
+  rows.skipped = [];
+  const skip = (q, e) => rows.skipped.push({type: q.type, folder: q.folder || "", message: (e && e.message) || ""});
   const groups = chunk(queries, 3);
   let n = 0;
   for (const g of groups) {
@@ -163,12 +167,15 @@ export async function listMetadata(conn, queries, {signal, onProgress} = {}) {
       // A type the other org doesn't have (feature off, older API): list
       // the group one by one and skip only that type.
       if (g.length < 2 || /INVALID_SESSION|Cancelled/i.test(e.message || "")) {
-        if (g.length < 2 && /INVALID_TYPE|not a valid|Unknown type|UNKNOWN_EXCEPTION/i.test(e.message || "")) docs = [];
+        if (g.length < 2 && /INVALID_TYPE|not a valid|Unknown type|UNKNOWN_EXCEPTION/i.test(e.message || "")) { docs = []; skip(g[0], e); }
         else throw e;
       } else {
         docs = [];
         for (const q of g) {
-          try { docs.push(await call(`<met:queries>${q.folder ? `<met:folder>${escXml(q.folder)}</met:folder>` : ""}<met:type>${escXml(q.type)}</met:type></met:queries>`)); } catch (e2) { /* skip this type */ }
+          try { docs.push(await call(`<met:queries>${q.folder ? `<met:folder>${escXml(q.folder)}</met:folder>` : ""}<met:type>${escXml(q.type)}</met:type></met:queries>`)); } catch (e2) {
+            if ((signal && signal.aborted) || /INVALID_SESSION|Cancelled/i.test(e2.message || "")) throw e2;
+            skip(q, e2);
+          }
         }
       }
     }
@@ -193,8 +200,14 @@ export async function listComponents(conn, types, {signal, onProgress} = {}) {
     else if (def.folder) folderTypes.push(def); else plain.push({type: t});
   }
   const queries = plain.slice();
+  // Types Salesforce could not list here: reported as out.skipped.
+  const skippedTypes = new Set();
   if (folderTypes.length) {
     const folders = await listMetadata(conn, folderTypes.map(d => ({type: d.folder})), {signal});
+    for (const s of folders.skipped) {
+      const d = folderTypes.find(x => x.folder === s.type);
+      if (d) skippedTypes.add(d.name);
+    }
     for (const d of folderTypes) {
       const own = folders.filter(f => f.type === d.folder);
       for (const f of own) queries.push({type: d.name, folder: f.fullName});
@@ -207,9 +220,11 @@ export async function listComponents(conn, types, {signal, onProgress} = {}) {
   }
   const real = queries.filter(q => !q.folderRow);
   const rows = await listMetadata(conn, real, {signal, onProgress});
+  for (const s of rows.skipped) skippedTypes.add(s.type);
   for (const q of queries) if (q.folderRow) rows.push(q.folderRow);
   rows.push(...settings);
   const out = new Map();
+  out.skipped = [...skippedTypes].sort();
   for (const r of rows) {
     const type = r.type || "";
     out.set(compKey(type, r.fullName), {
@@ -236,11 +251,21 @@ export async function retrieve(conn, members, {signal, onProgress, timeoutMs = 1
   const id = (resultObjs(started)[0] || {}).id;
   if (!id) throw new Error("Salesforce did not start the retrieve");
   const t0 = Date.now();
+  let fails = 0;
   for (let i = 0; ; i++) {
     if (signal && signal.aborted) throw new Error("Cancelled");
     if (Date.now() - t0 > timeoutMs) throw new Error("Retrieve timed out");
     await sleep(i < 3 ? 1500 : 3000);
-    const doc = await mdCall(conn, `<met:checkRetrieveStatus><met:asyncProcessId>${id}</met:asyncProcessId><met:includeZip>true</met:includeZip></met:checkRetrieveStatus>`, {signal});
+    let doc;
+    try {
+      doc = await mdCall(conn, `<met:checkRetrieveStatus><met:asyncProcessId>${id}</met:asyncProcessId><met:includeZip>true</met:includeZip></met:checkRetrieveStatus>`, {signal});
+      fails = 0;
+    } catch (e) {
+      // A slow answer or a network blip must not lose a running retrieve
+      // (same as the deploy poll); anything Salesforce itself says is final.
+      if ((signal && signal.aborted) || !/^Request timed out|^Network error/i.test(e.message || "") || ++fails >= 5) throw e;
+      continue;
+    }
     const r = resultObjs(doc)[0] || {};
     if (onProgress) onProgress(r.status || "InProgress");
     if (r.done !== "true") continue;
@@ -252,6 +277,9 @@ export async function retrieve(conn, members, {signal, onProgress, timeoutMs = 1
 }
 
 // ── deploy ────────────────────────────────────────────────────────────
+// The zip upload can take minutes on a slow uplink: 60s is far too short.
+const DEPLOY_UPLOAD_TIMEOUT_MS = 10 * 60000;
+
 // entries: [[path, bytes|string]]. options: {checkOnly, testLevel, runTests[], ignoreWarnings}
 export async function startDeploy(conn, entries, options = {}) {
   const zip = bytesToBase64(await writeZipCompressed(entries));
@@ -265,7 +293,7 @@ export async function startDeploy(conn, entries, options = {}) {
     `<met:singlePackage>true</met:singlePackage>`,
     options.testLevel && options.testLevel !== "Default" ? `<met:testLevel>${escXml(options.testLevel)}</met:testLevel>` : ""
   ].join("");
-  const doc = await mdCall(conn, `<met:deploy><met:ZipFile>${zip}</met:ZipFile><met:DeployOptions>${opts}</met:DeployOptions></met:deploy>`);
+  const doc = await mdCall(conn, `<met:deploy><met:ZipFile>${zip}</met:ZipFile><met:DeployOptions>${opts}</met:DeployOptions></met:deploy>`, {timeoutMs: DEPLOY_UPLOAD_TIMEOUT_MS});
   const id = (resultObjs(doc)[0] || {}).id;
   if (!id) throw new Error("Salesforce did not start the deploy");
   return id;
@@ -312,10 +340,13 @@ export async function cancelDeploy(conn, id) {
   await mdCall(conn, `<met:cancelDeploy><met:String>${escXml(id)}</met:String></met:cancelDeploy>`);
 }
 
-// Tooling/REST helpers on a given org.
+// Tooling/REST helpers on a given org. At most 2,000 rows: the returned
+// array has truncated = true when there were more.
 export async function queryAll(conn, soql, {tooling = false} = {}) {
   const res = await conn.client.queryAll(soql, {tooling, maxRecords: 2000});
-  return res.records || [];
+  const records = res.records || [];
+  records.truncated = !!res.truncated;
+  return records;
 }
 
 export function setupUrl(conn, path) {

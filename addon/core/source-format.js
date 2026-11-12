@@ -97,12 +97,59 @@ export function toSourceFiles(comps, base = "force-app/main/default") {
   return out;
 }
 
+// Files that live in a component folder in Git but are not part of the
+// bundle (Jest tests and mocks, editor and lint config): Salesforce rejects
+// them. The same files the default .forceignore of an SFDX project excludes.
+// .forceignore (gitignore syntax, paths from the project root) → path => ignored?
+// Supports comments, blank lines, "!" negation, "*", "?", "**/", a leading "/"
+// (anchored) and a trailing "/" (folders only). The last matching rule wins.
+export function forceIgnoreMatcher(text) {
+  const rules = [];
+  for (let line of String(text || "").split(/\r?\n/)) {
+    line = line.trim();
+    if (!line || line.startsWith("#")) continue;
+    const neg = line.startsWith("!");
+    if (neg) line = line.slice(1);
+    const dirOnly = line.endsWith("/");
+    if (dirOnly) line = line.slice(0, -1);
+    const anchored = line.startsWith("/") || line.includes("/");
+    line = line.replace(/^\//, "");
+    let re = "";
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === "*" && line[i + 1] === "*") {
+        if (line[i + 2] === "/") { re += "(?:.*/)?"; i += 2; } else { re += ".*"; i++; }
+      } else if (c === "*") re += "[^/]*";
+      else if (c === "?") re += "[^/]";
+      else re += /[a-zA-Z0-9_/-]/.test(c) ? c : "\\" + c;
+    }
+    rules.push({neg, re: new RegExp((anchored ? "^" : "(?:^|/)") + re + (dirOnly ? "/" : "(?:/|$)"))});
+  }
+  if (!rules.length) return () => false;
+  return path => {
+    let ignored = false;
+    for (const r of rules) if (r.re.test(path)) ignored = !r.neg;
+    return ignored;
+  };
+}
+
+export function isLocalOnlyFile(path) {
+  const parts = String(path).split("/");
+  if (parts[0] !== "lwc" && parts[0] !== "aura") return false;
+  const file = parts[parts.length - 1];
+  return parts.includes("__tests__") || parts.includes("__mocks__") || file === "jsconfig.json" || file === ".eslintrc.json";
+}
+
 // Folders of known types (grows when the org's types are loaded).
 const isTypeDir = dir => METADATA_TYPES.some(t => t.dir === dir);
 
 // Source files (Map relPath under base → bytes) → Metadata API files map.
-export function sourceToMdapi(files, decode) {
+// ignore: path (relative to the files) => true to leave it out (.forceignore).
+// mdapi.skipped: object subfolders that aren't a known child type (dropped).
+export function sourceToMdapi(files, decode, {ignore = null} = {}) {
   const mdapi = new Map();
+  mdapi.skipped = [];
+  mdapi.ignored = 0;
   const resourceDirs = new Map(); // name → Map(inner path → bytes)
   const objects = new Map(); // name → {parent, children: []}
   const obj = name => {
@@ -112,11 +159,14 @@ export function sourceToMdapi(files, decode) {
   for (const [path, bytes] of files) {
     const parts = path.split("/");
     if (!isTypeDir(parts[0])) continue;
+    if (isLocalOnlyFile(path)) continue;
+    if (ignore && ignore(path)) { mdapi.ignored++; continue; }
     if (parts[0] === "objects" && parts.length >= 3) {
       const name = parts[1];
       if (parts.length === 3 && parts[2] === `${name}.object-meta.xml`) { obj(name).parent = decode(bytes); continue; }
       const child = CHILD_BY_DIR[parts[2]];
       if (child && parts.length === 4) obj(name).children.push(docToChild(CHILD_SOURCE[child.type][0], decode(bytes)));
+      else mdapi.skipped.push(path);
       continue;
     }
     if (parts[0] === "labels") {
@@ -150,11 +200,15 @@ export function sourceToMdapi(files, decode) {
 }
 
 // Source files → components, ready for compare and deploy.
-export function componentsFromSource(files, decode) {
-  const mdapi = sourceToMdapi(files, decode);
+// comps.skipped / comps.ignored: as sourceToMdapi reports them.
+export function componentsFromSource(files, decode, opts = {}) {
+  const mdapi = sourceToMdapi(files, decode, opts);
   const enc = new TextEncoder();
   const asBytes = new Map([...mdapi.entries()].map(([p, v]) => [p, typeof v === "string" ? enc.encode(v) : v]));
-  return componentsFromZip(asBytes, decode);
+  const comps = componentsFromZip(asBytes, decode);
+  comps.skipped = mdapi.skipped;
+  comps.ignored = mdapi.ignored;
+  return comps;
 }
 
 // Keys of the given types (presets) in a component map.

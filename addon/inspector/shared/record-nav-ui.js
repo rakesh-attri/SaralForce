@@ -2,12 +2,53 @@
 // and History (field-history timeline).
 import {sfConn, apiVersion} from "../../inspector.js";
 import {escapeSoqlString} from "../../core/soql.js";
-import {parentLinks, parentNameQuery, childLists, historySource, historyRows, nameFieldOf} from "../../core/record-nav.js";
+import {parentLinks, parentNameQuery, parentNames, childLists, historySource, historyRows, nameFieldOf} from "../../core/record-nav.js";
 import {queryAll} from "./query.js";
 import {ffDescribeObject} from "./describe.js";
 import {fmtDateTime} from "./format.js";
 
 const h = React.createElement;
+
+// Account has 100+ child relationships: their COUNT() queries run a few at a
+// time. A queued job whose list has unmounted (or whose record changed) is
+// skipped by its own `stale` check before it calls Salesforce.
+const COUNT_POOL = 5;
+let countActive = 0;
+const countQueue = [];
+function runCount(job) {
+  return new Promise(resolve => {
+    countQueue.push(() => Promise.resolve().then(job).then(resolve, resolve));
+    pumpCounts();
+  });
+}
+function pumpCounts() {
+  while (countActive < COUNT_POOL && countQueue.length) {
+    countActive++;
+    countQueue.shift()().then(() => { countActive--; pumpCounts(); });
+  }
+}
+
+// Parent names in one query; when one lookup breaks it (a parent object
+// without a Name field, a hidden field), read each lookup on its own so the
+// others still show names.
+async function loadParentNames(obj, id, parents) {
+  const sq = parentNameQuery(obj, id, parents);
+  if (!sq) return {};
+  try {
+    return parentNames((await queryAll(sq))[0] || {}, parents);
+  } catch (e) {
+    const names = {};
+    const todo = parents.filter(p => p.relationshipName);
+    for (let i = 0; i < todo.length; i += COUNT_POOL) {
+      await Promise.all(todo.slice(i, i + COUNT_POOL).map(async p => {
+        try {
+          Object.assign(names, parentNames((await queryAll(parentNameQuery(obj, id, [p])))[0] || {}, [p]));
+        } catch (e2) { /* this parent keeps its Id */ }
+      }));
+    }
+    return names;
+  }
+}
 
 function ChildList({rel, recordId, onOpen}) {
   const [open, setOpen] = React.useState(false);
@@ -33,10 +74,13 @@ function ChildList({rel, recordId, onOpen}) {
   };
   React.useEffect(() => {
     let stale = false;
-    sfConn.rest(`/services/data/v${apiVersion}/query/?q=` + encodeURIComponent(
-      `SELECT COUNT() FROM ${rel.childSObject} WHERE ${rel.field} = '${escapeSoqlString(recordId)}'`), {useCache: false})
-      .then(r => { if (!stale) setCount(typeof r.totalSize === "number" ? r.totalSize : null); })
-      .catch(() => { if (!stale) setCount(null); });
+    runCount(() => {
+      if (stale) return null;
+      return sfConn.rest(`/services/data/v${apiVersion}/query/?q=` + encodeURIComponent(
+        `SELECT COUNT() FROM ${rel.childSObject} WHERE ${rel.field} = '${escapeSoqlString(recordId)}'`), {useCache: false})
+        .then(r => { if (!stale) setCount(typeof r.totalSize === "number" ? r.totalSize : null); })
+        .catch(() => { if (!stale) setCount(null); });
+    });
     return () => { stale = true; };
   }, [rel.childSObject, rel.field, recordId]);
   return h("div", {className: "rn-child" + (count === 0 ? " empty" : "")},
@@ -66,17 +110,7 @@ export function RelatedPanel({obj, id, values, onOpen}) {
     (async () => {
       const d = await ffDescribeObject(obj);
       const parents = parentLinks(d.fields, values);
-      let names = {};
-      const sq = parentNameQuery(obj, id, parents);
-      if (sq) {
-        try {
-          const rec = (await queryAll(sq))[0] || {};
-          for (const p of parents) {
-            const n = p.relationshipName && rec[p.relationshipName] && rec[p.relationshipName].Name;
-            if (n) names[p.field] = n;
-          }
-        } catch (e) { names = {}; }
-      }
+      const names = await loadParentNames(obj, id, parents);
       if (!stale) setData({parents, names, children: childLists(d), allChildren: childLists(d, {includeSystem: true})});
     })().catch(e => { if (!stale) setData({error: e.message}); });
     return () => { stale = true; };

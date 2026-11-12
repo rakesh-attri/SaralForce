@@ -365,8 +365,10 @@ export function HistoryView({goTo}) {
     const types = new Set(s.types && s.types.length ? s.types : (s.keys || []).map(k => splitKey(k).type));
     const newPaths = new Set([...toSourceFiles(comps, "").keys()]);
     // A full snapshot replaces the branch's files of those types: what the org no longer has goes.
+    const onBranch = s.types && s.types.length && cfg ? await listPaths(cfg) : new Set();
+    if (onBranch.truncated) throw new Error("This repository is too large for GitHub to list in one request, so SaralForce cannot tell which files the snapshot replaces. Nothing was committed.");
     const deletePaths = s.types && s.types.length && cfg
-      ? [...await listPaths(cfg)].filter(p => { const t = sourcePathType(p); return t && types.has(t.type) && !newPaths.has(p); })
+      ? [...onBranch].filter(p => { const t = sourcePathType(p); return t && types.has(t.type) && !newPaths.has(p); })
         .map(p => (cfg.base ? cfg.base.replace(/^\/+|\/+$/g, "") + "/" : "") + p)
       : [];
     const res = await pushToGit(comps, `Snapshot of ${s.orgName} (${new Date(s.at).toLocaleString()}) · ${(s.keys || []).length} component(s)`,
@@ -397,12 +399,14 @@ export function HistoryView({goTo}) {
     const types = presetTypes(snapPresets);
     if (!types.length) throw new Error("Pick at least one kind of metadata.");
     const list = await listComponents(org.conn, types, {onProgress: (n, of) => setStatus(`Listing ${org.name}… ${n}/${of}`)});
+    const skipped = list.skipped || [];
     const keys = [...list.keys()].filter(keepObject);
     const {files} = keys.length ? await retrieveAll(org.conn, keys, org.name, setStatus) : {files: new Map()};
     setStatus("Saving…");
     const snap = await saveSnapshot({orgHost: org.host, orgName: org.name, kind: "manual",
       label: `Snapshot ${new Date().toLocaleDateString()}`, keys, missing: [], types}, files);
-    setMsg(`Saved a snapshot of ${keys.length} component(s) from ${org.name} (${formatBytes(snap.size)}).`);
+    setMsg(`Saved a snapshot of ${keys.length} component(s) from ${org.name} (${formatBytes(snap.size)}).` +
+      (skipped.length ? ` Not included (Salesforce could not list them here): ${skipped.map(typeLabel).join(", ")}.` : ""));
     await load();
   });
 

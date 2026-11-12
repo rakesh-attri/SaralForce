@@ -77,6 +77,28 @@ test("without chrome.storage the store keeps using localStorage", async () => {
   assert.equal(globalThis.localStorage.getItem("llmConfig"), '{"provider":"openai","apiKey":"x"}');
 });
 
+test("setSetting reports a failed write and keeps the value in memory", async () => {
+  installFakes();
+  await initSettings();
+  assert.equal(await setSetting("sfoc_celebrate", "thor"), true);
+  globalThis.chrome.runtime = {};
+  globalThis.chrome.storage.local.set = (items, cb) => {
+    globalThis.chrome.runtime.lastError = {message: "QUOTA_BYTES quota exceeded"};
+    cb();
+    delete globalThis.chrome.runtime.lastError;
+  };
+  const warn = console.warn;
+  const warned = [];
+  console.warn = (...args) => warned.push(args.join(" "));
+  try {
+    assert.equal(await setSetting("sfoc_celebrate", "hulk"), false);
+  } finally {
+    console.warn = warn;
+  }
+  assert.match(warned[0], /sfoc_celebrate.*QUOTA_BYTES/);
+  assert.equal(getSetting("sfoc_celebrate"), "hulk");
+});
+
 function fakeProvider(replies) {
   const calls = [];
   return {

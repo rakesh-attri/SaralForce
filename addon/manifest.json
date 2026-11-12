@@ -18,7 +18,7 @@
       "128": "icon128.png"
     }
   },
-  "minimum_chrome_version": "88",
+  "minimum_chrome_version": "102",
   "permissions": [
     "cookies",
     "storage"

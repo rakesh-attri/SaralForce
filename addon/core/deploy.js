@@ -888,13 +888,20 @@ export function failuresForPrompt(summary, {max = 40} = {}) {
   return lines.join("\n");
 }
 
-// Short diff summary for AI release notes (limited size).
+// Types that can hold credentials or endpoints: their content is never sent.
+export const PROMPT_SENSITIVE_TYPES = new Set(["NamedCredential", "ConnectedApp", "ExternalCredential", "AuthProvider", "Certificate", "RemoteSiteSetting"]);
+
+// What AI release notes send to the AI provider: real metadata content, not
+// just names. Per component its status, type and name, then up to 15 added
+// and 15 removed lines (changed) or the first 600 characters (new); nothing
+// for deleted ones or PROMPT_SENSITIVE_TYPES. At most maxChars in total.
 export function changesForPrompt(rows, {maxChars = 12000} = {}) {
   let out = "";
   for (const r of rows) {
     const head = `\n## ${r.status.toUpperCase()} ${r.type} ${r.fullName}\n`;
     let body = "";
-    if (r.status === "changed") body = briefDiff(r.targetText, r.sourceText);
+    if (PROMPT_SENSITIVE_TYPES.has(r.type)) body = "(content not sent: this type can hold credentials or endpoints)";
+    else if (r.status === "changed") body = briefDiff(r.targetText, r.sourceText);
     else if (r.status === "new") body = String(r.sourceText).slice(0, 600);
     if (out.length + head.length + body.length > maxChars) {
       out += `\n(… ${rows.length} components in total; the rest are omitted)`;

@@ -1,8 +1,8 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {componentsFromZip, compKey, componentText} from "../../addon/core/deploy.js";
+import {componentsFromZip, compKey, componentText, changesForPrompt} from "../../addon/core/deploy.js";
 import {textToBytes, bytesToText} from "../../addon/core/zip.js";
-import {toSourceFiles, componentsFromSource, sourceToMdapi} from "../../addon/core/source-format.js";
+import {toSourceFiles, componentsFromSource, sourceToMdapi, forceIgnoreMatcher} from "../../addon/core/source-format.js";
 
 const OBJ = `<?xml version="1.0" encoding="UTF-8"?>
 <CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
@@ -77,4 +77,70 @@ test("DX static resources and folders map back to the Metadata API", async () =>
   assert.deepEqual(sourcePathType("objects/Inv__c/fields/A__c.field-meta.xml"), {type: "CustomField", fullName: "Inv__c.A__c"});
   assert.deepEqual(sourcePathType("classes/A.cls"), {type: "ApexClass", fullName: "A"});
   assert.deepEqual(sourcePathType("layouts/Inv__c-Main.layout-meta.xml"), {type: "Layout", fullName: "Inv__c-Main"});
+});
+
+test("Jest tests and editor config are left out of bundles from Git", async () => {
+  const {isLocalOnlyFile} = await import("../../addon/core/source-format.js");
+  const files = new Map([
+    ["lwc/card/card.js", textToBytes("export default class {}")],
+    ["lwc/card/card.js-meta.xml", textToBytes("<LightningComponentBundle/>")],
+    ["lwc/card/__tests__/card.test.js", textToBytes("test()")],
+    ["lwc/card/__tests__/data/mock.json", textToBytes("{}")],
+    ["lwc/jsconfig.json", textToBytes("{}")],
+    ["lwc/.eslintrc.json", textToBytes("{}")],
+    ["aura/.eslintrc.json", textToBytes("{}")],
+    ["staticresources/lib/__tests__/a.js", textToBytes("var a;")],
+    ["staticresources/lib.resource-meta.xml", textToBytes("<StaticResource/>")]
+  ]);
+  const md = sourceToMdapi(files, bytesToText);
+  assert.deepEqual([...md.keys()].filter(p => p.startsWith("lwc/") || p.startsWith("aura/")).sort(), ["lwc/card/card.js", "lwc/card/card.js-meta.xml"]);
+  const comps = componentsFromSource(files, bytesToText);
+  assert.deepEqual([...comps.keys()].filter(k => k.startsWith("LightningComponentBundle")), ["LightningComponentBundle:card"]);
+  // A static resource may hold any file.
+  assert.ok(!isLocalOnlyFile("staticresources/lib/__tests__/a.js"));
+  assert.ok(md.has("staticresources/lib.resource"));
+});
+
+test(".forceignore patterns: gitignore rules, last match wins", () => {
+  const ig = forceIgnoreMatcher([
+    "# comment", "", "package.xml", "**/jsconfig.json", "**/__tests__/**", "*.dup",
+    "/force-app/main/default/profiles/", "force-app/main/default/classes/Temp*", "!force-app/main/default/classes/TempKeep.cls"
+  ].join("\n"));
+  assert.equal(ig("force-app/main/default/lwc/card/jsconfig.json"), true);
+  assert.equal(ig("force-app/main/default/lwc/card/myjsconfig.json"), false);
+  assert.equal(ig("force-app/main/default/lwc/card/__tests__/card.test.js"), true);
+  assert.equal(ig("package.xml"), true);
+  assert.equal(ig("force-app/main/default/classes/A.cls.dup"), true);
+  assert.equal(ig("force-app/main/default/profiles/Admin.profile-meta.xml"), true);
+  assert.equal(ig("other/force-app/main/default/profiles/Admin.profile-meta.xml"), false);
+  assert.equal(ig("force-app/main/default/classes/TempA.cls"), true);
+  assert.equal(ig("force-app/main/default/classes/TempKeep.cls"), false);
+  assert.equal(ig("force-app/main/default/classes/Invoice.cls"), false);
+  assert.equal(forceIgnoreMatcher("")("anything"), false);
+});
+
+test("sourceToMdapi reports ignored files and object folders it drops", () => {
+  const files = new Map([
+    ["classes/A.cls", textToBytes("public class A {}")],
+    ["classes/A.cls-meta.xml", textToBytes('<?xml version="1.0"?><ApexClass xmlns="http://soap.sforce.com/2006/04/metadata"><apiVersion>68.0</apiVersion></ApexClass>')],
+    ["classes/Skip.cls", textToBytes("public class Skip {}")],
+    ["objects/Invoice__c/unknownThings/x.xml", textToBytes("<x/>")]
+  ]);
+  const md = sourceToMdapi(files, bytesToText, {ignore: p => p.startsWith("classes/Skip")});
+  assert.ok(md.has("classes/A.cls"));
+  assert.ok(!md.has("classes/Skip.cls"));
+  assert.equal(md.ignored, 1);
+  assert.deepEqual(md.skipped, ["objects/Invoice__c/unknownThings/x.xml"]);
+  const comps = componentsFromSource(files, bytesToText);
+  assert.deepEqual(comps.skipped, ["objects/Invoice__c/unknownThings/x.xml"]);
+});
+
+test("release-notes prompt never carries credential-type content", () => {
+  const text = changesForPrompt([
+    {status: "new", type: "NamedCredential", fullName: "Pay", sourceText: "<endpoint>https://secret.example.com</endpoint>"},
+    {status: "new", type: "ApexClass", fullName: "A", sourceText: "public class A {}"}
+  ]);
+  assert.doesNotMatch(text, /secret\.example/);
+  assert.match(text, /NamedCredential Pay\n\(content not sent/);
+  assert.match(text, /public class A/);
 });

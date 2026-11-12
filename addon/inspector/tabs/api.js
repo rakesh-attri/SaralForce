@@ -71,7 +71,17 @@ function ApiTab() {
     setError(null);
   };
 
+  // One request at a time: Enter in the path box, the Send button and
+  // response links all come through here (a ref, since `busy` only updates on
+  // the next render and is not set while the DELETE confirmation is open).
+  const sendingRef = React.useRef(false);
   const send = async (override) => {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    try { await doSend(override); } finally { sendingRef.current = false; }
+  };
+
+  const doSend = async (override) => {
     const req = override || (mode === "soap"
       ? {mode: "soap", method: "POST", path: soapPath, body: envelope}
       : {mode: "rest", method, path: normalizePath(path, apiVersion), body: WRITE_METHODS.has(method) && method !== "DELETE" ? body : null});

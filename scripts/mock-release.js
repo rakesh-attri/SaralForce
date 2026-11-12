@@ -342,6 +342,8 @@ function deployResultXml(d) {
   let details = "";
   if (done && d.compileErrors && d.compileErrors.length) {
     details += d.compileErrors.map(e => `<componentFailures><componentType>${e.type}</componentType><fileName>${e.file}</fileName><fullName>${e.name}</fullName><lineNumber>${e.line}</lineNumber><columnNumber>9</columnNumber><problem>${e.problem}</problem><problemType>Error</problemType></componentFailures>`).join("");
+  } else if (done && d.extraFails && d.extraFails.length) {
+    details += d.extraFails.map(e => `<componentFailures><componentType>${e.type}</componentType><fileName>${e.file}</fileName><fullName>${e.name}</fullName><problem>${e.problem}</problem><problemType>Error</problemType></componentFailures>`).join("");
   } else if (done && d.flowRefFail) {
     details += `<componentFailures><componentType>Flow</componentType><fileName>flows/${d.flowRefFail}.flow</fileName><fullName>${d.flowRefFail}</fullName><problem>insufficient access rights on cross-reference id</problem><problemType>Error</problemType></componentFailures>`;
   } else if (done && failC) {
@@ -354,7 +356,7 @@ function deployResultXml(d) {
       "<codeCoverage><name>InvoiceService</name><numLocations>10</numLocations><numLocationsNotCovered>1</numLocationsNotCovered></codeCoverage><numTestsRun>1</numTestsRun></runTestResult>";
   }
   return env(`<checkDeployStatusResponse><result><checkOnly>${d.checkOnly}</checkOnly><details>${details}</details><done>${done}</done><id>${d.id}</id>` +
-    `<numberComponentErrors>${done && failC ? (d.compileErrors && d.compileErrors.length) || 1 : 0}</numberComponentErrors><numberComponentsDeployed>${done ? total - (failC ? 1 : 0) : Math.floor(total / 2)}</numberComponentsDeployed><numberComponentsTotal>${total}</numberComponentsTotal>` +
+    `<numberComponentErrors>${done && failC ? (d.compileErrors && d.compileErrors.length) || (d.extraFails && d.extraFails.length) || 1 : 0}</numberComponentErrors><numberComponentsDeployed>${done ? total - (failC ? 1 : 0) : Math.floor(total / 2)}</numberComponentsDeployed><numberComponentsTotal>${total}</numberComponentsTotal>` +
     `<numberTestErrors>${done && failT ? 1 : 0}</numberTestErrors><numberTestsCompleted>${done ? tests - (failT ? 1 : 0) : 0}</numberTestsCompleted><numberTestsTotal>${tests}</numberTestsTotal>` +
     `${done ? "" : "<stateDetail>Running tests in UAT…</stateDetail>"}<status>${status}</status><success>${success}</success></result></checkDeployStatusResponse>`);
 }
@@ -421,6 +423,17 @@ export async function releaseSoap(raw, res) {
     const delFlows = delXml ? (parsePackageXml(bytesToText(delXml)).Flow || []) : [];
     d.flowRefFail = delFlows.find(n => n === "Old_Routing" && org.Flow && org.Flow[n]) || "";
     if (d.flowRefFail) d.failComponent = true;
+    // Like a real org: an LWC whose Apex isn't there fails once per reference,
+    // and a site names a sandbox user production doesn't have.
+    d.extraFails = [];
+    const sends = p => [...files.keys()].some(k => k.startsWith(p));
+    if (sends("lwc/invoiceCard/") && !files.has("classes/InvoiceTax.cls") && !(org.ApexClass || {}).InvoiceTax) {
+      for (let i = 0; i < 20; i++) d.extraFails.push({type: "LightningComponentBundle", name: "invoiceCard", file: "lwc/invoiceCard/invoiceCard.js", problem: "Unable to find Apex action class referenced as 'InvoiceTax'."});
+    }
+    if (sends("experiences/Customer_Portal1")) {
+      d.extraFails.push({type: "ExperienceBundle", name: "Customer_Portal1", file: "experiences/Customer_Portal1.site-meta.xml", problem: "In field: siteAdmin - no User named priya@demo.saralforce.dev found"});
+    }
+    if (d.extraFails.length) d.failComponent = true;
     deploys.set(d.id, d);
     lastDeployPaths = [...files.keys()];
     send(env(`<deployResponse><result><done>false</done><id>${d.id}</id><state>Queued</state></result></deployResponse>`));

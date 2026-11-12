@@ -113,6 +113,7 @@ function RecordsGrid({typeName, data, pkg, onTogglePkg, recMember, fmt, onSaved}
     setBusy(true);
     setError(null);
     const failures = [];
+    const saved = {}; // {recordId: {field: value}} that Salesforce accepted
     let ok = 0;
     for (const id of changed) {
       const r = data.records.find(x => x.Id === id);
@@ -124,6 +125,7 @@ function RecordsGrid({typeName, data, pkg, onTogglePkg, recMember, fmt, onSaved}
           }
         }
         await soapUpsert(cmdtRecordXml(typeName, rec, types));
+        saved[id] = {...edits[id]};
         ok++;
       } catch (e) {
         failures.push(`${r.DeveloperName}: ${e.message}`);
@@ -134,7 +136,7 @@ function RecordsGrid({typeName, data, pkg, onTogglePkg, recMember, fmt, onSaved}
     if (ok) {
       setEdits(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => failures.some(f => f.startsWith(data.records.find(x => x.Id === id).DeveloperName + ":")))));
       if (!failures.length) setEditing(false);
-      onSaved(`Saved ${ok} record${ok === 1 ? "" : "s"}.`);
+      onSaved(`Saved ${ok} record${ok === 1 ? "" : "s"}.`, saved);
     }
   };
 
@@ -220,13 +222,47 @@ function CmdtDetail({row, pkg, onTogglePkg}) {
     }
   }, [typeName]);
 
+  const loadSeq = React.useRef(0);
   React.useEffect(() => {
+    loadSeq.current++;
     setData(null);
     setAdding(false);
     setNotice(null);
     setView("records");
     load();
+    return () => { loadSeq.current++; };
   }, [load]);
+
+  // After a save the Metadata API can take a while to show the new values in
+  // SOQL. The saved values stay on screen at once, and the grid is re-read a
+  // few times until Salesforce returns them (the last read always wins), so a
+  // slow org does not look like the save was reverted.
+  const afterSave = (msg, saved) => {
+    setNotice(msg);
+    if (!saved) { setTimeout(load, 1200); return; }
+    const mine = ++loadSeq.current;
+    const same = (a, b) => (a == null ? "" : String(a)) === (b == null ? "" : String(b));
+    setData(d => d && {...d, records: d.records.map(r => (saved[r.Id] ? {...r, ...saved[r.Id]} : r))});
+    const waits = [1200, 2500, 5000, 8000];
+    const attempt = async i => {
+      if (mine !== loadSeq.current) return;
+      try {
+        const {describe, fields} = await cmdtFields(typeName);
+        const records = await cmdtRecords(typeName, fields);
+        if (mine !== loadSeq.current) return;
+        const landed = Object.keys(saved).every(id => {
+          const r = records.find(x => x.Id === id);
+          return r && Object.keys(saved[id]).every(f => same(r[f], saved[id][f]));
+        });
+        if (landed || i === waits.length - 1) { setData({describe, fields, records}); return; }
+      } catch (e) {
+        if (mine !== loadSeq.current) return;
+        if (i === waits.length - 1) { setError(e.message); return; }
+      }
+      setTimeout(() => attempt(i + 1), waits[i + 1]);
+    };
+    setTimeout(() => attempt(0), waits[0]);
+  };
 
   const inPkg = (pkg.CustomObject || []).includes(typeName);
   const recMember = r => `${typeName.replace(/__mdt$/, "")}.${r.NamespacePrefix ? r.NamespacePrefix + "__" : ""}${r.DeveloperName}`;
@@ -276,7 +312,7 @@ function CmdtDetail({row, pkg, onTogglePkg}) {
       : h("div", {className: "insp-meta"}, "No custom fields yet. Add them in Setup.")),
     data && view === "records" && h(RecordsGrid, {
       typeName, data, pkg, onTogglePkg, recMember, fmt,
-      onSaved: msg => { setNotice(msg); setTimeout(load, 1200); }
+      onSaved: afterSave
     }),
     data && h("div", {className: "insp-meta md-cmdt-hint"}, "Custom metadata is deployable configuration: records move with change sets and packages."));
 }

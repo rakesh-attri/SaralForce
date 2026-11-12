@@ -1,6 +1,6 @@
 import {sfConn, apiVersion} from "../../inspector.js";
 import {safeCopyText} from "../../utils.js";
-import {applyDefaultLimit} from "../../core/soql.js";
+import {applyDefaultLimit, formatSoql as formatSoqlText} from "../../core/soql.js";
 import {normalizeLocator, mergeCsvChunks} from "../../core/bulk.js";
 import {confirmDialog} from "../../ui/confirm.js";
 import {isDateOnlyString, looksLikeSfDateTime, parseSfInstant} from "../../sf-time.js";
@@ -56,8 +56,8 @@ function ExportTab() {
   const [csvDateFormat, setCsvDateFormat] = useFfSession("export", "csvDateFormat", "iso");
   const [csvNullValue, setCsvNullValue] = useFfSession("export", "csvNullValue", "");
   const [csvLineEnding, setCsvLineEnding] = useFfSession("export", "csvLineEnding", "\r\n");
-  // CSV only: XLSX cells are written as inline strings, which Excel never
-  // evaluates as formulas, and JSON is not opened in spreadsheets.
+  // CSV only: XLSX cells are written as inline strings or plain numbers, which
+  // Excel never evaluates as formulas, and JSON is not opened in spreadsheets.
   const [csvGuardFormulas, setCsvGuardFormulas] = useFfSession("export", "csvGuardFormulas", true);
 
   // ── Query editor state (center) ─────────────────────────────
@@ -303,26 +303,8 @@ function ExportTab() {
   };
 
   const formatSoql = () => {
-    const src = String(query || "");
-    if (!src.trim()) return;
-    const segs = src.split(/('[^']*')/g);
-    const majors = ["select", "from", "where", "group by", "order by",
-      "having", "limit", "offset"];
-    const minors = ["and", "or", "not", "in", "like", "asc", "desc",
-      "nulls first", "nulls last"];
-    const out = segs.map((seg, i) => {
-      if (i % 2 === 1) return seg;
-      let s = seg.replace(/\s+/g, " ");
-      for (const kw of [...majors, ...minors].sort((a, b) => b.length - a.length)) {
-        const re = new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi");
-        s = s.replace(re, kw.toUpperCase());
-      }
-      for (const kw of majors.slice(1)) {
-        s = s.replace(new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi"), `\n${kw.toUpperCase()}`);
-      }
-      return s;
-    }).join("");
-    setQuery(out.trim());
+    if (!String(query || "").trim()) return;
+    setQuery(formatSoqlText(query));
   };
 
   const clearQuery = () => {
@@ -414,7 +396,8 @@ function ExportTab() {
     const csv = mergeCsvChunks(chunks);
     setBulkJob(prev => prev ? {...prev, state: done.state,
       numberRecordsProcessed: done.numberRecordsProcessed} : prev);
-    const parsed = parseCsvEx(csv, {delimiter: ","});
+    // keepBlankRows: a record whose selected fields are all null is a blank row.
+    const parsed = parseCsvEx(csv, {delimiter: ",", keepBlankRows: true});
     return {rows: parsed.records, total: parsed.records.length, done: true, next: null};
   };
 
@@ -572,9 +555,8 @@ function ExportTab() {
     const base = (objectApi.trim() || "export").replace(/[^A-Za-z0-9_-]/g, "_");
     try {
       if (format === "JSON") {
-        const json = includeHeaders === false ? rows
-          : Object.fromEntries(pv.columns.map(c => [c, rows.map(r => r[c])]));
-        downloadText(`${base}.json`, JSON.stringify(json, null, 2), "application/json;charset=utf-8");
+        // Always an array of row objects ("Include CSV headers" is CSV-only).
+        downloadText(`${base}.json`, JSON.stringify(rows, null, 2), "application/json;charset=utf-8");
       } else if (format === "Excel (.xlsx)") {
         ffDownloadBlob(`${base}.xlsx`,
           toXlsxBlob(base, pv.columns, rows));

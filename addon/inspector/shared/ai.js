@@ -1,4 +1,5 @@
 import {askAi, askAiJson} from "../../core/llm.js";
+import {PROMPT_SENSITIVE_TYPES} from "../../core/deploy.js";
 import {ffDescribeObject, ffGetObjects} from "./describe.js";
 import {pickObjectsForPrompt} from "../../core/soql-complete.js";
 import {normalizeBundleReply, checkLwcBundle, bundleForPrompt, mergeRevision} from "../../core/lwc-ai.js";
@@ -220,6 +221,11 @@ const DRAFT_REVISE_SYSTEM =
   '{"files": {"<path exactly as given>": "<the FULL new content of that file>"}, "explanation": "<one or two plain sentences>"} ' +
   "Include only files you changed. You may add an Apex class as classes/<Name>.cls or a missing css/svg file of the component.";
 
+// Largest input the "return the full file" prompts accept; more is refused
+// rather than cut, because a cut input comes back as if it were the whole file.
+const MAX_DRAFT_CHARS = 60000;
+const MAX_APEX_CHECK_CHARS = 12000;
+
 async function schemaForRequest(object, request) {
   let names = object ? [object] : [];
   if (!names.length) {
@@ -322,6 +328,12 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
     try { schemaParts.push(describeForPrompt(await ffDescribeObject(n))); } catch (e) { /* not an object */ }
   }
   const schema = schemaParts.join("\n\n");
+  // The model is asked for the full new content of each file, so it must see
+  // all of it: a cut-off file would come back cut off and be saved that way.
+  const current = bundleForPrompt(draft.files);
+  if (current.length > MAX_DRAFT_CHARS) {
+    throw new Error(`These files are too large for AI editing (${current.length.toLocaleString()} characters, the limit is ${MAX_DRAFT_CHARS.toLocaleString()}). Edit them by hand.`);
+  }
   let merged = draft;
   let changed = [];
   const parsed = await askAiJson({
@@ -330,7 +342,7 @@ async function reviseDraftFromText(draft, instruction, {error, signal} = {}) {
     user: `Kind: ${draft.kind}\nName: ${draft.name}\nAPI version: ${(draft.form || {}).apiVersion || "latest"}\n` +
       (ask ? `Request: ${ask}\n` : "") + (error ? `Salesforce compile/deploy errors to fix (fix ALL of them):\n${error}\n` : "") +
       (schema ? `\n${schema}\n` : "") +
-      `\nCurrent files:\n${bundleForPrompt(draft.files)}`.slice(0, 60000),
+      `\nCurrent files:\n${current}`,
     validate: o => {
       const files = o && o.files && typeof o.files === "object" ? o.files : null;
       if (!files || !Object.keys(files).length) return "The JSON has no changed files.";
@@ -389,7 +401,10 @@ function explainTestFailure({className, method, message, stackTrace, testSource,
 // (or after Salesforce rejects it). Never executes anything itself.
 // Returns {ok, error, line, explanation, fixedCode}.
 async function apexAiCheck(sourceCode, serverError, {signal} = {}) {
-  const code = String(sourceCode || "").slice(0, 12000);
+  const code = String(sourceCode || "");
+  if (code.length > MAX_APEX_CHECK_CHARS) {
+    throw new Error(`This code is too large for an AI fix (${code.length.toLocaleString()} characters, the limit is ${MAX_APEX_CHECK_CHARS.toLocaleString()}).`);
+  }
   const parsed = await askAiJson({
     feature: "Apex check",
     system: APEX_CHECK_SYSTEM,
@@ -426,14 +441,71 @@ const DEPLOY_FAILURE_SYSTEM =
   "which test to fix and how). Mention missing dependencies to add to the package. Order the fixes so the next validation passes. " +
   "Be concise: numbered list, no greetings.";
 
-// Plain release notes from a compare selection (component names and short diffs only).
+// Chat about a failed validation / deploy in SandShift. The facts below are
+// how Salesforce and SandShift actually behave, so answers about "deploy
+// order" or "a new package" are right for this tool.
+const DEPLOY_CHAT_SYSTEM = [
+  "You are a senior Salesforce release engineer helping someone fix a failed validation or deployment in SandShift (the release tool inside the SaralForce browser extension).",
+  "The first message holds the facts about this deploy and its errors grouped by root cause; later messages are the user's questions. Answer the question asked, concretely, using the component names from the errors.",
+  "",
+  "How deploys work (rely on this; do not contradict it):",
+  "- One package is deployed as one transaction (all or nothing). Salesforce orders the component types inside it itself, so dependencies that are in the SAME package resolve: you do not need a separate package or a manual order for them. The usual fix for a missing dependency is to add it to this package and validate again.",
+  "- A separate, earlier deploy is only needed when: an item fails on its own and blocks the others (fix or deploy it first); an org feature, license or setting must be enabled first; or something must change in the target by hand first (a field type change, deleting or deactivating something). Say which of these applies, if any.",
+  "- Deletes run after the deploy by default; SandShift's “Run deletes” option can run them before (destructiveChangesPre) when an item must be removed before the new version goes in.",
+  "- Items that reference users, queues, groups or records by name (site admin, email senders, assignment rules) need values that exist in the target; sandbox usernames end with the sandbox name, so change them in the source or create them in the target.",
+  "- Apex in production needs tests: with Default or Local tests every class and trigger needs 75% coverage overall; Specified tests needs coverage for each changed class. Validation without tests can't be quick deployed.",
+  "- Named credentials need their external credential in the target or in the same package; principals, secrets and permission set access are set by hand after the deploy (SandShift Manual steps).",
+  "- Apex that uses Page.Name needs that Visualforce page in the target or in the package.",
+  "",
+  "How to act in SandShift (name these steps):",
+  "- Add a missing item: in Compare tick it (or press “＋ Add it to the deploy” on the error card), or in Package use Add by name; then Validate again.",
+  "- If the item doesn't exist in the source org, it has to be created there first, or the component that refers to it removed from the package.",
+  "- A separate first deploy: select only those items, Validate and Deploy, then deploy the rest. Pre-deployment hand steps go in Manual steps.",
+  "",
+  "Be brief and practical: short numbered steps, no greetings, no repeating the error list back. Use **bold** for component names and `code` for file paths or API names. If the facts are not enough to answer, say what to check."
+].join("\n");
+
+function chatDeployFailures({context, history, onChunk, signal}) {
+  const messages = [{role: "system", content: DEPLOY_CHAT_SYSTEM}];
+  history.forEach((m, i) => messages.push(i === 0 && m.role === "user"
+    ? {role: "user", content: `${context}\n\nMy question: ${m.content}`} : {role: m.role, content: m.content}));
+  return askAi({feature: "Deploy failure chat", messages, onChunk, signal});
+}
+
+// Types whose content is credentials or endpoints: only their names go to the AI.
+// Kept as a second guard for text built elsewhere; changesForPrompt already
+// leaves these out.
+const SENSITIVE_TYPES = PROMPT_SENSITIVE_TYPES;
+
+// changesText is core/deploy.js changesForPrompt output: "## STATUS Type Name"
+// headings, each followed by that component's content. Drops the content
+// under headings of sensitive types and keeps the heading.
+function redactSensitiveChanges(changesText) {
+  const out = [];
+  let hidden = false;
+  for (const line of String(changesText || "").split("\n")) {
+    const m = /^## (NEW|CHANGED|DELETED|SAME) (\S+) /.exec(line);
+    if (m) {
+      hidden = SENSITIVE_TYPES.has(m[2]);
+      out.push(line);
+      if (hidden) out.push("(content not sent: this type can hold credentials or endpoints)");
+    } else if (!hidden) out.push(line);
+  }
+  return out.join("\n");
+}
+
+// Plain release notes from a compare selection. What goes to the AI provider
+// is real metadata content, not just names: for each component its name, then
+// the changed lines (up to 15 added and 15 removed) or, when it is new, its
+// first 600 characters. That can include custom metadata records, label text
+// and other configuration. Sensitive types (SENSITIVE_TYPES) send names only.
 function releaseNotesFromChanges(changesText, {source, target, signal} = {}) {
   return askAi({
     feature: "Release notes",
     system: RELEASE_NOTES_SYSTEM,
     user: `Release from ${source || "source org"} to ${target || "target org"}.
 
-${changesText}`,
+${redactSensitiveChanges(changesText)}`,
     signal
   });
 }
@@ -483,4 +555,4 @@ function explainImpact(summary, {signal} = {}) {
   return askAi({feature: "Impact analysis", system: IMPACT_SYSTEM, user: summary, signal});
 }
 
-export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};
+export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, chatDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};

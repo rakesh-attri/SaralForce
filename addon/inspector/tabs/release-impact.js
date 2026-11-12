@@ -21,17 +21,26 @@ async function dependencies(conn, id) {
     queryAll(conn, `SELECT ${fields} FROM MetadataComponentDependency WHERE RefMetadataComponentId = ${q(id)}`, {tooling: true}),
     queryAll(conn, `SELECT ${fields} FROM MetadataComponentDependency WHERE MetadataComponentId = ${q(id)}`, {tooling: true})
   ]);
-  return {usedBy: groupRefs(usedBy, "usedBy"), uses: groupRefs(uses, "uses")};
+  return {usedBy: groupRefs(usedBy, "usedBy"), uses: groupRefs(uses, "uses"), capped: !!usedBy.truncated};
 }
 
 // Classes, triggers and VF pages whose code names the component.
-async function codeSearch(conn, type, fullName, onStatus) {
+// unchecked collects what could not be searched (a failed or capped query),
+// so "nothing found" is never mistaken for "nothing there".
+async function codeSearch(conn, type, fullName, onStatus, unchecked = []) {
   const name = type === "CustomField" ? fullName.split(".")[1] : fullName;
   onStatus("Searching Apex and Visualforce code…");
+  const search = (what, soql) => queryAll(conn, soql, {tooling: true}).then(list => {
+    if (list.truncated) unchecked.push(`Only the first ${list.length.toLocaleString()} ${what} were searched; the org has more.`);
+    return list;
+  }).catch(e => {
+    unchecked.push(`Could not search ${what} (${e.message || e}).`);
+    return [];
+  });
   const [classes, triggers, pages] = await Promise.all([
-    queryAll(conn, "SELECT Id, Name, Body FROM ApexClass WHERE NamespacePrefix = null", {tooling: true}).catch(() => []),
-    queryAll(conn, "SELECT Id, Name, Body FROM ApexTrigger WHERE NamespacePrefix = null", {tooling: true}).catch(() => []),
-    queryAll(conn, "SELECT Id, Name, Markup FROM ApexPage WHERE NamespacePrefix = null", {tooling: true}).catch(() => [])
+    search("Apex classes", "SELECT Id, Name, Body FROM ApexClass WHERE NamespacePrefix = null"),
+    search("Apex triggers", "SELECT Id, Name, Body FROM ApexTrigger WHERE NamespacePrefix = null"),
+    search("Visualforce pages", "SELECT Id, Name, Markup FROM ApexPage WHERE NamespacePrefix = null")
   ]);
   const self = type === "ApexClass" || type === "ApexTrigger" || type === "ApexPage" ? fullName : "";
   const out = [];
@@ -67,10 +76,13 @@ async function dataCount(conn, type, fullName) {
   return null;
 }
 
-async function activeFlows(conn, groups) {
+async function activeFlows(conn, groups, unchecked = []) {
   const flows = (groups.find(g => g.type === "Flow") || {items: []}).items.map(i => i.name);
   if (!flows.length) return [];
-  const rows = await queryAll(conn, `SELECT ApiName, IsActive FROM FlowDefinitionView WHERE ApiName IN (${flows.map(q).join(",")})`).catch(() => []);
+  const rows = await queryAll(conn, `SELECT ApiName, IsActive FROM FlowDefinitionView WHERE ApiName IN (${flows.map(q).join(",")})`).catch(e => {
+    unchecked.push(`Could not check which of the ${flows.length} flow(s) using it are active (${e.message || e}).`);
+    return [];
+  });
   return rows.filter(r => r.IsActive).map(r => r.ApiName);
 }
 
@@ -78,24 +90,28 @@ export async function analyzeImpact(org, type, fullName, onStatus) {
   onStatus(`Finding ${typeLabel(type)} ${fullName}…`);
   const listed = await listComponents(org.conn, [type]);
   const row = listed.get(compKey(type, fullName));
+  if (!row && (listed.skipped || []).includes(type)) throw new Error(`Salesforce could not list ${typeLabel(type)} in ${org.name}, so ${fullName} could not be checked.`);
   if (!row || !row.id) throw new Error(`${typeLabel(type)} ${fullName} was not found in ${org.name} (or it is standard or from a package).`);
   onStatus("Reading the dependency data…");
   let deps = {usedBy: [], uses: []};
   let depNote = "";
+  const unchecked = [];
   try {
     deps = await dependencies(org.conn, row.id);
+    if (deps.capped) unchecked.push("The dependency data lists more than 2,000 references; only the first 2,000 are shown.");
   } catch (e) {
     depNote = "Salesforce's dependency data is not available here (" + e.message + "). Only the code search and data check were used.";
+    unchecked.push("The dependency data could not be read, so components that use it may be missing.");
   }
   const code = ["CustomField", "CustomObject", "ApexClass", "CustomLabel"].includes(type)
-    ? (await codeSearch(org.conn, type, fullName, onStatus)).filter(c => !deps.usedBy.some(g => g.type === c.type && g.items.some(i => i.name === c.name)))
+    ? (await codeSearch(org.conn, type, fullName, onStatus, unchecked)).filter(c => !deps.usedBy.some(g => g.type === c.type && g.items.some(i => i.name === c.name)))
     : [];
   onStatus("Checking data and active flows…");
   const count = await dataCount(org.conn, type, fullName);
-  const flows = await activeFlows(org.conn, deps.usedBy);
+  const flows = await activeFlows(org.conn, deps.usedBy, unchecked);
   const verdict = impactVerdict({usedBy: deps.usedBy, codeMatches: code, dataCount: count, activeFlows: flows,
-    dataUnknown: count == null && (type === "CustomField" || type === "CustomObject")});
-  return {org, type, fullName, id: row.id, ...deps, codeMatches: code, dataCount: count, activeFlows: flows, verdict, depNote};
+    dataUnknown: count == null && (type === "CustomField" || type === "CustomObject"), unchecked});
+  return {org, type, fullName, id: row.id, ...deps, codeMatches: code, dataCount: count, activeFlows: flows, verdict, depNote, unchecked};
 }
 
 function RefGroups({groups, empty}) {

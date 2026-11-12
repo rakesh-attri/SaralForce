@@ -242,6 +242,27 @@ async function appTabsSetTabVisibility(metadataType, fullName, tabApiName, visib
   await appTabsDelay(600);
 }
 
+function appTabsDecodeName(s) {
+  try { return decodeURIComponent(String(s || "")); }
+  catch (e) { return String(s || ""); }
+}
+
+// Profile label → metadata fullName from the listMetadata names, or null.
+// fullNames arrive URL-encoded ("Sales%3A EMEA"), so both sides are decoded
+// and compared exactly; a punctuation-insensitive match counts only when it
+// is the single candidate. Never a prefix match: "Sales" must not resolve to
+// "Sales: EMEA" and send tab visibility to the wrong profile.
+function appTabsMatchProfile(names, label) {
+  const want = appTabsDecodeName(label).trim();
+  if (!want) return null;
+  const exact = names.find(n => appTabsDecodeName(n).trim() === want);
+  if (exact) return exact;
+  const targets = [appTabsNormName(want)];
+  if (targets.includes("systemadministrator")) targets.push("admin");
+  const loose = names.filter(n => targets.includes(appTabsNormName(appTabsDecodeName(n))));
+  return loose.length === 1 ? loose[0] : null;
+}
+
 // Profile label → metadata fullName ("System Administrator" → "Admin").
 async function appTabsResolveProfileFullName(label) {
   let names = [];
@@ -250,13 +271,12 @@ async function appTabsResolveProfileFullName(label) {
   } catch (e) {
     console.warn("[SaralForce] AppTabManager profile listMetadata failed:", e.message);
   }
-  const targets = [appTabsNormName(label)];
-  if (targets.includes("systemadministrator")) targets.push("admin");
-  return names.find(n => targets.includes(appTabsNormName(n))) ||
-    names.find(n => {
-      const nn = appTabsNormName(n);
-      return nn && targets.some(t => nn.startsWith(t) || t.startsWith(nn));
-    }) || label;
+  // Listing unavailable: the label is the best guess (Salesforce rejects it
+  // if no such profile exists).
+  if (!names.length) return label;
+  const hit = appTabsMatchProfile(names, label);
+  if (!hit) throw new Error(`Profile "${label}" was not found in this org's profile metadata, so nothing was written.`);
+  return hit;
 }
 
 // Set tabVisibilities DefaultOn for the running user's profile so the tab
@@ -831,15 +851,9 @@ function AppTabManager() {
         let psetNames = [];
         try { psetNames = await appTabsListMetadataFullNames("PermissionSet"); } catch (e) { /* keep empty */ }
         if (cancelled) return;
-        const matchProfile = (label) => {
-          const targets = [appTabsNormName(label)];
-          if (targets.includes("systemadministrator")) targets.push("admin");
-          return profileNames.find(n => targets.includes(appTabsNormName(n))) ||
-            profileNames.find(n => {
-              const nn = appTabsNormName(n);
-              return nn && targets.some(t => nn.startsWith(t) || t.startsWith(nn));
-            }) || label;
-        };
+        // No fuzzy fallback: an unmatched profile keeps its own label, which
+        // Salesforce rejects if it is not a real profile name.
+        const matchProfile = (label) => appTabsMatchProfile(profileNames, label) || label;
         setProfileList((pres.records || []).map(r => ({
           name: r.Name || r.Id,
           fullName: matchProfile(r.Name || "")
@@ -968,7 +982,9 @@ function AppTabManager() {
         setCurrentTabs(existing);
         return;
       }
-      const desired = existing.length ? [...existing, tab] : ["standard-home", tab];
+      // An app with no tabs gets Home first; the user is told (see status).
+      const addedHome = !existing.length && tab !== "standard-home";
+      const desired = addedHome ? ["standard-home", tab] : [...existing, tab];
       const {writeName, tabs} = await appTabsWriteTabList(fullName, desired, {
         verifyTab: tab, action: "add", recordsEl: records
       });
@@ -987,7 +1003,7 @@ function AppTabManager() {
           visNote = ` Could not make it visible to you (${ve.message}) — use section 3.`;
         }
       }
-      setStatus(`Added "${appTabsLabelFor(tab, customTabs)}" to ${(apps.find(a => a.fullName === writeName) || {}).label || writeName} — confirmed in Salesforce.${visNote} Not in the nav bar yet? Switch apps once or refresh Lightning.`);
+      setStatus(`Added "${appTabsLabelFor(tab, customTabs)}" to ${(apps.find(a => a.fullName === writeName) || {}).label || writeName} — confirmed in Salesforce.${addedHome ? " The app had no tabs, so Home was added in front of it (remove it from the list below if you do not want it)." : ""}${visNote} Not in the nav bar yet? Switch apps once or refresh Lightning.`);
       setTabName("");
       if (prefill && prefill.tabApiName === tab) { setPrefill(null); setPrefillCheck(null); }
     } catch (e) {
@@ -1093,7 +1109,17 @@ function AppTabManager() {
     setStatus(null);
     setMoveBusy(idx);
     try {
-      const desired = [...currentTabs];
+      // Re-read first, as add and remove do: writing the list shown here would
+      // silently undo tabs changed in Setup or by another admin since load.
+      const records = await appTabsReadRecords(sel);
+      if (!records) throw new Error(`Could not read CustomApplication metadata for "${sel}"`);
+      const live = appTabsOfRecords(records);
+      if (live.length !== currentTabs.length || live.some((t, i) => t !== currentTabs[i])) {
+        setCurrentTabs(live);
+        setStatus("The app's tabs changed in Salesforce since this list was loaded — list refreshed, nothing was moved. Move the tab again.");
+        return;
+      }
+      const desired = [...live];
       [desired[idx], desired[target]] = [desired[target], desired[idx]];
       const {writeName, tabs} = await appTabsWriteTabList(sel, desired, {action: "reorder"});
       setCurrentTabs(tabs);
@@ -1696,9 +1722,11 @@ async function addTabToApp(fullName, tab) {
   if (!records) throw new Error(`Could not read app "${fullName}"`);
   const existing = appTabsOfRecords(records);
   if (existing.some(t => t.toLowerCase() === String(tab).toLowerCase())) return {already: true, tabs: existing};
-  const desired = existing.length ? [...existing, tab] : ["standard-home", tab];
+  const addedHome = !existing.length && tab !== "standard-home";
+  const desired = addedHome ? ["standard-home", tab] : [...existing, tab];
   const {writeName, tabs} = await appTabsWriteTabList(fullName, desired, {verifyTab: tab, action: "add", recordsEl: records});
-  return {already: false, writeName, tabs};
+  // addedHome: the app was empty, so Home was written in front of the tab.
+  return {already: false, writeName, tabs, addedHome};
 }
 
 export {ffHasAppTabPrefill, AppTabManager, appTabsLoadApps, appTabsForApp, addTabToApp, appTabsResaveTab, appTabsTabEditUrl};

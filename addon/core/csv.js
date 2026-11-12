@@ -4,7 +4,9 @@
 // Parses delimited text with quoted values, escaped quotes ("") and
 // embedded delimiters/newlines. Returns {headers, records, duplicates}, or
 // {headers: [], records: [], parseError} when a quoted value is never closed.
-// Blank rows are skipped; headers are trimmed.
+// Blank rows are skipped unless opts.keepBlankRows is set (Bulk query results,
+// where a record whose selected fields are all null is a blank row); headers
+// are trimmed.
 export function parseCsv(text, opts) {
   const o = opts || {};
   const delim = o.delimiter || ",";
@@ -12,6 +14,7 @@ export function parseCsv(text, opts) {
   let row = [];
   let field = "";
   let inQuotes = false;
+  let quoted = false; // the current row has a quoted value (even an empty "")
   const s = String(text || "").replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
@@ -22,6 +25,7 @@ export function parseCsv(text, opts) {
       } else field += c;
     } else if (c === '"') {
       inQuotes = true;
+      quoted = true;
     } else if (c === delim) {
       row.push(field);
       field = "";
@@ -30,12 +34,13 @@ export function parseCsv(text, opts) {
       rows.push(row);
       row = [];
       field = "";
+      quoted = false;
     } else field += c;
   }
   if (inQuotes) {
     return {headers: [], records: [], duplicates: [], parseError: "CSV parsing error: a quoted value is never closed (missing \")."};
   }
-  if (field.length || row.length) {
+  if (field.length || row.length || quoted) {
     row.push(field);
     rows.push(row);
   }
@@ -55,7 +60,7 @@ export function parseCsv(text, opts) {
   const records = [];
   for (let i = noHeaders ? 0 : 1; i < rows.length; i++) {
     const r = rows[i];
-    if (r.every(c => String(c || "").trim() === "")) continue;
+    if (!o.keepBlankRows && r.every(c => String(c || "").trim() === "")) continue;
     const obj = {};
     headers.forEach((hName, idx) => { obj[hName] = r[idx] ?? ""; });
     records.push(obj);
@@ -63,7 +68,22 @@ export function parseCsv(text, opts) {
   return {headers, records, duplicates};
 }
 
-const FORMULA_START = /^[=+\-@\t\r]/;
+// Decodes the bytes of an uploaded CSV. UTF-8 is tried first (strictly);
+// bytes that are not valid UTF-8 are read as Windows-1252, which is what
+// Excel's plain "CSV" save produces. A UTF-16 byte-order mark (Excel's
+// "Unicode Text") is honoured. Returns {text, encoding}.
+export function decodeCsvBytes(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  if (bytes[0] === 0xFF && bytes[1] === 0xFE) return {text: new TextDecoder("utf-16le").decode(bytes), encoding: "UTF-16"};
+  if (bytes[0] === 0xFE && bytes[1] === 0xFF) return {text: new TextDecoder("utf-16be").decode(bytes), encoding: "UTF-16"};
+  try {
+    return {text: new TextDecoder("utf-8", {fatal: true}).decode(bytes), encoding: "UTF-8"};
+  } catch (e) {
+    return {text: new TextDecoder("windows-1252").decode(bytes), encoding: "Windows-1252"};
+  }
+}
+
+const FORMULA_START =/^[=+\-@\t\r]/;
 const PLAIN_NUMBER = /^[+-]?(\d+([.,]\d+)*|\.\d+)([eE][+-]?\d+)?%?$/;
 
 // Spreadsheet apps run cells starting with = + - @ as formulas, so exported

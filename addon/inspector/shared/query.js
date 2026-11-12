@@ -50,10 +50,14 @@ async function runSoqlMore(nextUrl) {
   return {records, truncated: !!after, nextUrl: after};
 }
 
-// Every record of a query (up to the row cap), standard or Tooling API.
+// Every record of a query, standard or Tooling API, up to the row cap
+// (FETCH_ROW_CAP). Returns the array of records; when the cap cut the result
+// short the array carries `truncated === true` (false otherwise), so callers
+// that need a complete result can check `rows.truncated`.
 async function queryAll(soql, {tooling = false} = {}) {
   const base = tooling ? "tooling/query/" : "query/";
-  const {records} = await fetchPages(`/services/data/v${apiVersion}/${base}?q=` + encodeURIComponent(soql));
+  const {records, nextUrl} = await fetchPages(`/services/data/v${apiVersion}/${base}?q=` + encodeURIComponent(soql));
+  records.truncated = !!nextUrl;
   return records;
 }
 

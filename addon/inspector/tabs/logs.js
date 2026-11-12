@@ -14,6 +14,7 @@ import {AnalysisReport} from "../shared/analysis-report.js";
 import {useFfSession} from "../shared/session-state.js";
 import {appTabsResolveCurrentUserId, usersEnsureDebugLevel, parseApexLog} from "../shared/apex-debug.js";
 import {LogProfileView} from "../shared/log-profile-ui.js";
+import {isLogTruncated} from "../../core/apex-anon.js";
 
 const h = React.createElement;
 
@@ -108,12 +109,16 @@ async function logsDeleteTraceFlag(id) {
 const LOGS_PAGE = 30;
 const LOGS_MAX = 300;
 const LOGS_SEARCH_CAP = 60;
+// Parsed lines the open-log table renders; the rest stay in Raw log / Download.
+const LOGS_VIEW_ROWS = 2000;
+// Salesforce rejects a trace flag that runs longer than 24 hours.
+const LOGS_FLAG_MAX_MS = 24 * 60 * 60000;
 
 async function logsQueryApexLogs({startMs, endMs, userId, limitN, beforeMs}) {
   const n = limitN || LOGS_PAGE;
   const where = `StartTime >= ${new Date(startMs).toISOString()} ` +
     `AND StartTime <= ${new Date(endMs).toISOString()}` +
-    (beforeMs != null ? ` AND StartTime < ${new Date(beforeMs).toISOString()}` : "") +
+    (beforeMs != null ? ` AND StartTime <= ${new Date(beforeMs).toISOString()}` : "") +
     (userId ? ` AND LogUserId = '${userId}'` : "");
   const full = `SELECT Id, LogUserId, LogUser.Name, Request, Application, Operation, ` +
     `Status, DurationMilliseconds, LogLength, StartTime FROM ApexLog ` +
@@ -355,6 +360,11 @@ function LogsTab() {
     const now = Date.now();
     const sClamped = Math.min(s, now);
     if (e <= sClamped) { setFormErr("End must be in the future."); return; }
+    if (e - sClamped > LOGS_FLAG_MAX_MS) {
+      setFormErr("A trace flag can run for at most 24 hours. Move End to within 24 hours of Start" +
+        (s < now ? " (a Start in the past counts from now)." : "."));
+      return;
+    }
     const logType = entityType === "User" ? "USER_DEBUG" : "CLASS_TRACING";
     setCreating(true);
     try {
@@ -385,7 +395,9 @@ function LogsTab() {
       await loadFlags(entity.id);
     } catch (err) {
       const msg = String(err.message || err);
-      setFormErr(/FIELD_INTEGRITY|overlap|already being traced/i.test(msg)
+      // FIELD_INTEGRITY_EXCEPTION covers several rules (overlap, window too
+      // long, bad dates): only call it an overlap when Salesforce says so.
+      setFormErr(/overlap|already being traced/i.test(msg)
         ? "That time window overlaps an existing trace flag for this entity. " +
           "Delete the old flag in the list below first, or use the existing one."
         : msg);
@@ -503,7 +515,9 @@ function LogsTab() {
     }
   };
 
-  // Keyset paging: StartTime < oldest loaded row, dedupe by Id.
+  // Keyset paging: StartTime <= oldest loaded row, dedupe by Id. The page is
+  // widened by the rows already loaded at that boundary time, so logs that
+  // share the boundary second are not skipped.
   // Pages inside the SAME window the list was loaded with (`win`).
   const loadMore = async () => {
     if (!logs.length) return;
@@ -516,8 +530,10 @@ function LogsTab() {
         return isNaN(t) ? min : Math.min(min, t);
       }, Infinity);
       if (!isFinite(oldest)) throw new Error("Could not read the last log's timestamp");
+      const atBoundary = logs.filter(lg => Date.parse(lg.StartTime) === oldest).length;
+      const limitN = LOGS_PAGE + atBoundary;
       const page = await logsQueryApexLogs({
-        startMs: w.startMs, endMs: w.endMs, userId: w.userId, limitN: LOGS_PAGE, beforeMs: oldest
+        startMs: w.startMs, endMs: w.endMs, userId: w.userId, limitN, beforeMs: oldest
       });
       const seen = new Set(logs.map(l => l.Id));
       const fresh = page.records.filter(r => !seen.has(r.Id));
@@ -529,7 +545,7 @@ function LogsTab() {
         setLogsNote("No newer page could be read — narrow the time window to see more.");
         return;
       }
-      setHasMore(page.records.length >= LOGS_PAGE && total < LOGS_MAX);
+      setHasMore(page.records.length >= limitN && total < LOGS_MAX);
       if (total >= LOGS_MAX) {
         setLogsNote(`Stopped at ${LOGS_MAX} logs (page cap) — narrow the time window to see more.`);
       } else if (!page.records.length) {
@@ -558,13 +574,16 @@ function LogsTab() {
     try {
       const list = logs.slice(0, LOGS_SEARCH_CAP);
       const next = {...bodies};
+      // A failed fetch is never cached as an empty body: View / Download /
+      // the next search retry it, and the user is told it was not searched.
+      const failed = [];
       for (let i = 0; i < list.length; i += 4) {
         if (signal.aborted) return;
         const chunk = list.slice(i, i + 4);
         await Promise.all(chunk.map(async lg => {
           if (next[lg.Id] != null) return;
           try { next[lg.Id] = await logsFetchBody(lg.Id); }
-          catch (e) { next[lg.Id] = ""; }
+          catch (e) { failed.push(lg.Id); }
         }));
         if (signal.aborted) return;
         setBodies({...next});
@@ -572,6 +591,10 @@ function LogsTab() {
       setBodies(next);
       const low = term.toLowerCase();
       setMatched(list.filter(lg => String(next[lg.Id] || "").toLowerCase().includes(low)).map(lg => lg.Id));
+      if (failed.length) {
+        setLogsErr(`${failed.length} log(s) could not be read and were not searched ` +
+          `(${failed.slice(0, 3).map(id => String(id).slice(-8)).join(", ")}${failed.length > 3 ? "…" : ""}). Search again to retry.`);
+      }
     } catch (err) {
       if (!signal.aborted) setLogsErr(err.message);
     } finally {
@@ -741,6 +764,30 @@ function LogsTab() {
   const matchedCount = matched ? matched.filter(id => logs.some(l => l.Id === id)).length : 0;
   const selAnalysis = selected ? analyses[selected.Id] : null;
   const selChat = selected ? (chats[selected.Id] || []) : [];
+  // Only the first LOGS_SEARCH_CAP logs are searched; the rest are neither
+  // matches nor non-matches, so they are not dimmed.
+  const searchedIds = matched ? new Set(logs.slice(0, LOGS_SEARCH_CAP).map(l => l.Id)) : null;
+  const searchPartial = logs.length > LOGS_SEARCH_CAP;
+  const delAllUsers = [...new Set(logs.map(l => logsUserName(l) || "unknown user"))];
+
+  // Open-log view: parse and filter once per log / filter change, not on
+  // every render (typing in search or chat re-renders the whole tab).
+  const openText = openLog ? openLog.text : null;
+  const openRows = React.useMemo(() => (openText != null ? parseApexLog(openText) : []), [openText]);
+  const openEventCounts = React.useMemo(() => {
+    const counts = new Map();
+    for (const r of openRows) if (r.event) counts.set(r.event, (counts.get(r.event) || 0) + 1);
+    return counts;
+  }, [openRows]);
+  const openEvents = React.useMemo(() => [...openEventCounts.keys()].sort(), [openEventCounts]);
+  const openShown = React.useMemo(() => {
+    const f = logFilter.trim().toLowerCase();
+    return openRows.filter(r =>
+      (!debugOnly || r.event === "USER_DEBUG") &&
+      (!f || `${r.ts} ${r.event} ${r.details}`.toLowerCase().includes(f)))
+      .map(r => ({Timestamp: r.ts, Event: r.event, Details: r.details}));
+  }, [openRows, logFilter, debugOnly]);
+  const openTruncated = React.useMemo(() => isLogTruncated(openText), [openText]);
 
   return h("div", null,
     h("div", {className: "insp-kv"},
@@ -857,13 +904,16 @@ function LogsTab() {
           h("span", {className: "insp-meta"},
             logs.length
               ? ` (${logs.length} loaded${hasMore ? "+" : ""}` +
-                `${matched ? ` · ${matchedCount} matched` : ""})`
+                `${matched ? ` · ${matchedCount} matched` +
+                  (searchPartial ? ` in the first ${LOGS_SEARCH_CAP} logs, the rest were not searched` : "") : ""})`
               : "")
         ),
         h("input", {
           className: "logs-search",
           value: search,
-          placeholder: "Search string across all loaded debug logs…",
+          placeholder: searchPartial
+            ? `Search string across the first ${LOGS_SEARCH_CAP} loaded debug logs…`
+            : "Search string across all loaded debug logs…",
           onChange: e => {
             setSearch(e.target.value);
             if (matched) setMatched(null);
@@ -887,7 +937,9 @@ function LogsTab() {
         }, delAllOpen ? "Cancel" : "Delete All Logs")
       ),
       delAllOpen && h("div", {className: "logs-confirm"},
-        h("span", null, `Type DELETE to remove all ${logs.length} loaded log(s) from this org:`),
+        h("span", null, `Type DELETE to remove all ${logs.length} loaded log(s) from ` +
+          `${delAllUsers.length} user(s) (${delAllUsers.slice(0, 3).join(", ")}` +
+          `${delAllUsers.length > 3 ? ` and ${delAllUsers.length - 3} more` : ""}) from this org:`),
         h("input", {
           value: delAllText,
           placeholder: "DELETE",
@@ -914,7 +966,7 @@ function LogsTab() {
         h("div", {className: "logs-list"},
           logs.map(lg => {
             const hit = matchedSet ? matchedSet.has(lg.Id) : null;
-            const dim = matchedSet && !hit;
+            const dim = matchedSet && !hit && searchedIds.has(lg.Id);
             const kind = logsStatusKind(lg.Status);
             const unit = bodies[lg.Id] != null ? logsHeadUnit(bodies[lg.Id]) : null;
             const a = analyses[lg.Id];
@@ -1064,12 +1116,9 @@ function LogsTab() {
         )
       ),
       openLog && (() => {
-        const allRows = parseApexLog(openLog.text);
-        const events = [...new Set(allRows.map(r => r.event).filter(Boolean))].sort();
-        const f = logFilter.trim().toLowerCase();
-        const shown = allRows.filter(r =>
-          (!debugOnly || r.event === "USER_DEBUG") &&
-          (!f || `${r.ts} ${r.event} ${r.details}`.toLowerCase().includes(f)));
+        const allRows = openRows;
+        const events = openEvents;
+        const shown = openShown;
         return h("div", {ref: logDataRef, style: {marginTop: "12px"}},
           h("div", {className: "insp-toolbar insp-toolbar-wrap"},
             h("span", {className: "insp-meta"},
@@ -1102,7 +1151,7 @@ function LogsTab() {
                 h("option", {value: ""}, `All events (${events.length})`),
                 events.map(ev =>
                   h("option", {key: ev, value: ev},
-                    `${ev} (${allRows.filter(r => r.event === ev).length})`))
+                    `${ev} (${openEventCounts.get(ev)})`))
               )
             ),
             logView === "lines" && h("label", {className: "insp-field insp-field-grow"},
@@ -1123,10 +1172,16 @@ function LogsTab() {
               onClick: () => setOpenLog(null)
             }, "Close")
           ),
+          openTruncated && h("div", {className: "insp-warn"},
+            "Salesforce cut this log off at its size limit (MAXIMUM DEBUG LOG SIZE REACHED): the end of " +
+            "the run is missing. Lower the debug level on the trace flag and reproduce it to see the rest."),
+          logView === "lines" && shown.length > LOGS_VIEW_ROWS && h("div", {className: "insp-warn"},
+            `Showing only the first ${LOGS_VIEW_ROWS.toLocaleString()} of ${shown.length.toLocaleString()} lines. ` +
+            "Use Debug Only, Event or Filter to narrow it, or open Raw log / Download for the whole log."),
           logView === "profile" ? h(LogProfileView, {text: openLog.text}) : h(ResultTable, {
             columns: ["Timestamp", "Event", "Details"],
-            rows: shown.map(r => ({Timestamp: r.ts, Event: r.event, Details: r.details})),
-            maxRows: 2000,
+            rows: shown,
+            maxRows: LOGS_VIEW_ROWS,
             cellFmt: {
               Event: v => h("span", {className: "ff-log-ev", title: String(v)}, String(v)),
               Details: v => h("span", {className: "ff-log-det", title: String(v)}, String(v))

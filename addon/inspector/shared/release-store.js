@@ -166,9 +166,13 @@ export async function getSession(id) {
   return row ? row.value : null;
 }
 
-// Old page loads' state is useless: keep only the newest few.
+// Old page loads' state is useless: keep only the newest few. A page load
+// can have several records ("id" and "id#compare"); they go together.
 export async function pruneSessions(keep = 3) {
   const all = await tx("session", "readonly", st => st.getAll());
-  const old = (all || []).sort((a, b) => b.at - a.at).slice(keep);
-  for (const r of old) await tx("session", "readwrite", st => st.delete(r.id));
+  const base = id => String(id).split("#")[0];
+  const newest = new Map();
+  for (const r of all || []) newest.set(base(r.id), Math.max(newest.get(base(r.id)) || 0, r.at));
+  const keepIds = new Set([...newest.entries()].sort((a, b) => b[1] - a[1]).slice(0, keep).map(([id]) => id));
+  for (const r of all || []) if (!keepIds.has(base(r.id))) await tx("session", "readwrite", st => st.delete(r.id));
 }
