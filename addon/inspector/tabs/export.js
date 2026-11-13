@@ -14,6 +14,7 @@ import {ResultTable} from "../shared/result-table.js";
 import {ffLoadJson, ffSaveJson, useFfSession} from "../shared/session-state.js";
 import {ffGetObjects, ffDescribeObject} from "../shared/describe.js";
 import {soqlHighlight} from "../shared/highlight.js";
+import {EmptyState} from "../shared/ui.js";
 
 const h = React.createElement;
 
@@ -947,8 +948,8 @@ function ExportTab() {
               onClick: loadMore
             }, loading ? "Loading…" : "Load more from server"))
         ),
-        !preview && !error && h("div", {className: "insp-empty"},
-          "Run a preview to see real records here.")
+        !preview && !error && h(EmptyState, {art: "table", compact: true, title: "No preview yet",
+          text: "Run a preview to see real records here before you export."})
       ),
 
       // ── Right: Advanced options ────────────────────────────

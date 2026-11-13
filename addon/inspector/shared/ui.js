@@ -1,4 +1,5 @@
 import {friendlyError} from "../../core/friendly-error.js";
+import {emptyArtSvg} from "./empty-art.js";
 
 const h = React.createElement;
 
@@ -36,4 +37,15 @@ function FriendlyError({error, className = ""}) {
       h("code", null, e.detail)) : h("div", {className: "fe-hint"}, e.detail)));
 }
 
-export {sadTypeGlyph, sadInfoCell, FFBadge, FriendlyError};
+// A blank pane with a small illustration, a title and what to do next.
+// The SVG is a fixed string from empty-art.js, never user text.
+function EmptyState({art = "table", title, text, children, compact = false, className = ""}) {
+  return h("div", {className: "empty-state" + (compact ? " compact" : "") + (className ? " " + className : "")},
+    h("svg", {className: "empty-art", viewBox: "0 0 160 120", width: compact ? 112 : 150, height: compact ? 84 : 112,
+      role: "img", "aria-hidden": "true", focusable: "false", dangerouslySetInnerHTML: {__html: emptyArtSvg(art)}}),
+    title && h("div", {className: "empty-title"}, title),
+    text && h("div", {className: "empty-text"}, text),
+    children);
+}
+
+export {sadTypeGlyph, sadInfoCell, FFBadge, FriendlyError, EmptyState};

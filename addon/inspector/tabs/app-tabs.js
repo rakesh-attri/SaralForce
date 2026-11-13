@@ -6,6 +6,7 @@ import {appTabsResolveCurrentUserId} from "../shared/apex-debug.js";
 import {SearchSelect} from "../shared/combo.js";
 import {readTabAccess, ensureTabVisibleForUser} from "../shared/tab-access.js";
 import {explainTabAccess, tabAccessReport} from "../../core/tab-access.js";
+import {EmptyState} from "../shared/ui.js";
 
 const h = React.createElement;
 
@@ -1440,7 +1441,7 @@ function AppTabManager() {
           "aria-label": "Filter tabs on this app",
           onChange: e => setListQuery(e.target.value)
         })),
-      !sel ? h("div", {className: "insp-empty"}, "Choose an app above.")
+      !sel ? h(EmptyState, {art: "apps", compact: true, title: "Choose an app", text: "Pick an app above to see and change its tabs."})
       : currentLoading && !currentTabs ? h("div", {className: "insp-meta"}, "Reading the app…")
       : currentTabs && currentTabs.length === 0 ? h("div", {className: "insp-empty"}, "No tabs on this app yet — add one above.")
       : currentTabs && tableRows.length === 0 ? h("div", {className: "insp-empty"}, `No tabs match "${listQuery}".`)

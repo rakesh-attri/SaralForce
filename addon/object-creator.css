@@ -13626,3 +13626,54 @@ html[data-theme="dark"] .rel-paste summary {
 .rel-err-table .rel-err-cat {
   margin-right: 4px;
 }
+
+/* Empty panes: small original illustration, title, next step. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: 22px 16px 26px;
+}
+
+.empty-state.compact {
+  padding: 12px 12px 16px;
+}
+
+.empty-art {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.empty-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #172b4d;
+}
+
+.empty-state.compact .empty-title {
+  font-size: 13.5px;
+}
+
+.empty-text {
+  max-width: 420px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #5c6b82;
+}
+
+html.dark .empty-title,
+html[data-theme="dark"] .empty-title {
+  color: #e8ebf2;
+}
+
+html.dark .empty-text,
+html[data-theme="dark"] .empty-text {
+  color: #b4bccb;
+}
+
+html.dark .empty-art,
+html[data-theme="dark"] .empty-art {
+  opacity: 0.85;
+}

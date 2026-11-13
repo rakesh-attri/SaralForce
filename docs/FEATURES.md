@@ -45,6 +45,7 @@ what you can **change**, how to do it, and where the limits are.
 | **Guided tours** | Welcome tour on first open, a one-tip intro the first time you open each tool, an Object Builder tour, a Settings tour after install, and a "What's new" card after each update. Replay any time from **?**. |
 | **Remembers your place** | The last tool, your queries, filters and results are kept when you close and reopen the panel. |
 | **Messages come to you** | When an action finishes with a success, warning or error message (e.g. *trace flag created*, an import error), the panel scrolls to it and flashes it once. |
+| **Empty panes** | Blank areas (Users before you pick a user, Access Compare and Risky access, Approvals with nothing pending, Run-Apex before a run, API Explorer before you send a request, Logs before you load any and its AI pane, the Export preview, App Tab Manager before you pick an app) show a small original illustration with what to do next. |
 | **Theme** | Follows your device's light/dark setting by default; the header button overrides it. |
 
 ---

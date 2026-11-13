@@ -15,6 +15,7 @@ import {useFfSession} from "../shared/session-state.js";
 import {appTabsResolveCurrentUserId, usersEnsureDebugLevel, parseApexLog} from "../shared/apex-debug.js";
 import {LogProfileView} from "../shared/log-profile-ui.js";
 import {isLogTruncated} from "../../core/apex-anon.js";
+import {EmptyState} from "../shared/ui.js";
 
 const h = React.createElement;
 
@@ -960,8 +961,8 @@ function LogsTab() {
         `Fetching log bodies… (up to ${LOGS_SEARCH_CAP} logs)`),
       logsBusy && h("div", {className: "insp-meta"}, "Querying ApexLog…"),
       !logsBusy && !logs.length && !logsErr && !logsNote &&
-        h("div", {className: "insp-empty"},
-          "No logs loaded yet — set a time window above and click Load logs."),
+        h(EmptyState, {art: "logs", title: "No logs loaded yet",
+          text: "Set a trace flag above if you need new logs, then press Load logs. Pick a log to read it, search it or ask the AI about it."}),
       logs.length > 0 && h("div", {className: "logs-grid"},
         h("div", {className: "logs-list"},
           logs.map(lg => {
@@ -1045,8 +1046,8 @@ function LogsTab() {
           )
         ),
         h("div", {className: "logs-ai", ref: aiRef},
-          !selected && h("div", {className: "insp-empty"},
-            "Select a log on the left → ⚡ Analyze, or ask a question about it."),
+          !selected && h(EmptyState, {art: "log", compact: true, title: "Pick a log",
+            text: "Select a log on the left, then ⚡ Analyze it or ask a question about it."}),
           selected && h("div", null,
             h("div", {className: "logs-ai-title"},
               "🤖 SaralAI · ",

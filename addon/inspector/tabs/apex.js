@@ -9,6 +9,7 @@ import {ffLoadJson, ffSaveJson, useFfSession} from "../shared/session-state.js";
 import {Celebrate} from "../shared/celebrate.js";
 import {apexHighlight} from "../shared/highlight.js";
 import {appTabsResolveCurrentUserId, parseApexLog} from "../shared/apex-debug.js";
+import {EmptyState} from "../shared/ui.js";
 import {
   APEX_LOG_LEVELS, buildExecuteAnonymousEnvelope, parseExecuteAnonymousResponse,
   parseLimitUsage, isLogTruncated, editorLine, outdent
@@ -767,9 +768,8 @@ function ApexTab() {
             h("span", {className: "apex-collapse-chev", "aria-hidden": "true"}, resultsCollapsed ? "▸" : "▾"),
             h("span", null, resultsCollapsed ? "Expand" : "Collapse")))),
       !resultsCollapsed && h("div", {className: "apex-results-body"},
-        ((!exec && !running && !error) && h("div", {className: "apex-empty"},
-          h("div", {className: "apex-empty-t"}, "No execution yet"),
-          h("div", {className: "insp-meta"}, "Run a script above to see execution results here."))),
+        ((!exec && !running && !error) && h(EmptyState, {art: "run", compact: true, title: "No execution yet",
+          text: "Run a script above to see its logs, result, limits and debug output here."})),
         ((exec || log || logLoading || logNote) && h("div", {className: "apex-result-tabs", role: "tablist"},
           [["logs", "Logs"], ["result", "Result"], ["limits", limits.length ? `Limits${limits.some(l => l.pct >= 80) ? " ⚠" : ""}` : "Limits"], ["debug", "Debug Info"]].map(([id, label]) =>
             h("button", {key: id, className: "apex-result-tab" + (resultView === id ? " active" : ""),

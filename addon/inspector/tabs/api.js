@@ -8,7 +8,7 @@ import {
   withVersion, normalizePath, soapTemplate, prettyBody, apiLinks, addHistory, byteSize
 } from "../../core/api-explorer.js";
 import {downloadText} from "../shared/csv.js";
-import {FFBadge} from "../shared/ui.js";
+import {FFBadge, EmptyState} from "../shared/ui.js";
 import {ffLoadJson, ffSaveJson, useFfSession} from "../shared/session-state.js";
 
 const h = React.createElement;
@@ -193,6 +193,11 @@ function ApiTab() {
                   h("textarea", {className: "mdn-input mdn-code api-textarea", rows: 14, value: envelope, spellCheck: false,
                     "aria-label": "SOAP envelope", onChange: e => setEnvelope(e.target.value)}))),
           error && h("div", {className: "insp-error"}, error)),
+        !resp && !busy && h("div", {className: "sq3-card"},
+          h(EmptyState, {art: "api", title: "Send a request",
+            text: mode === "soap"
+              ? "Pick a SOAP API, edit the envelope and press Send. The response, status and headers show here."
+              : "Pick a method and a path (or a link on the left) and press Send. The response, status, time and headers show here."})),
         resp && h("div", {className: "sq3-card api-resp"},
           h("div", {className: "api-resp-h"},
             h(FFBadge, {kind: statusKind}, `${resp.status} ${resp.statusText || ""}`.trim()),
