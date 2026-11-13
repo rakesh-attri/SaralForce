@@ -45,7 +45,7 @@ test("inspector-panel registry lists the 14 tabs in order", () => {
   const block = src.match(/export const INSPECTOR_TABS = \[([\s\S]*?)\n\];/);
   assert.ok(block, "INSPECTOR_TABS registry not found");
   const ids = [...block[1].matchAll(/\{id:\s*"([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(ids, ["records", "soql", "apex", "export", "import", "api", "logs", "users", "access", "metadata", "org", "apptabs", "release", "coverage"]);
+  assert.deepEqual(ids, ["records", "soql", "apex", "export", "import", "api", "logs", "users", "coverage", "access", "metadata", "org", "apptabs", "release"]);
   for (const entry of block[1].matchAll(/\{id:[^\n]*\}/g)) {
     assert.match(entry[0], /component:\s*\w+/, `registry entry missing component: ${entry[0]}`);
   }

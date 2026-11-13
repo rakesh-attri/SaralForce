@@ -4,6 +4,25 @@
 // GET /mock-release?fail=component|test|none ; GET /mock-release shows state.
 import {writeZip, readZip, base64ToBytes, bytesToBase64, bytesToText} from "../addon/core/zip.js";
 import {parsePackageXml, splitParentFile, pathToComponent, registerTypes, assembleParentFile, TYPE_BY_NAME} from "../addon/core/deploy.js";
+import {permissionSetDescribe} from "./mock-access-metadata.js";
+
+// UAT's profiles and permission sets for the Access compare across orgs:
+// the same System Administrator profile, without Modify / View All Data and
+// with read-only Invoice__c.
+const UAT_PERMS = ["PermissionsApiEnabled", "PermissionsRunReports", "PermissionsExportReport", "PermissionsViewSetup",
+  "PermissionsModifyAllData", "PermissionsViewAllData", "PermissionsManageUsers", "PermissionsAuthorApex",
+  "PermissionsCustomizeApplication", "PermissionsResetPasswords"];
+const uatPerms = off => Object.fromEntries(UAT_PERMS.map(p => [p, !off.includes(p)]));
+const UAT_SETS = [
+  {Id: "0PSU00000000003AAA", Name: "X00eU0000001", Label: "00eU0000001", IsOwnedByProfile: true, Type: "Profile", Profile: {Name: "System Administrator"},
+    PermissionSetGroupId: null, ...uatPerms(["PermissionsModifyAllData", "PermissionsViewAllData"])},
+  {Id: "0PSU00000000001AAA", Name: "Sales_Ops", Label: "Sales Ops", IsOwnedByProfile: false, Type: "Regular", PermissionSetGroupId: null,
+    ...uatPerms(UAT_PERMS.filter(p => p !== "PermissionsRunReports"))}
+];
+const UAT_OBJ = [
+  {ParentId: "0PSU00000000003AAA", SobjectType: "Account", PermissionsRead: true, PermissionsCreate: true, PermissionsEdit: true, PermissionsDelete: true, PermissionsViewAllRecords: true, PermissionsModifyAllRecords: true},
+  {ParentId: "0PSU00000000003AAA", SobjectType: "Invoice__c", PermissionsRead: true, PermissionsCreate: false, PermissionsEdit: false, PermissionsDelete: false, PermissionsViewAllRecords: false, PermissionsModifyAllRecords: false}
+];
 
 // What describeMetadata returns here: a few types beyond the built-in list.
 const DESCRIBE = [
@@ -80,6 +99,17 @@ const profileXml = els => `<?xml version="1.0" encoding="UTF-8"?>\n<Profile xmln
 const mrule = (name, method, status) => `<matchingRules>\n        <fullName>${name}</fullName>\n        <label>${name.replace(/_/g, " ")}</label>\n        <matchingRuleItems>\n            <fieldName>Name</fieldName>\n            <matchingMethod>${method}</matchingMethod>\n        </matchingRuleItems>\n        <ruleStatus>${status}</ruleStatus>\n    </matchingRules>`;
 const matchXml = rules => `<?xml version="1.0" encoding="UTF-8"?>\n<MatchingRules xmlns="http://soap.sforce.com/2006/04/metadata">\n    ${rules.join("\n    ")}\n</MatchingRules>\n`;
 
+const critRule = (name, access, role, field, value) => `<sharingCriteriaRules>\n        <fullName>${name}</fullName>\n        <accessLevel>${access}</accessLevel>\n        <label>${name.replace(/_/g, " ")}</label>\n        <sharedTo>\n            <roleAndSubordinates>${role}</roleAndSubordinates>\n        </sharedTo>\n        <criteriaItems>\n            <field>${field}</field>\n            <operation>equals</operation>\n            <value>${value}</value>\n        </criteriaItems>\n    </sharingCriteriaRules>`;
+const ownerRule = (name, access) => `<sharingOwnerRules>\n        <fullName>${name}</fullName>\n        <accessLevel>${access}</accessLevel>\n        <label>${name.replace(/_/g, " ")}</label>\n        <sharedFrom>\n            <group>Support_Team</group>\n        </sharedFrom>\n        <sharedTo>\n            <allInternalUsers></allInternalUsers>\n        </sharedTo>\n    </sharingOwnerRules>`;
+const sharingXml = rules => `<?xml version="1.0" encoding="UTF-8"?>\n<SharingRules xmlns="http://soap.sforce.com/2006/04/metadata">\n    ${rules.join("\n    ")}\n</SharingRules>\n`;
+
+const sharingSetXml = (profiles, obj, access) => "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<SharingSet xmlns=\"http://soap.sforce.com/2006/04/metadata\">\n" +
+  `    <accessMappings>\n        <accessLevel>${access}</accessLevel>\n        <object>${obj}</object>\n        <objectField>Contact.Id</objectField>\n        <userField>Contact.Id</userField>\n    </accessMappings>\n` +
+  profiles.map(p => `    <profiles>${p}</profiles>\n`).join("") + "</SharingSet>\n";
+const restrictionXml = (label, obj, filter) => "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<RestrictionRule xmlns=\"http://soap.sforce.com/2006/04/metadata\">\n" +
+  `    <active>true</active>\n    <enforcementType>Restrict</enforcementType>\n    <masterLabel>${label}</masterLabel>\n    <recordFilter>${filter}</recordFilter>\n` +
+  `    <targetEntity>${obj}</targetEntity>\n    <userCriteria>$User.IsActive = true</userCriteria>\n    <version>1</version>\n</RestrictionRule>\n`;
+
 function makeOrgs() {
   const source = {
     name: "SaralForce Demo Org",
@@ -94,7 +124,14 @@ function makeOrgs() {
     },
     Settings: {
       Case: comp("Rakesh Sharma", 1 * day, {"settings/Case.settings": settingsXml("CaseSettings", "<enableCaseFeed>true</enableCaseFeed>\n    <keepRecordTypeOnAssignmentRule>true</keepRecordTypeOnAssignmentRule>")}),
-      Account: comp("Rakesh Sharma", 5 * day, {"settings/Account.settings": settingsXml("AccountSettings", "<enableAccountTeams>true</enableAccountTeams>")})
+      Account: comp("Rakesh Sharma", 5 * day, {"settings/Account.settings": settingsXml("AccountSettings", "<enableAccountTeams>true</enableAccountTeams>")}),
+      Sharing: comp("Rakesh Sharma", 3 * day, {"settings/Sharing.settings": settingsXml("SharingSettings", "<enableExternalSharingModel>true</enableExternalSharingModel>\n    <enableManagerGroups>true</enableManagerGroups>\n    <enableSecureGuestAccess>true</enableSecureGuestAccess>\n    <enableStandardReportVisibility>true</enableStandardReportVisibility>")})
+    },
+    SharingSet: {
+      Customer_Cases: comp("Priya Nair", 4 * day, {"sharingSets/Customer_Cases.sharingSet": sharingSetXml(["Customer Community User", "Customer Community Plus User"], "Case", "Edit")})
+    },
+    RestrictionRule: {
+      Own_Tasks_Only: comp("Priya Nair", 2 * day, {"restrictionRules/Own_Tasks_Only.rule": restrictionXml("Own Tasks Only", "Task", "OwnerId = $User.Id")})
     },
     ExperienceBundle: {
       Customer_Portal1: comp("Priya Nair", 1 * day, {
@@ -112,6 +149,7 @@ function makeOrgs() {
       PayGateway_Sandbox: comp("Shivam Ojha", 0.05 * day, {"remoteSiteSettings/PayGateway_Sandbox.remoteSite": meta("RemoteSiteSetting", "\n    <isActive>true</isActive>\n    <url>https://sandbox.pay.example.com</url>").replace("<apiVersion>68.0</apiVersion>", "").replace("<status>Active</status>", "")}, 0.05 * day)
     },
     ExternalDataSource: {},
+    SharingRules: {Case: comp("Priya Nair", 2 * day, {"sharingRules/Case.sharingRules": sharingXml([critRule("Open_Cases_to_Managers", "Edit", "Sales_Manager", "Status", "Open"), ownerRule("Support_to_All", "Read")])})},
     DuplicateRule: {"Account.TestRule": comp("Shivam Ojha", 0.02 * day, {"duplicateRules/Account.TestRule.duplicateRule": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<DuplicateRule xmlns=\"http://soap.sforce.com/2006/04/metadata\">\n    <actionOnInsert>Allow</actionOnInsert>\n    <isActive>false</isActive>\n    <masterLabel>TestRule2</masterLabel>\n</DuplicateRule>\n"})},
     Profile: {"Sales User": comp("Priya Nair", 1 * day, {"profiles/Sales User.profile": profileXml([fp("Invoice__c.Amount__c", true), "<custom>true</custom>", "<userLicense>Salesforce</userLicense>"])})},
     MatchingRules: {Account: {...comp("Autoproc", 40 * day, {"matchingRules/Account.matchingRule": matchXml([mrule("Standard_Account_Match", "Exact", "Active"), mrule("TestRule1", "FuzzyCompanyName", "Inactive")])}),
@@ -167,14 +205,20 @@ function makeOrgs() {
     },
     RemoteSiteSetting: {},
     ExternalDataSource: {},
+    SharingRules: {Case: comp("Deploy User", 30 * day, {"sharingRules/Case.sharingRules": sharingXml([ownerRule("Support_to_All", "Edit")])})},
     Profile: {"Sales User": comp("Deploy User", 30 * day, {"profiles/Sales User.profile": profileXml([fp("Invoice__c.Amount__c", false), "<custom>true</custom>", "<userLicense>Salesforce</userLicense>"])})},
     MatchingRules: {Account: comp("Autoproc", 40 * day, {"matchingRules/Account.matchingRule": matchXml([mrule("Standard_Account_Match", "Exact", "Active")])})},
     Workflow: {
       Case: comp("Deploy User", 30 * day, {"workflows/Case.workflow": workflowXml([wfRule("Escalate_VIP", false, "ISPICKVAL(Priority, 'High')")])})
     },
     Settings: {
-      Case: comp("Deploy User", 30 * day, {"settings/Case.settings": settingsXml("CaseSettings", "<enableCaseFeed>false</enableCaseFeed>\n    <keepRecordTypeOnAssignmentRule>true</keepRecordTypeOnAssignmentRule>")})
+      Case: comp("Deploy User", 30 * day, {"settings/Case.settings": settingsXml("CaseSettings", "<enableCaseFeed>false</enableCaseFeed>\n    <keepRecordTypeOnAssignmentRule>true</keepRecordTypeOnAssignmentRule>")}),
+      Sharing: comp("Deploy User", 30 * day, {"settings/Sharing.settings": settingsXml("SharingSettings", "<enableExternalSharingModel>true</enableExternalSharingModel>\n    <enableManagerGroups>false</enableManagerGroups>\n    <enableSecureGuestAccess>true</enableSecureGuestAccess>\n    <enableStandardReportVisibility>true</enableStandardReportVisibility>")})
     },
+    SharingSet: {
+      Customer_Cases: comp("Deploy User", 30 * day, {"sharingSets/Customer_Cases.sharingSet": sharingSetXml(["Customer Community User"], "Case", "Read")})
+    },
+    RestrictionRule: {},
     ExperienceBundle: {},
     OmniScript: {}
   };
@@ -236,7 +280,7 @@ function listRows(org, type) {
 
 const RELEASE_TYPES = new Set(["ApexClass", "ApexTrigger", "LightningComponentBundle", "Flow", "CustomObject", "CustomField", "ValidationRule", "Layout",
   "NamedCredential", "RemoteSiteSetting", "ExternalDataSource", "WorkflowRule", "WorkflowAlert", "WorkflowFieldUpdate", "WorkflowOutboundMessage", "WorkflowTask",
-  "ExperienceBundle", "OmniScript", "DecisionTable", "Settings", "Profile", "MatchingRule", "DuplicateRule"]);
+  "ExperienceBundle", "OmniScript", "DecisionTable", "Settings", "Profile", "MatchingRule", "DuplicateRule", "SharingRules"]);
 
 function retrieveZip(org, members) {
   const files = new Map();
@@ -266,6 +310,7 @@ function retrieveZip(org, members) {
         continue;
       }
       const c = (org[type] || {})[n];
+      if (n === "*") { for (const all of Object.values(org[type] || {})) for (const [p, t] of Object.entries(all.files)) files.set(p, t); continue; }
       if (c) for (const [p, t] of Object.entries(c.files)) files.set(p, t);
     }
   }
@@ -489,6 +534,124 @@ export function releaseRest(req, res, url, json) {
     return true;
   }
   const send = recs => { json(res, 200, {totalSize: recs.length, done: true, records: recs}); return true; };
+  // "Find unused" in the source org: Invoice__c has a used field, an unused
+  // one, one nobody uses but that has data, and a formula; Old_Archive__c is
+  // an empty object nothing uses.
+  if (!isOrg2) {
+    const UF = [
+      {Id: "00NU0000000AmtAAA", DeveloperName: "Amount", filled: 48},
+      {Id: "00NU0000000OldAAA", DeveloperName: "Old_Notes", filled: 0},
+      {Id: "00NU0000000LegAAA", DeveloperName: "Legacy_Code", filled: 7},
+      {Id: "00NU0000000TaxAAA", DeveloperName: "Tax_Rate", filled: null}
+    ];
+    if (/\/sobjects\/Invoice__c\/describe\/?$/.test(url.pathname)) {
+      const fld = (name, type, extra = {}) => ({name, label: name.replace(/__c$/, "").replace(/_/g, " "), type, filterable: true, calculated: false, ...extra});
+      json(res, 200, {name: "Invoice__c", label: "Invoice", custom: true, queryable: true, fields: [fld("Id", "id"), fld("Name", "string"),
+        fld("Amount__c", "currency"), fld("Old_Notes__c", "string"), fld("Legacy_Code__c", "string"), fld("Tax_Rate__c", "percent", {calculated: true})]});
+      return true;
+    }
+    if (/FROM CustomField WHERE EntityDefinition\.QualifiedApiName = 'Invoice__c'/i.test(q)) {
+      return send(UF.map(x => ({Id: x.Id, DeveloperName: x.DeveloperName, NamespacePrefix: null, CreatedDate: "2025-03-01T10:00:00.000+0000", LastModifiedDate: "2025-06-01T10:00:00.000+0000"})));
+    }
+    if (/FROM CustomObject WHERE NamespacePrefix = null/i.test(q)) {
+      return send([{Id: "01IU0000000InvAAA", DeveloperName: "Invoice", NamespacePrefix: null, CreatedDate: "2024-01-01T10:00:00.000+0000", LastModifiedDate: "2026-11-01T10:00:00.000+0000"},
+        {Id: "01IU0000000ArcAAA", DeveloperName: "Old_Archive", NamespacePrefix: null, CreatedDate: "2021-05-01T10:00:00.000+0000", LastModifiedDate: "2021-05-01T10:00:00.000+0000"}]);
+    }
+    if (/FROM MetadataComponentDependency WHERE RefMetadataComponentId IN/i.test(q)) {
+      const recs = [];
+      if (q.includes("00NU0000000AmtAAA")) recs.push({MetadataComponentId: "01pU0000000SvcAAA", RefMetadataComponentId: "00NU0000000AmtAAA"});
+      if (q.includes("01IU0000000InvAAA")) recs.push({MetadataComponentId: "01pU0000000SvcAAA", RefMetadataComponentId: "01IU0000000InvAAA"});
+      return send(recs);
+    }
+    if (/SELECT Name, Body FROM ApexClass WHERE NamespacePrefix = null/i.test(q)) {
+      return send(Object.entries(orgs.source.ApexClass).map(([Name, c]) => ({Name, Body: c.files[`classes/${Name}.cls`] || ""})));
+    }
+    if (/SELECT Name, Body FROM ApexTrigger WHERE NamespacePrefix = null/i.test(q)) return send([]);
+    if (/SELECT Name, Markup FROM ApexPage WHERE NamespacePrefix = null/i.test(q)) return send([]);
+    const cnt = /^SELECT COUNT\(\) FROM (\w+)(?: WHERE (\w+) )?/i.exec(q);
+    if (cnt && /^(Invoice__c|Old_Archive__c)$/.test(cnt[1])) {
+      const n = cnt[1] === "Old_Archive__c" ? 0 : !cnt[2] ? 50 : (UF.find(x => x.DeveloperName + "__c" === cnt[2]) || {filled: 0}).filled || 0;
+      json(res, 200, {totalSize: n, done: true, records: []});
+      return true;
+    }
+  }
+  if (isOrg2 && /\/sobjects\/PermissionSet\/describe\/?$/.test(url.pathname)) { json(res, 200, permissionSetDescribe); return true; }
+  if (isOrg2 && /FROM PermissionSet (ORDER BY|WHERE Id IN)/i.test(q)) {
+    const ids = [...q.matchAll(/'([^']+)'/g)].map(m => m[1]);
+    return send(UAT_SETS.filter(r => !/WHERE Id IN/i.test(q) || ids.includes(r.Id)));
+  }
+  // Access → Compare users / roles & groups, both orgs.
+  {
+    const DEMO = !isOrg2;
+    const U = DEMO
+      ? [{Id: "005dN00000AKqG1QAL", Name: "Rakesh Sharma", Username: "rakesh@demo.saralforce", Email: "rakesh@demo.example", IsActive: true, Profile: {Name: "System Administrator", UserLicense: {Name: "Salesforce"}}, UserRole: {Name: "CEO"}, UserRoleId: "00E000000000001AAA"},
+        {Id: "005dN00000BQmH2RBM", Name: "Priya Nair", Username: "priya@demo.saralforce", Email: "priya@demo.example", IsActive: true, Profile: {Name: "Standard User", UserLicense: {Name: "Salesforce"}}, UserRole: {Name: "Sales Manager"}, UserRoleId: "00E000000000002AAA"}]
+      : [{Id: "005U00000000001AAA", Name: "Rakesh Sharma", Username: "rakesh@demo.saralforce.uat", Email: "rakesh@demo.example.invalid", IsActive: true, Profile: {Name: "System Administrator", UserLicense: {Name: "Salesforce"}}, UserRole: {Name: "CEO"}, UserRoleId: "00EU0000000001AAA"},
+        {Id: "005U00000000002AAA", Name: "Priya Nair", Username: "priya@demo.saralforce.uat", Email: "priya@demo.example.invalid", IsActive: true, Profile: {Name: "Standard User", UserLicense: {Name: "Salesforce"}}, UserRole: null, UserRoleId: null}];
+    // Rakesh: the System Administrator profile, plus Dev Tools in the demo org only.
+    const PSA = DEMO
+      ? [{AssigneeId: "005dN00000AKqG1QAL", PermissionSetId: "0PS000000000003AAA", PermissionSet: {Label: "00ex", IsOwnedByProfile: true, Profile: {Name: "System Administrator"}}},
+        {AssigneeId: "005dN00000AKqG1QAL", PermissionSetId: "0PS000000000005AAA", PermissionSet: {Label: "Dev Tools", Name: "Dev_Tools", IsOwnedByProfile: false}}]
+      : [{AssigneeId: "005U00000000001AAA", PermissionSetId: "0PSU00000000003AAA", PermissionSet: {Label: "00eU", IsOwnedByProfile: true, Profile: {Name: "System Administrator"}}}];
+    const ROLES = DEMO
+      ? [{Id: "00E000000000001AAA", Name: "CEO", DeveloperName: "CEO", ParentRole: null, OpportunityAccessForAccountOwner: "All", CaseAccessForAccountOwner: "Edit", ContactAccessForAccountOwner: "Edit"}]
+      : [{Id: "00EU0000000001AAA", Name: "CEO", DeveloperName: "CEO", ParentRole: null, OpportunityAccessForAccountOwner: "All", CaseAccessForAccountOwner: "Read", ContactAccessForAccountOwner: "Edit"}];
+    const GROUPS = DEMO
+      ? [{Id: "00G000000000001AAA", Name: "Support Team", DeveloperName: "Support_Team", Type: "Regular", DoesIncludeBosses: true},
+        {Id: "00G000000000002AAA", Name: "Invoice Queue", DeveloperName: "Invoice_Queue", Type: "Queue", Email: "invoices@demo.example"}]
+      : [{Id: "00GU0000000001AAA", Name: "Support Team", DeveloperName: "Support_Team", Type: "Regular", DoesIncludeBosses: true}];
+    const MEMBERS = DEMO
+      ? [{GroupId: "00G000000000001AAA", UserOrGroupId: "005dN00000AKqG1QAL"}, {GroupId: "00G000000000001AAA", UserOrGroupId: "005dN00000BQmH2RBM"},
+        {GroupId: "00G000000000002AAA", UserOrGroupId: "005dN00000BQmH2RBM"}]
+      : [{GroupId: "00GU0000000001AAA", UserOrGroupId: "005U00000000001AAA"}];
+    const ids = () => [...q.matchAll(/'([^']+)'/g)].map(m => m[1]);
+    if (/FROM User WHERE UserType = 'Standard' ORDER BY IsActive DESC/i.test(q)) return send(U);
+    if (/^SELECT Id, Name, Username, IsActive, Profile\.Name, Profile\.UserLicense\.Name, UserRole\.Name FROM User WHERE Id IN/i.test(q)) return send(U.filter(u => ids().includes(u.Id)));
+    if (/^SELECT AssigneeId, PermissionSetId, PermissionSet\.Label/i.test(q)) return send(PSA.filter(a => ids().includes(a.AssigneeId)));
+    if (/^SELECT Id, Name, DeveloperName FROM UserRole ORDER BY Name/i.test(q)) return send(ROLES);
+    if (/^SELECT Id, Name, DeveloperName, Type FROM Group WHERE Type IN/i.test(q)) return send(GROUPS);
+    if (/FROM UserRole WHERE Id IN/i.test(q)) return send(ROLES.filter(r => ids().includes(r.Id)));
+    if (/^SELECT Username, UserRoleId FROM User WHERE IsActive = true AND UserRoleId IN/i.test(q)) return send(U.filter(u => ids().includes(u.UserRoleId)));
+    if (/^SELECT Id, DeveloperName, Type, DoesIncludeBosses, Email FROM Group WHERE Id IN/i.test(q)) return send(GROUPS.filter(g => ids().includes(g.Id)));
+    if (/^SELECT GroupId, UserOrGroupId FROM GroupMember WHERE GroupId IN/i.test(q)) return send(MEMBERS.filter(m => ids().includes(m.GroupId)));
+    if (/^SELECT QueueId, SobjectType FROM QueueSobject/i.test(q)) return send(DEMO ? [{QueueId: "00G000000000002AAA", SobjectType: "Invoice__c"}] : []);
+    if (/^SELECT Id, Username FROM User WHERE Id IN/i.test(q)) return send(U.filter(u => ids().includes(u.Id)).map(u => ({Id: u.Id, Username: u.Username})));
+  }
+  // Access compare extras, both orgs: Apex class / custom permission access,
+  // field permissions, sharing defaults.
+  if (/FROM SetupEntityAccess WHERE ParentId IN \(/i.test(q) && !/SetupEntityType = 'TabSet'/.test(q)) {
+    const ids = [...q.matchAll(/'([^']+)'/g)].map(m => m[1]);
+    const rows = isOrg2
+      ? [{ParentId: "0PSU00000000003AAA", SetupEntityId: "0CPU00000000001AAA", SetupEntityType: "CustomPermission"}]
+      : [{ParentId: "0PS000000000003AAA", SetupEntityId: "01pS00000000001AAA", SetupEntityType: "ApexClass"},
+        {ParentId: "0PS000000000003AAA", SetupEntityId: "0CPS00000000001AAA", SetupEntityType: "CustomPermission"}];
+    return send(rows.filter(r => ids.includes(r.ParentId)));
+  }
+  if (/SELECT Id, Name FROM ApexClass WHERE Id IN/i.test(q)) return send([{Id: "01pS00000000001AAA", Name: "InvoiceService"}]);
+  if (/SELECT Id, DeveloperName FROM CustomPermission WHERE Id IN/i.test(q)) {
+    return send([{Id: isOrg2 ? "0CPU00000000001AAA" : "0CPS00000000001AAA", DeveloperName: "Bypass_Validation"}]);
+  }
+  if (/^SELECT ParentId, Field, PermissionsRead, PermissionsEdit FROM FieldPermissions WHERE ParentId IN/i.test(q)) {
+    const ids = [...q.matchAll(/'([^']+)'/g)].map(m => m[1]);
+    const rows = isOrg2
+      ? [{ParentId: "0PSU00000000003AAA", Field: "Account.AnnualRevenue", PermissionsRead: true, PermissionsEdit: false}]
+      : [{ParentId: "0PS000000000003AAA", Field: "Account.AnnualRevenue", PermissionsRead: true, PermissionsEdit: true},
+        {ParentId: "0PS000000000003AAA", Field: "Invoice__c.Amount__c", PermissionsRead: true, PermissionsEdit: true}];
+    return send(rows.filter(r => ids.includes(r.ParentId)));
+  }
+  if (/FROM EntityDefinition WHERE IsCustomizable = true AND InternalSharingModel != null/i.test(q)) {
+    // Account differs inside, Case outside; Old_Archive__c only here.
+    const owd = (api, label, i, e) => ({QualifiedApiName: api, Label: label, InternalSharingModel: i, ExternalSharingModel: e});
+    const same = [owd("Contact", "Contact", "ControlledByParent", "ControlledByParent"), owd("Lead", "Lead", "ReadWriteTransfer", "Private"),
+      owd("Opportunity", "Opportunity", "Read", "Private"), owd("User", "User", "Read", "Private"), owd("Invoice__c", "Invoice", "Private", "Private")];
+    return send(isOrg2
+      ? [owd("Account", "Account", "Read", "Private"), owd("Case", "Case", "ReadWriteTransfer", "Read"), ...same]
+      : [owd("Account", "Account", "Private", "Private"), owd("Case", "Case", "ReadWriteTransfer", "Private"), ...same, owd("Old_Archive__c", "Old Archive", "Private", "Private")]);
+  }
+  if (isOrg2 && /FROM ObjectPermissions WHERE ParentId IN/i.test(q)) {
+    const ids = [...q.matchAll(/'([^']+)'/g)].map(m => m[1]);
+    return send(UAT_OBJ.filter(r => ids.includes(r.ParentId)));
+  }
   if (isOrg2 && /\/composite\/sobjects\/?$/.test(url.pathname) && req.method === "POST") {
     let raw = "";
     req.on("data", c => { raw += c; });

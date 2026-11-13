@@ -27,7 +27,10 @@ export function SearchSelect({value, options, onChange, placeholder, emptyText, 
 
   React.useEffect(() => {
     if (!open) return undefined;
-    const onDoc = e => { if (wrapRef.current && !wrapRef.current.contains(e.target)) close(true); };
+    // A click on an option picks it and removes the list before this runs;
+    // its (now detached) target must not count as "outside", or allowFree
+    // would overwrite the pick with the typed text.
+    const onDoc = e => { if (wrapRef.current && e.target.isConnected && !wrapRef.current.contains(e.target)) close(true); };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   });

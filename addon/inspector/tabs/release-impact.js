@@ -7,7 +7,10 @@ import {listComponents, queryAll} from "../shared/deploy-api.js";
 import {explainImpact} from "../shared/ai.js";
 import {useFfSession} from "../shared/session-state.js";
 import {SearchSelect} from "../shared/combo.js";
-import {FFBadge} from "../shared/ui.js";
+import {FFBadge, EmptyState} from "../shared/ui.js";
+import {rankUnused, unusedCounts, UNUSED_LEVELS, id15} from "../../core/unused.js";
+import {apiVersion} from "../../inspector.js";
+import {toCsv, downloadText} from "../shared/csv.js";
 import {useRelease, setRelease, orgByHost, loadOrgs} from "./release-state.js";
 import {CardHead, orgOptions, AiAnswer, AiError, OrgTag} from "./release-ui.js";
 
@@ -114,6 +117,195 @@ export async function analyzeImpact(org, type, fullName, onStatus) {
   return {org, type, fullName, id: row.id, ...deps, codeMatches: code, dataCount: count, activeFlows: flows, verdict, depNote, unchecked};
 }
 
+// ── Find unused custom fields / objects ─────────────────────────────
+// Reads in bulk: the items (Tooling), what refers to them (dependency data),
+// every Apex class / trigger / VF page once for a text search, then counts.
+const rest = (conn, path) => conn.client.request(`/services/data/v${apiVersion}${path}`, {useCache: false});
+
+async function pool(items, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({length: Math.min(n, items.length)}, async () => { while (i < items.length) { const it = items[i++]; await fn(it); } }));
+}
+
+async function refCounts(conn, ids, unchecked) {
+  const counts = new Map(ids.map(id => [id15(id), 0]));
+  try {
+    for (let i = 0; i < ids.length; i += 100) {
+      const rows = await queryAll(conn, "SELECT MetadataComponentId, RefMetadataComponentId FROM MetadataComponentDependency " +
+        `WHERE RefMetadataComponentId IN (${ids.slice(i, i + 100).map(q).join(",")})`, {tooling: true});
+      for (const r of rows) {
+        const k = id15(r.RefMetadataComponentId);
+        if (counts.has(k) && id15(r.MetadataComponentId) !== k) counts.set(k, counts.get(k) + 1);
+      }
+    }
+    return counts;
+  } catch (e) {
+    unchecked.push("Salesforce's dependency data could not be read (" + (e.message || e) + "), so nothing is marked unused.");
+    return null;
+  }
+}
+
+async function codeBodies(conn, unchecked) {
+  const get = (what, soql, field) => queryAll(conn, soql, {tooling: true}).then(list => {
+    if (list.truncated) unchecked.push(`Only the first ${list.length.toLocaleString()} ${what} were searched.`);
+    return list.map(r => ({name: r.Name, text: r[field] || ""}));
+  }).catch(e => { unchecked.push(`Could not search ${what} (${e.message || e}).`); return null; });
+  const parts = await Promise.all([
+    get("Apex classes", "SELECT Name, Body FROM ApexClass WHERE NamespacePrefix = null", "Body"),
+    get("Apex triggers", "SELECT Name, Body FROM ApexTrigger WHERE NamespacePrefix = null", "Body"),
+    get("Visualforce pages", "SELECT Name, Markup FROM ApexPage WHERE NamespacePrefix = null", "Markup")
+  ]);
+  return parts.some(p => p == null) ? null : parts.flat();
+}
+
+const codeHits = (bodies, name) => bodies == null ? null : bodies.filter(b => codeMentions(b.text, name)).length;
+
+async function count(conn, soql) {
+  const r = await conn.client.query(soql);
+  return r.totalSize;
+}
+
+export async function findUnused(org, {scope, object}, onStatus) {
+  const conn = org.conn;
+  const unchecked = [];
+  if (scope === "objects") {
+    onStatus("Listing custom objects…");
+    const objs = (await queryAll(conn, "SELECT Id, DeveloperName, NamespacePrefix, CreatedDate, LastModifiedDate FROM CustomObject WHERE NamespacePrefix = null", {tooling: true}))
+      .map(o => ({id: o.Id, name: o.DeveloperName + "__c", created: o.CreatedDate, modified: o.LastModifiedDate}));
+    onStatus(`Checking what uses ${objs.length} object(s)…`);
+    const refs = await refCounts(conn, objs.map(o => o.id), unchecked);
+    onStatus("Searching Apex and Visualforce code…");
+    const bodies = await codeBodies(conn, unchecked);
+    let done = 0;
+    const rows = objs.map(o => ({kind: "object", type: "CustomObject", ...o, refs: refs ? refs.get(id15(o.id)) : null, code: codeHits(bodies, o.name), filled: null}));
+    await pool(rows, 4, async r => {
+      r.filled = await count(conn, `SELECT COUNT() FROM ${r.name}`).catch(() => null);
+      onStatus(`Counting records… ${++done}/${rows.length}`);
+    });
+    return {scope, rows: rankUnused(rows), unchecked};
+  }
+  onStatus(`Reading ${object}…`);
+  const describe = await rest(conn, `/sobjects/${object}/describe`);
+  const byName = new Map((describe.fields || []).map(f => [f.name, f]));
+  const fields = (await queryAll(conn, "SELECT Id, DeveloperName, NamespacePrefix, CreatedDate, LastModifiedDate FROM CustomField " +
+    `WHERE EntityDefinition.QualifiedApiName = ${q(object)} AND NamespacePrefix = null`, {tooling: true}))
+    .map(f => ({id: f.Id, field: f.DeveloperName + "__c", created: f.CreatedDate, modified: f.LastModifiedDate}))
+    .filter(f => byName.has(f.field));
+  onStatus(`Checking what uses ${fields.length} field(s)…`);
+  const refs = await refCounts(conn, fields.map(f => f.id), unchecked);
+  onStatus("Searching Apex and Visualforce code…");
+  const bodies = await codeBodies(conn, unchecked);
+  const total = await count(conn, `SELECT COUNT() FROM ${object}`).catch(() => null);
+  let done = 0;
+  const rows = fields.map(f => ({kind: "field", type: "CustomField", id: f.id, name: `${object}.${f.field}`, label: (byName.get(f.field) || {}).label || "",
+    fieldType: (byName.get(f.field) || {}).type || "", created: f.created, modified: f.modified,
+    refs: refs ? refs.get(id15(f.id)) : null, code: codeHits(bodies, f.field), filled: total === 0 ? 0 : null, total}));
+  await pool(rows.filter(r => r.filled == null), 4, async r => {
+    const d = byName.get(r.name.split(".")[1]) || {};
+    const field = r.name.split(".")[1];
+    // Formula and long text can't be filtered: their data is left unknown.
+    if (d.calculated || d.filterable === false) r.filled = null;
+    else r.filled = await count(conn, `SELECT COUNT() FROM ${object} WHERE ${field} ${d.type === "boolean" ? "= true" : "!= null"}`).catch(() => null);
+    onStatus(`Counting values… ${++done}/${rows.length}`);
+  });
+  return {scope, object, rows: rankUnused(rows), total, unchecked};
+}
+
+function UnusedFinder({org, onImpact}) {
+  const [scope, setScope] = useFfSession("release", "unusedScope", "fields");
+  const [object, setObject] = useFfSession("release", "unusedObject", "");
+  const [objects, setObjects] = React.useState([]);
+  const [busy, setBusy] = React.useState(false);
+  const [status, setStatus] = React.useState("");
+  const [err, setErr] = React.useState("");
+  const [res, setRes] = React.useState(null);
+  const [show, setShow] = React.useState({unused: true, review: true, unknown: true, used: false});
+  const [sel, setSel] = React.useState(new Set());
+  const [destructive, setDestructive] = useFfSession("release", "destructive", {});
+  const [note, setNote] = React.useState("");
+  React.useEffect(() => {
+    if (!org) return undefined;
+    let stale = false;
+    rest(org.conn, "/sobjects/").then(r => {
+      if (!stale) setObjects((r.sobjects || []).filter(o => o.queryable && o.layoutable && !o.customSetting && !/__(mdt|e|x|b|share|history|feed)$/i.test(o.name))
+        .map(o => ({value: o.name, label: o.label, sub: o.name})));
+    }).catch(() => { if (!stale) setObjects([]); });
+    return () => { stale = true; };
+  }, [org && org.host]);
+
+  const run = async () => {
+    if (!org || (scope === "fields" && !object)) return;
+    setBusy(true); setErr(""); setRes(null); setSel(new Set()); setNote("");
+    try { setRes(await findUnused(org, {scope, object}, setStatus)); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); setStatus(""); }
+  };
+  const counts = res ? unusedCounts(res.rows) : null;
+  const shown = res ? res.rows.filter(r => show[r.verdict.level]) : [];
+  const fmtDate = d => d ? new Date(d).toLocaleDateString(undefined, {day: "numeric", month: "short", year: "numeric"}) : "";
+  const addDeletes = () => {
+    const picked = res.rows.filter(r => sel.has(r.name));
+    setDestructive(mergeMembers(destructive, {[picked[0].type]: picked.map(r => r.name)}));
+    setNote(`${picked.length} added to the delete list (SandShift → Package). Validate before deploying.`);
+    setSel(new Set());
+  };
+  const exportCsv = () => downloadText(`unused-${res.scope === "objects" ? "objects" : res.object}.csv`, toCsv(
+    ["Name", "Label", "Verdict", "Why", "Used by", "In code", "Records with data", "Total records", "Created", "Last modified"],
+    res.rows.map(r => ({"Name": r.name, "Label": r.label || "", "Verdict": UNUSED_LEVELS[r.verdict.level].label, "Why": r.verdict.reasons.join("; "),
+      "Used by": r.refs ?? "", "In code": r.code ?? "", "Records with data": r.filled ?? "", "Total records": r.total ?? "", "Created": r.created || "", "Last modified": r.modified || ""}))));
+
+  return h("div", {className: "org-card org-card-wide", "data-release-unused": ""},
+    h(CardHead, {icon: "🧹", title: "Find unused fields & objects"}),
+    h("div", {className: "sq3-card-sub"}, "Custom fields or objects that nothing uses and that hold no data: candidates to delete. Checked: Salesforce's dependency data, the code of Apex classes, triggers and Visualforce pages, and record counts."),
+    h("div", {className: "rel-orgbar"},
+      h("div", {className: "rel-org"},
+        h("span", {className: "rel-org-l"}, "Look at"),
+        h(SearchSelect, {value: scope, onChange: v => { setScope(v); setRes(null); }, disabled: busy, ariaLabel: "What to check",
+          options: [{value: "fields", label: "Custom fields of an object"}, {value: "objects", label: "Custom objects"}]})),
+      scope === "fields" && h("div", {className: "rel-org"},
+        h("span", {className: "rel-org-l"}, "Object"),
+        h(SearchSelect, {value: object, options: objects, onChange: setObject, disabled: busy, ariaLabel: "Object", placeholder: "Pick an object", allowFree: true})),
+      h("button", {className: "btn btn-primary btn-sm", disabled: busy || !org || (scope === "fields" && !object), onClick: run},
+        busy ? "Checking…" : "Find unused")),
+    busy && h("div", {className: "tr-progress"},
+      h("div", {className: "cov-progress"}, h("div", {className: "cov-progress-fill"})),
+      h("span", {className: "insp-meta"}, status)),
+    err && h("div", {className: "insp-error"}, err),
+    !res && !busy && !err && h(EmptyState, {art: "table", compact: true, title: "Clean up the org",
+      text: scope === "fields" ? "Pick an object and press Find unused to see which of its custom fields nothing uses." : "Press Find unused to see which custom objects nothing uses."}),
+    res && h(React.Fragment, null,
+      h("div", {className: "rel-filters"},
+        ["unused", "review", "unknown", "used"].map(k => h("button", {key: k, type: "button", "aria-pressed": show[k],
+          className: "insp-chip rel-chip" + (show[k] ? " on" : ""), onClick: () => setShow({...show, [k]: !show[k]})},
+        `${UNUSED_LEVELS[k].label} · ${counts[k]}`)),
+        h("button", {className: "field-action-btn", onClick: exportCsv}, "⬇ Export CSV")),
+      res.unchecked.length > 0 && h("div", {className: "insp-warn"}, res.unchecked.join(" ")),
+      h("div", {className: "insp-meta rel-note"}, "Not covered by Salesforce's dependency data: reports, list views, email templates, some flow and formula uses, and integrations. Check those before deleting; deleted fields can be restored for 15 days."),
+      shown.length === 0 ? h("div", {className: "insp-meta"}, "Nothing to show with these filters.")
+        : h("div", {className: "insp-table-wrap rel-table-wrap"},
+          h("table", {className: "insp-table rel-table"},
+            h("thead", null, h("tr", null,
+              h("th", {className: "rel-cb"}), h("th", null, "Name"), h("th", null, "Verdict"), h("th", null, "Used by"), h("th", null, "In code"),
+              h("th", null, res.scope === "objects" ? "Records" : "With a value"), h("th", null, "Created"), h("th", null, "Last modified"))),
+            h("tbody", null, shown.map(r => h("tr", {key: r.name, className: "rel-row" + (sel.has(r.name) ? " sel" : "")},
+              h("td", {className: "rel-cb"}, (r.verdict.level === "unused" || r.verdict.level === "review") && h("input", {type: "checkbox", checked: sel.has(r.name),
+                "aria-label": "Pick " + r.name, onChange: () => { const n = new Set(sel); if (n.has(r.name)) n.delete(r.name); else n.add(r.name); setSel(n); }})),
+              h("td", {className: "rel-name"}, r.name, r.label && h("span", {className: "rel-setup-label"}, r.label)),
+              h("td", null, h(FFBadge, {kind: UNUSED_LEVELS[r.verdict.level].kind}, UNUSED_LEVELS[r.verdict.level].label),
+                h("div", {className: "insp-meta"}, r.verdict.reasons.join("; "))),
+              h("td", null, r.refs == null ? "?" : r.refs > 0 ? h("button", {className: "field-action-btn", title: "Open the impact analysis",
+                onClick: () => onImpact(r.type, r.name)}, String(r.refs)) : "0"),
+              h("td", null, r.code == null ? "?" : String(r.code)),
+              h("td", null, r.filled == null ? "?" : r.total ? `${r.filled.toLocaleString()} of ${r.total.toLocaleString()}` : r.filled.toLocaleString()),
+              h("td", {className: "insp-meta"}, fmtDate(r.created)),
+              h("td", {className: "insp-meta"}, fmtDate(r.modified))))))),
+      h("div", {className: "rel-actionbar"},
+        h("span", {className: "insp-meta"}, `${sel.size} picked`),
+        note && h("span", {className: "insp-status-ok"}, note),
+        h("button", {className: "btn btn-secondary btn-sm", disabled: !sel.size, onClick: addDeletes, title: "Adds them to SandShift's delete list; nothing is deleted until you validate and deploy"},
+          `Add ${sel.size || ""} to the delete list`))));
+}
+
 function RefGroups({groups, empty}) {
   if (!groups.length) return h("div", {className: "insp-meta"}, empty);
   return h("div", {className: "rel-members rel-refs"}, groups.map(g => h("div", {key: g.type, className: "rel-mtype"},
@@ -191,6 +383,7 @@ export function ImpactView() {
   };
 
   const r = result;
+  const openImpact = (t, n) => { setType(t); setName(n); run({host: org.host, type: t, fullName: n}); window.scrollTo({top: 0, behavior: "smooth"}); };
   return h("div", {className: "org-grid"},
     h("div", {className: "org-card org-card-wide"},
       h(CardHead, {icon: "🎯", title: "Impact analysis"}),
@@ -234,5 +427,6 @@ export function ImpactView() {
         added && h("span", {className: "insp-status-ok"}, "Added to the delete list in Package."),
         h("button", {className: "btn btn-secondary btn-sm", disabled: added, onClick: addDelete,
           title: r.verdict.level === "safe" ? "" : "It is still used: delete those references first"},
-          r.verdict.level === "safe" ? "Add to delete list" : "Add to delete list anyway"))));
+          r.verdict.level === "safe" ? "Add to delete list" : "Add to delete list anyway"))),
+    h(UnusedFinder, {org, onImpact: openImpact}));
 }

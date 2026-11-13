@@ -22,7 +22,7 @@ what you can **change**, how to do it, and where the limits are.
 9. [API Explorer](#9-api-explorer)
 10. [Code Coverage](#10-code-coverage)
 11. [Users](#11-users)
-12. [Access](#12-access) — Compare · Risky access · Approvals
+12. [Access](#12-access) — Compare · Sharing settings · Risky access · Approvals
 13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · New · package.xml
 14. [Org Info](#14-org-info)
 15. [App Tab Manager](#15-app-tab-manager)
@@ -38,14 +38,15 @@ what you can **change**, how to do it, and where the limits are.
 | Feature | What it does |
 |---|---|
 | **Launcher button** | A floating SaralForce button on every Salesforce page opens the side panel. A one-time tip points it out on your first visit. |
-| **Two-row tool bar** | Top row = Records, SOQL, Run-Apex, Export, Import, API Explorer, Logs, Users. Bottom row = Access, Metadata, Org Info, App Tab Manager, Code Coverage. Each row stays on one line; tabs tighten as the panel narrows. A glass divider separates them; nothing scrolls sideways. |
+| **Two-row tool bar** | Top row = Records, SOQL, Run-Apex, Export, Import, API Explorer, Logs, Users, Code Coverage. Bottom row = Access, Metadata, Org Info, App Tab Manager, SandShift. Each row stays on one line; tabs tighten as the panel narrows. A glass divider separates them; nothing scrolls sideways. |
 | **Header buttons** | **AI Object Builder ⇄ Inspector** switch · **Show / Hide API Names** · **Theme** (System → Light → Dark) · **?** Help menu · user initials. |
 | **Show API Names** 👁 | Adds each field's API name next to its label on the Salesforce record page behind the panel. The button changes to *Hide API Names* only once names are actually showing. |
 | **Help menu (?)** | Take the tour · Tour this tool · What's new · Open Settings · **Help** (opens the GitHub issues page). |
-| **Guided tours** | Welcome tour on first open, a one-tip intro the first time you open each tool, an Object Builder tour, a Settings tour after install, and a "What's new" card after each update. Replay any time from **?**. |
+| **Guided tours** | Welcome tour on first open (tools don't pop up their own tips; use **? → Tour this tool**), an Object Builder tour, a Settings tour after install, and a "What's new" card after each update. Replay any time from **?**. |
 | **Remembers your place** | The last tool, your queries, filters and results are kept when you close and reopen the panel. |
 | **Messages come to you** | When an action finishes with a success, warning or error message (e.g. *trace flag created*, an import error), the panel scrolls to it and flashes it once. |
-| **Empty panes** | Blank areas (Users before you pick a user, Access Compare and Risky access, Approvals with nothing pending, Run-Apex before a run, API Explorer before you send a request, Logs before you load any and its AI pane, the Export preview, App Tab Manager before you pick an app) show a small original illustration with what to do next. |
+| **Empty panes** | Blank areas (Users before you pick a user, Access Compare and Risky access, Approvals with nothing pending, Run-Apex before a run, API Explorer before you send a request, Logs before you load any and its AI pane, the Export preview, App Tab Manager before you pick an app) show a small original illustration with the SaralForce wolf (a 5 KB image) and what to do next. |
+| **Progress comes to you** | When you start something with a progress bar (deploy, validation, compare, import, coverage run), the panel scrolls to the bar so you can watch it. |
 | **Theme** | Follows your device's light/dark setting by default; the header button overrides it. |
 
 ---
@@ -267,19 +268,36 @@ they hold, shows the **effective** result (✓ / ✗ per permission) and lists e
 
 ## 12. Access
 
-A small menu at the top: **Compare · Risky access · Approvals**.
+A small menu at the top: **Compare · Sharing settings · Risky access · Approvals**.
 
 ### 12.1 Compare 👁
 
 | You can | Details |
 |---|---|
-| Pick 2–5 items | Any mix of **profiles**, **permission sets** and **permission set groups**. |
-| Side-by-side matrix | **System permissions** (✓ per item) · **Object permissions** shown as letters R C E D V M (Read, Create, Edit, Delete, View All, Modify All) · **Tab settings** (Visible / Available) · **Assigned apps**. |
+| What you compare | Chips above both sides: **Profiles & permission sets** · **Users** · **Roles & groups**. Both sides use the same kind; switching asks first because it clears the picks. |
+| Users (effective access) | Each user's access combined from their profile, permission sets and permission set groups (granted if any of them grants it), plus **General** rows: profile, role, user license, active. A **Where it comes from** column says which profile or permission set grants each difference ("Modify All Data: from Profile: System Administrator"). **＋ Same as left** finds the same person in the other org by e-mail, or by username without the sandbox suffix. |
+| Roles & groups | Roles, public groups and queues. **Settings** (role: reports to, opportunity / case / contact access for account owners; group: include bosses; queue: e-mail), **Members** (users by username without the sandbox suffix, groups, roles, roles & subordinates; for a role, its users) and **Queue objects**. **＋ Same as left** matches by API name. |
+| Sharing rules | Each org's criteria, owner, territory and guest sharing rules (read with the Metadata API), when the two sides are in different orgs. One row per rule ("Criteria · Status equals Open → Role & subordinates Sales_Manager · Read/Write"); **What differs** says which org lacks it, or only the part that changed ("Demo: Read Only · UAT: Read/Write"). |
+| Two sides | **Compare** (left) and **With** (right), each with its own **org** (this one or any org you're logged into in this browser), search and picked items; up to 5 in all, any mix of **profiles**, **permission sets** and **permission set groups**. **＋ Same as left** picks the left side's items, found by name, in the right side's org: the quickest way to put a sandbox profile next to production's. |
+| What to compare | Chips to turn sections on or off: **General** (user license, kind) · **System permissions** · **Object permissions** · **Field permissions** (Read / Edit per field) · **Tab settings** · **Assigned apps** · **Apex class access** · **Visualforce page access** · **Custom permissions** · **Connected app access** · **Flow access** · **Sharing defaults** (each org's internal / external org-wide defaults per object, when the two sides are in different orgs). Sections with no differences are listed on one line. |
 | Only differences | Hide rows where all items agree (on by default). |
+| Readable differences | A summary line ("4 differences: 2 system permissions, 2 object permissions"), a **What differs** column in plain words ("Create, Edit, Delete: only in Production", "No access in UAT"), object access as Read / Create / Edit / Delete / View All / Modify All labels with the ones that differ in green, Yes / No for system permissions and apps, "Not set" for tabs. Columns are named by org when the same item is compared across orgs (with Sandbox / Production when two org names look alike). The CSV includes What differs. |
 | Filter | Find a permission or object by name. |
 | Download CSV | The whole matrix. |
 
-### 12.2 Risky access 👁 ✨
+### 12.2 Sharing settings 👁
+
+Setup's **Sharing Settings** page in two orgs side by side (a sandbox against production, say), section by section, with **What differs** in the last column.
+
+| You can | Details |
+|---|---|
+| Two orgs | **From org** and **Compare with org**: this org or any org you're logged into in this browser. |
+| What to compare | **Org-wide defaults** (default internal and external access per object, as on the Setup page) · **Other settings** (external sharing model, manager groups, standard report visibility, portal / site user visibility, secure guest record access and every other Sharing setting, new ones included) · **Sharing rules** (owner, criteria, guest and territory, under their object) · **Sharing sets** (which Experience Cloud profiles reach which records, per object) · **Restriction & scoping rules**. Rules and sets are read with one Metadata API retrieve per org. |
+| Page by page | **Manage sharing settings for**: all objects or one object, like the Setup dropdown; objects that differ are tagged, and ◀ ▶ step through them. |
+| Readable differences | A summary line ("8 differences: 3 org-wide defaults, 1 other setting, 2 sharing rules…") and, per row, "Internal: Private → Public Read Only", "On → Off", "Only in Production" or only the part of a rule that changed ("Read Only → Read/Write"). **Only differences** and a filter; **Download CSV**. |
+| Not compared | "Grant access using hierarchies": Salesforce doesn't expose it through any API (it is always on for standard objects). |
+
+### 12.3 Risky access 👁 ✨
 
 | You can | Details |
 |---|---|
@@ -288,7 +306,7 @@ A small menu at the top: **Compare · Risky access · Approvals**.
 | Per user | Users ranked by how many risky permissions they hold, and via what. |
 | ✨ **Summarize with AI** | A short report: summary, highest risks, who to review, next steps. |
 
-### 12.3 Approvals ✏️
+### 12.4 Approvals ✏️
 
 | You can | Details |
 |---|---|
@@ -480,6 +498,7 @@ Move changes between any two orgs you're logged into in this browser (sandbox �
 | Last run | A finished validation or deploy belongs to the selection it ran for: pick something else and it becomes a one-line "Last run" note (Show / Dismiss / History) instead of looking like this selection's result. |
 | Deploy errors by root cause | A failed validation or deploy shows **N errors · M root causes** instead of a flat list. Rows with the same cause are one card (100 "Unable to find Apex action class 'X'" rows on one LWC → **Missing Apex class X · 100 errors**), with the category (missing dependency, missing user or record, Apex compile, org feature, can't change in place, access or lock, name conflict, package), the affected components, **Why** and **Fix**. A failure caused by another failed item (a permission set group whose permission set failed) is folded under it. When the missing item is in the source, **＋ Add it to the deploy** ticks it, then **Validate again**. **Show all errors** keeps the full text (no more "…"), with a filter, **Copy summary** and **Export CSV**. **Explain failures** sends the grouped summary to the AI. |
 | Ask AI about failures | **✨ Explain failures / ask AI** (or **✨ Ask AI** on an error card) opens a chat about this run. The AI gets the target, run type, test level, what was sent (counts by type), what SaralForce can add, and the errors grouped by root cause, plus how Salesforce deploys work (one package is one transaction ordered by Salesforce, so missing dependencies go in the same package; when a separate first deploy really is needed). Ask follow-ups such as "same package or a separate deploy?"; answers show bold, code and lists. **Stop**, **Clear**, **Copy** per answer. No file contents are sent. The full error list has a **Fix** column next to each problem. |
+| Find unused fields & objects | Impact → **Find unused**: for the custom fields of an object, or every custom object, checks Salesforce's dependency data, the code of Apex classes, triggers and Visualforce pages, and how many records hold a value. Each gets **Unused** (nothing uses it, no data), **Nothing uses it, has data**, **Couldn't fully check** (never called unused) or **Used**, with created and last-modified dates. Click a "used by" count for the full impact analysis; tick unused ones to **Add to the delete list**; **Export CSV**. Reports, list views, email templates and integrations aren't in the dependency data, so check those before deleting. |
 | Compare runs | One compare at a time, even if you switch to another sub-tab and back; **Cancel** stops it and a cancelled run never replaces the results. Types an org could not list are named in Compare and in Deploy (they are left out, not "deleted"). |
 | Git source notes | Compare from GitHub warns when GitHub cut the branch listing short, lists object subfolders it left out, and honours the repository's root **.forceignore** (gitignore rules). |
 | AI release notes | The tooltip says what goes to your AI provider: each component's name and type plus up to 15 added / 15 removed lines (or the first 600 characters of a new one); named credentials, connected apps, certificates and similar types are never sent. |
@@ -562,7 +581,7 @@ Before you deploy, the checks call out profiles (they overwrite), flows (arrive 
 | See field-level access for a user? | **Yes** — Access Check → Field (`Object.Field`). |
 | See who can read/edit a field (all profiles)? | **Yes** — Metadata → Schema → field → **Access**. |
 | Change a user's permissions? | **Yes**, by **assigning / removing permission sets and groups** (Users → Permission Sets). Editing a profile's object permissions is done in Setup. |
-| Compare two profiles? | **Yes** — Access → **Compare** (up to 5, only differences). |
+| Compare two profiles? | **Yes** — Access → **Compare** (up to 5, only differences), in one org or across orgs (sandbox vs production). |
 | Find over-privileged users? | **Yes** — Access → **Risky access**. |
 | Approve or reject requests? | **Yes** — Access → **Approvals**. |
 | Turn a validation rule on/off? | **Yes** — Metadata → Validation Rules → **Active** switch. |

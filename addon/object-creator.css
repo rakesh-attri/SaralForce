@@ -191,7 +191,7 @@ body {
   flex-direction: column;
   gap: 12px;
   background:
-    url("mascot-watermark.png") center center / 340px auto no-repeat,
+    url("mascot-watermark.webp") center center / 340px auto no-repeat,
     radial-gradient(760px 340px at 6% -4%, rgba(59, 130, 246, 0.13), transparent 65%),
     radial-gradient(700px 360px at 97% 4%, rgba(139, 92, 246, 0.13), transparent 62%),
     radial-gradient(820px 400px at 50% 108%, rgba(14, 165, 233, 0.10), transparent 65%),
@@ -4722,7 +4722,7 @@ html.dark .user-info, html[data-theme="dark"] .user-info {
 html.dark .chat-messages, html[data-theme="dark"] .chat-messages {
   background:
     url("mascot-bg-dark.jpg") center center / cover no-repeat,
-    url("mascot-watermark.png") center center / 340px auto no-repeat,
+    url("mascot-watermark.webp") center center / 340px auto no-repeat,
     radial-gradient(760px 340px at 6% -4%, rgba(56, 189, 248, 0.22), transparent 65%),
     radial-gradient(700px 360px at 97% 4%, rgba(167, 139, 250, 0.20), transparent 62%),
     radial-gradient(820px 400px at 50% 108%, rgba(14, 165, 233, 0.16), transparent 65%),
@@ -13646,6 +13646,25 @@ html[data-theme="dark"] .rel-paste summary {
   margin-bottom: 6px;
 }
 
+/* The wolf stands at the picture's lower right, looking at it. */
+.empty-visual {
+  position: relative;
+  display: inline-block;
+  padding-right: 40px;
+}
+
+.empty-state.compact .empty-visual {
+  padding-right: 30px;
+}
+
+.empty-mascot {
+  position: absolute;
+  right: 0;
+  bottom: 4px;
+  user-select: none;
+  pointer-events: none;
+}
+
 .empty-title {
   font-size: 15px;
   font-weight: 700;
@@ -13676,4 +13695,289 @@ html[data-theme="dark"] .empty-text {
 html.dark .empty-art,
 html[data-theme="dark"] .empty-art {
   opacity: 0.85;
+}
+
+/* Dark mode: dropdown options had dark text on the dark list. */
+html.dark .ff-combo-opt,
+html[data-theme="dark"] .ff-combo-opt {
+  color: #e8ebf2;
+}
+
+html.dark .ff-combo-opt-s,
+html[data-theme="dark"] .ff-combo-opt-s {
+  color: #9fb0c8;
+}
+
+html.dark .ff-combo-opt.selected .ff-combo-opt-l,
+html[data-theme="dark"] .ff-combo-opt.selected .ff-combo-opt-l {
+  color: #7cb4f5;
+}
+
+html.dark .ff-combo-opt.active,
+html[data-theme="dark"] .ff-combo-opt.active {
+  background: rgba(124, 180, 245, 0.18);
+}
+
+html.dark .ff-combo-empty,
+html[data-theme="dark"] .ff-combo-empty {
+  color: #b4bccb;
+}
+
+html.dark .ff-combo-input::placeholder,
+html[data-theme="dark"] .ff-combo-input::placeholder {
+  color: #8a97ab;
+}
+
+html.dark .ff-combo-sub,
+html[data-theme="dark"] .ff-combo-sub,
+html.dark .ff-combo-caret,
+html[data-theme="dark"] .ff-combo-caret {
+  color: #9fb0c8;
+}
+
+/* Access compare: which org the next pick comes from. */
+.acc-org-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
+.acc-org {
+  min-width: 260px;
+}
+
+.acc-org-hint {
+  margin: 2px 0 8px;
+}
+
+/* Access compare: readable differences. */
+.acc-summary {
+  margin: 6px 0 4px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: #fff7e8;
+  border: 1px solid #f5d9a8;
+  color: #7a4b00;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.acc-summary.same {
+  background: #e8f7ee;
+  border-color: #b7e2c6;
+  color: #15603d;
+}
+
+.acc-th-sub {
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
+
+.acc-matrix th.acc-what,
+.acc-matrix td.acc-what {
+  text-align: left;
+  white-space: normal;
+  min-width: 200px;
+  color: #7a4b00;
+  font-size: 12px;
+}
+
+.acc-flags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  white-space: normal;
+}
+
+.acc-flag {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #eef2f8;
+  color: #3d4b63;
+  border: 1px solid transparent;
+}
+
+.acc-flag.diff {
+  background: #e8f7ee;
+  color: #15603d;
+  border-color: #8fd1a8;
+  font-weight: 700;
+}
+
+.acc-none,
+.acc-no {
+  color: #8a94a6;
+  font-size: 12px;
+}
+
+.acc-yes {
+  color: #3d4b63;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.acc-yes.diff {
+  color: #15803d;
+}
+
+.acc-tab {
+  font-size: 12px;
+}
+
+html.dark .acc-summary,
+html[data-theme="dark"] .acc-summary {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fcd34d;
+}
+
+html.dark .acc-summary.same,
+html[data-theme="dark"] .acc-summary.same {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #86efac;
+}
+
+/* Access compare: two sides, each with its own org. */
+.acc-sides {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 10px;
+  align-items: stretch;
+  margin: 8px 0;
+}
+
+.acc-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #dce5f2;
+  border-radius: 10px;
+  background: #f8fafd;
+  min-width: 0;
+}
+
+.acc-side-h {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5c6b82;
+}
+
+.acc-side-org {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.acc-side-org .acc-org {
+  flex: 1;
+  min-width: 180px;
+}
+
+.acc-side-chips {
+  min-height: 26px;
+}
+
+.acc-vs {
+  align-self: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #8a94a6;
+}
+
+.acc-same {
+  align-self: flex-start;
+}
+
+.acc-parts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.acc-run {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+@media (max-width: 720px) {
+  .acc-sides {
+    grid-template-columns: 1fr;
+  }
+
+  .acc-vs {
+    justify-self: center;
+  }
+}
+
+html.dark .acc-side,
+html[data-theme="dark"] .acc-side {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.acc-empty-parts {
+  margin: 4px 0 8px;
+}
+
+/* Access compare: what kind of thing is compared, and where user access comes from. */
+.acc-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+
+.acc-from {
+  margin-top: 3px;
+  font-size: 11px;
+  color: #5c6b82;
+}
+
+/* Long values (sharing rules, settings) wrap instead of stretching the table. */
+.acc-matrix td .acc-tab {
+  display: inline-block;
+  max-width: 320px;
+  white-space: normal;
+  text-align: left;
+}
+
+/* Access → Sharing settings compare */
+.shr-toolbar {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shr-toolbar .shr-object {
+  min-width: 240px;
+  max-width: 320px;
+}
+
+.shr-matrix th.shr-org-h {
+  border-bottom: 1px solid rgba(127, 140, 160, 0.3);
+}
+
+.acc-matrix tr.acc-group > td {
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  background: rgba(127, 140, 160, 0.1);
+  padding-top: 6px;
 }

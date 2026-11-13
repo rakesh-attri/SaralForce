@@ -280,6 +280,17 @@ debug-log analysis.
 
 ## What's New
 
+### v2.3.2
+- **Access → Sharing settings** — Setup's Sharing Settings page in two orgs side by side: org-wide defaults
+  (internal and external), other sharing settings, sharing rules, sharing sets and restriction / scoping rules,
+  object by object, with what differs in plain words
+- **Access → Compare** — two sides, each in its own org; compare profiles & permission sets, users (effective
+  access, with where it comes from) or roles, public groups & queues; readable differences and more sections
+- **Find unused** (SandShift → Impact) — custom fields and objects nothing uses, ready for the delete list
+- **SandShift** — ask AI about a failed deploy; upload a package.xml
+- The wolf mascot on empty screens and a lighter watermark; progress bars scroll into view; Code Coverage next to
+  Users; per-tab tips no longer pop up; dark-mode dropdown fixes
+
 ### v2.3.1
 - **SandShift** — the Release tab has a new name
 - **Session expiry handled** — an expired session is renewed from your new login automatically; when you are

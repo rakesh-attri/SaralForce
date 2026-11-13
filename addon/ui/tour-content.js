@@ -70,6 +70,17 @@ export const SETTINGS_TOUR = {
 // Highlights per release, shown once after an update (newest first).
 export const RELEASE_NOTES = [
   {
+    version: "2.3.2",
+    title: "What's new in SaralForce 2.3.2",
+    items: [
+      "Access → Sharing settings: compare Setup's Sharing Settings page between two orgs (org-wide defaults, other settings, sharing rules, sharing sets, restriction rules), object by object.",
+      "Access → Compare: pick a side per org (sandbox vs production), and compare users' effective access or roles & groups, with plain-words differences.",
+      "SandShift → Impact → Find unused: custom fields and objects nothing uses, ready for the delete list.",
+      "SandShift: ask AI why a deploy failed, and upload a package.xml.",
+      "The wolf joins empty screens, progress bars scroll into view, Code Coverage sits next to Users, no more pop-up tips per tab, and dark-mode dropdown fixes."
+    ]
+  },
+  {
     version: "2.3.1",
     title: "What's new in SaralForce 2.3.1",
     items: [

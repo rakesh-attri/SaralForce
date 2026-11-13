@@ -31,16 +31,17 @@ export const INSPECTOR_TABS = [
   {id: "api", label: "API Explorer", icon: "🔌", component: ApiTab},
   {id: "logs", label: "Logs", icon: "📝", component: LogsTab},
   {id: "users", label: "Users", icon: "👥", component: UsersTab},
+  {id: "coverage", label: "Code Coverage", icon: "</>", component: CoverageTab},
   {id: "access", label: "Access", icon: "🛡️", component: AccessTab},
   {id: "metadata", label: "Metadata", icon: "🧩", component: MetadataTab},
   {id: "org", label: "Org Info", icon: "🏢", component: OrgTab},
   {id: "apptabs", label: "App Tab Manager", icon: "📑", component: AppTabManager},
-  {id: "release", label: "SandShift", icon: "🚀", component: ReleaseTab},
-  {id: "coverage", label: "Code Coverage", icon: "</>", component: CoverageTab}
+  {id: "release", label: "SandShift", icon: "🚀", component: ReleaseTab}
 ];
 
-// Second row of the tab bar: admin tools, then Code Coverage last.
-const TAB_ROW2 = new Set(["access", "metadata", "org", "apptabs", "release", "coverage"]);
+// Second row of the tab bar: admin tools. Code Coverage sits on the first
+// row, after Users.
+const TAB_ROW2 = new Set(["access", "metadata", "org", "apptabs", "release"]);
 
 // Shown when Salesforce says the session expired and logging in again
 // hasn't been picked up yet. Reconnect re-reads the session (also on its

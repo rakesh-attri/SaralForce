@@ -1,8 +1,8 @@
 // When to start which tour. A finished or skipped tour is marked seen so it
 // never nags; everything can be replayed from the "?" help button.
 import {startTour, isTourRunning} from "./tour.js";
-import {shouldAutoStart, markTourDone, isTourDone, pendingReleaseNotes, markVersionSeen} from "../core/tours.js";
-import {PANEL_TOUR, BUILDER_TOUR, RELEASE_NOTES, releaseNotesTour, tabTour} from "./tour-content.js";
+import {shouldAutoStart, markTourDone, pendingReleaseNotes, markVersionSeen} from "../core/tours.js";
+import {PANEL_TOUR, BUILDER_TOUR, RELEASE_NOTES, releaseNotesTour} from "./tour-content.js";
 
 export function extensionVersion() {
   try {
@@ -48,11 +48,9 @@ export function autoStartBuilderTour() {
   autoRun(BUILDER_TOUR, 600);
 }
 
-// First visit to an Inspector tab, once the main tour has been seen.
-export function autoStartTabTour(tabId) {
-  if (!isTourDone("panel")) return;
-  autoRun(tabTour(tabId), 500);
-}
+// Per-tab tips no longer open by themselves (they got in the way on every
+// new tab); "Tour this tool" in the ? menu still shows them.
+export function autoStartTabTour() {}
 
 export function showReleaseNotes() {
   return startTour(releaseNotesTour(RELEASE_NOTES));

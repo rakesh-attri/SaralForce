@@ -86,3 +86,133 @@ test("summarizeRiskyAccess ranks users by risky permission count", () => {
 test("soqlIdList drops anything that is not an id", () => {
   assert.equal(soqlIdList([A, "x' OR 1=1", B]), `'${A}','${B}'`);
 });
+
+test("compare across orgs: same profile in sandbox and production", async () => {
+  const {pickKey, splitPick, mergeCompareData, buildCompareMatrix} = await import("../../addon/core/access.js");
+  assert.deepEqual(splitPick("uat.sandbox.my.salesforce.com|0PS1"), {host: "uat.sandbox.my.salesforce.com", id: "0PS1"});
+  assert.deepEqual(splitPick("0PS1"), {host: "", id: "0PS1"});
+  // Both orgs happen to use the same Id: keys keep them apart.
+  const sb = {sets: [{Id: "0PS1", Name: "Admin", PermissionsModifyAllData: true, PermissionsApiEnabled: true}],
+    objectPerms: [{ParentId: "0PS1", SobjectType: "Invoice__c", PermissionsRead: true, PermissionsEdit: true}]};
+  const prod = {sets: [{Id: "0PS1", Name: "Admin", PermissionsModifyAllData: false, PermissionsApiEnabled: true}],
+    objectPerms: [{ParentId: "0PS1", SobjectType: "Invoice__c", PermissionsRead: true}]};
+  const order = [pickKey("", "0PS1"), pickKey("prod.my.salesforce.com", "0PS1")];
+  const merged = mergeCompareData([{host: "", data: sb}, {host: "prod.my.salesforce.com", data: prod}], order);
+  assert.deepEqual(merged.sets.map(s => s.Id), order);
+  const m = buildCompareMatrix(merged);
+  const modify = m.find(s => s.key === "system").rows.find(r => r.key === "PermissionsModifyAllData");
+  assert.deepEqual(modify.values, ["✓", ""]);
+  assert.equal(modify.differs, true);
+  const inv = m.find(s => s.key === "objects").rows.find(r => r.key === "Invoice__c");
+  assert.equal(inv.differs, true);
+});
+
+test("readable compare: labels, row differences and the summary", async () => {
+  const {columnLabels, describeRowDiff, diffSummary} = await import("../../addon/core/access.js");
+  // Same group in two orgs whose names differ only in case: org + kind.
+  const cols = [{item: "Student (group)", org: "NexTurn Inc", kind: "Production"}, {item: "Student (group)", org: "Nexturn Inc", kind: "Sandbox"}];
+  assert.deepEqual(columnLabels(cols), ["NexTurn Inc (Production)", "Nexturn Inc (Sandbox)"]);
+  assert.deepEqual(columnLabels([{item: "A", org: "X"}, {item: "B", org: "X"}]), ["A", "B"]);
+  assert.deepEqual(columnLabels([{item: "A", org: "X"}, {item: "B", org: "Y"}]), ["A · X", "B · Y"]);
+  const L = ["Prod", "UAT"];
+  assert.equal(describeRowDiff("objects", ["RCED", "R"], L), "Create, Edit, Delete: only in Prod");
+  assert.equal(describeRowDiff("objects", ["R", "—"], L), "No access in UAT");
+  assert.equal(describeRowDiff("objects", ["RCE", "R", "—"], ["A", "B", "C"]), "No access in C · Create, Edit: only in A");
+  assert.equal(describeRowDiff("objects", ["RV", "RCE"], L), "Create, Edit: only in UAT · View All: only in Prod");
+  assert.equal(describeRowDiff("system", ["✓", ""], L), "Only in Prod");
+  assert.equal(describeRowDiff("apps", ["", "✓", "✓"], ["A", "B", "C"]), "Not in A");
+  assert.equal(describeRowDiff("tabs", ["Visible", ""], L), "Prod: Visible · UAT: Not set");
+  const sum = diffSummary([{key: "system", rows: []}, {key: "objects", rows: [{differs: true}, {differs: true}]}, {key: "tabs", rows: [{differs: true}, {differs: false}]}]);
+  assert.equal(sum.text, "3 differences: 2 object permissions, 1 tab setting");
+  assert.equal(diffSummary([{key: "system", rows: [{differs: false}]}]).total, 0);
+});
+
+test("compare: Apex, field, license and sharing-default sections", async () => {
+  const {buildCompareMatrix, mergeCompareData, pickKey, describeRowDiff, diffSummary} = await import("../../addon/core/access.js");
+  const a = {sets: [{Id: "1", License: {Name: "Salesforce"}, IsOwnedByProfile: true}],
+    setupAccess: [{ParentId: "1", type: "ApexClass", name: "InvoiceService"}, {ParentId: "1", type: "CustomPermission", name: "Bypass_Rules"}],
+    fieldPerms: [{ParentId: "1", Field: "Account.Rating", PermissionsRead: true, PermissionsEdit: true}],
+    owd: {Account: "Private / Private"}};
+  const b = {sets: [{Id: "1", License: {Name: "Salesforce Platform"}, IsOwnedByProfile: true}],
+    setupAccess: [{ParentId: "1", type: "CustomPermission", name: "Bypass_Rules"}],
+    fieldPerms: [{ParentId: "1", Field: "Account.Rating", PermissionsRead: true, PermissionsEdit: false}],
+    owd: {Account: "Public Read Only / Private"}};
+  const order = [pickKey("", "1"), pickKey("prod", "1")];
+  const m = buildCompareMatrix(mergeCompareData([{host: "", data: a}, {host: "prod", data: b}], order));
+  const sec = k => m.find(s => s.key === k);
+  assert.equal(m[0].key, "general");
+  assert.deepEqual(sec("general").rows.find(r => r.key === "license").values, ["Salesforce", "Salesforce Platform"]);
+  assert.deepEqual(sec("apex").rows[0].values, ["✓", ""]);
+  assert.equal(sec("customPerms").rows[0].differs, false);
+  assert.deepEqual(sec("fields").rows[0].values, ["Read · Edit", "Read"]);
+  assert.deepEqual(sec("owd").rows[0].values, ["Private / Private", "Public Read Only / Private"]);
+  const L = ["Sandbox", "Prod"];
+  assert.equal(describeRowDiff("fields", ["Read · Edit", ""], L), "Sandbox: Read · Edit · Prod: No access");
+  assert.equal(describeRowDiff("apex", ["✓", ""], L), "Only in Sandbox");
+  assert.match(diffSummary(m).text, /1 Apex class/);
+  // Sharing defaults need two orgs: one org alone shows none.
+  const one = mergeCompareData([{host: "", data: {...a, sets: [{Id: "1"}, {Id: "2"}]}}], [pickKey("", "1"), pickKey("", "2")]);
+  assert.equal(one.owd, null);
+});
+
+test("users: effective access merges profile, sets and groups and keeps where it comes from", async () => {
+  const {combineAccess, buildCompareMatrix, mergeCompareData, pickKey} = await import("../../addon/core/access.js");
+  const data = {
+    sets: [{Id: "P", PermissionsModifyAllData: true, PermissionsApiEnabled: false}, {Id: "S", PermissionsApiEnabled: true, PermissionsModifyAllData: false}, {Id: "X", PermissionsAuthorApex: true}],
+    objectPerms: [{ParentId: "P", SobjectType: "Invoice__c", PermissionsRead: true}, {ParentId: "S", SobjectType: "Invoice__c", PermissionsEdit: true}],
+    tabSettings: [{ParentId: "P", Name: "Invoice", Visibility: "DefaultOff"}, {ParentId: "S", Name: "Invoice", Visibility: "DefaultOn"}],
+    setupAccess: [{ParentId: "S", type: "ApexClass", name: "InvoiceService"}], fieldPerms: [], appAccess: []
+  };
+  const {data: one, origins} = combineAccess(data, ["P", "S"], "U1", {P: "Profile: System Administrator", S: "Perm set: Dev Tools"}, {"Profile": "System Administrator"});
+  assert.equal(one.sets[0].PermissionsModifyAllData, true);
+  assert.equal(one.sets[0].PermissionsApiEnabled, true);
+  assert.equal(one.sets[0].PermissionsAuthorApex, undefined, "X is not this user's");
+  assert.deepEqual({r: one.objectPerms[0].PermissionsRead, e: one.objectPerms[0].PermissionsEdit}, {r: true, e: true});
+  assert.equal(one.tabSettings[0].Visibility, "DefaultOn");
+  assert.deepEqual(origins["system|PermissionsModifyAllData"], ["Profile: System Administrator"]);
+  assert.deepEqual(origins["apex|InvoiceService"], ["Perm set: Dev Tools"]);
+  const m = buildCompareMatrix(mergeCompareData([{host: "", data: one}], [pickKey("", "U1")]));
+  assert.equal(m.find(s => s.key === "general").rows[0].label, "Profile");
+});
+
+test("users: the same person in another org", async () => {
+  const {matchUser} = await import("../../addon/core/access.js");
+  const {baseUsername} = await import("../../addon/core/manual-steps.js");
+  const prod = [{id: "1", username: "rakesh@nexturn.com", email: "rakesh@nexturn.com"}, {id: "2", username: "priya@nexturn.com", email: "priya@nexturn.com"}];
+  assert.equal(matchUser({username: "rakesh@nexturn.com.uat", email: "rakesh@nexturn.com"}, prod, baseUsername).id, "1");
+  assert.equal(matchUser({username: "priya@nexturn.com.uat", email: "priya@nexturn.com.invalid"}, prod, baseUsername).id, "2");
+  assert.equal(matchUser({username: "nobody@x.com", email: ""}, prod, baseUsername), null);
+});
+
+test("roles & groups: settings, members and queue objects side by side", async () => {
+  const {buildRoleGroupMatrix, describeRowDiff} = await import("../../addon/core/access.js");
+  const m = buildRoleGroupMatrix([
+    {kind: "queue", settings: {"Type": "Queue", "Email": "q@x.com"}, members: [{type: "User", name: "rakesh@x.com"}, {type: "Role", name: "CEO"}], queueObjects: ["Case", "Lead"]},
+    {kind: "queue", settings: {"Type": "Queue", "Email": ""}, members: [{type: "User", name: "rakesh@x.com"}], queueObjects: ["Case"]}
+  ]);
+  const sec = k => m.find(s => s.key === k);
+  assert.equal(sec("rgSettings").rows.find(r => r.key === "Email").differs, true);
+  assert.deepEqual(sec("members").rows.map(r => [r.key, r.differs]), [["Role: CEO", true], ["User: rakesh@x.com", false]]);
+  assert.deepEqual(sec("queueObjects").rows.find(r => r.key === "Lead").values, ["✓", ""]);
+  assert.equal(describeRowDiff("members", ["✓", ""], ["Prod", "UAT"]), "Only in Prod");
+});
+
+test("sharing rules read as one line each", async () => {
+  const {summarizeSharingRule, sharingRulesSection} = await import("../../addon/core/access.js");
+  const crit = "<sharingCriteriaRules><fullName>Open_Cases</fullName><accessLevel>Edit</accessLevel><label>Open</label>" +
+    "<sharedTo><roleAndSubordinates>Sales_Manager</roleAndSubordinates></sharedTo>" +
+    "<criteriaItems><field>Status</field><operation>equals</operation><value>Open</value></criteriaItems></sharingCriteriaRules>";
+  assert.equal(summarizeSharingRule("SharingCriteriaRule", crit), "Criteria · Status equals Open → Role & subordinates Sales_Manager · Read/Write");
+  const owner = "<sharingOwnerRules><accessLevel>Read</accessLevel><sharedFrom><group>Sales</group></sharedFrom><sharedTo><allInternalUsers></allInternalUsers></sharedTo></sharingOwnerRules>";
+  assert.equal(summarizeSharingRule("SharingOwnerRule", owner), "Owner · Group Sales → All internal users · Read Only");
+  const sec = sharingRulesSection(["", "prod"], {"": {"Case.Open_Cases": "a"}, prod: {"Case.Open_Cases": "b", "Lead.X": "c"}});
+  assert.deepEqual(sec.rows.map(r => [r.key, r.values]), [["Case.Open_Cases", ["a", "b"]], ["Lead.X", ["", "c"]]]);
+});
+
+test("sharing rule differences say only what changed", async () => {
+  const {describeRowDiff} = await import("../../addon/core/access.js");
+  const L = ["Demo", "UAT"];
+  assert.equal(describeRowDiff("sharingRules", ["Criteria · Status equals Open → Role X · Read/Write", ""], L), "Only in Demo");
+  assert.equal(describeRowDiff("sharingRules", ["Owner · Group A → All internal users · Read Only", "Owner · Group A → All internal users · Read/Write"], L),
+    "Demo: Read Only · UAT: Read/Write");
+});

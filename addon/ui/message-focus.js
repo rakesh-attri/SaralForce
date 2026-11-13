@@ -8,6 +8,13 @@ export const MESSAGE_SELECTOR = [
   ".error-banner", ".deploy-success-banner", ".deploy-partial-banner", ".deploy-error-msg"
 ].join(",");
 
+// Progress of something just started (deploy, compare, import, coverage run):
+// brought into view when it appears, without the flash.
+export const PROGRESS_SELECTOR = [
+  ".tr-progress", ".cov-progress", "[role=progressbar]", ".deploy-progress-bar-container"
+].join(",");
+const PROGRESS_WINDOW_MS = 8000;
+
 // Only results of a recent click / key press, and never while the user is
 // scrolling (a message from a slow background poll must not yank the page).
 const ACTION_WINDOW_MS = 180000;
@@ -45,10 +52,17 @@ export function installMessageFocus(root = document.body) {
   window.addEventListener("touchmove", onScroll, {capture: true, passive: true});
 
   let pending = new Set();
+  let progress = null;
   let timer = null;
   const flush = () => {
     timer = null;
     const now = Date.now();
+    const bar = progress;
+    progress = null;
+    if (bar && bar.isConnected && now - lastAction < PROGRESS_WINDOW_MS && now - lastScroll >= SCROLL_QUIET_MS && !isInView(bar)) {
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      bar.scrollIntoView({behavior: reduce ? "auto" : "smooth", block: "center"});
+    }
     const els = [...pending].filter(el => el.isConnected && String(el.textContent || "").trim());
     pending = new Set();
     if (!els.length || now - lastAction > ACTION_WINDOW_MS || now - lastScroll < SCROLL_QUIET_MS) return;
@@ -63,8 +77,12 @@ export function installMessageFocus(root = document.body) {
     target.classList.add("ff-msg-flash");
     setTimeout(() => target.classList.remove("ff-msg-flash"), 1500);
   };
-  const consider = el => {
+  const consider = (el, added) => {
     if (!el || el.nodeType !== 1) return;
+    if (added) {
+      const bar = el.matches(PROGRESS_SELECTOR) ? el : el.querySelector && el.querySelector(PROGRESS_SELECTOR);
+      if (bar) progress = bar;
+    }
     const msg = el.matches(MESSAGE_SELECTOR) ? el : el.closest(MESSAGE_SELECTOR);
     if (msg) pending.add(msg);
     else if (el.querySelectorAll) el.querySelectorAll(MESSAGE_SELECTOR).forEach(m => pending.add(m));
@@ -72,9 +90,9 @@ export function installMessageFocus(root = document.body) {
   const obs = new MutationObserver(records => {
     for (const rec of records) {
       if (rec.type === "characterData") consider(rec.target.parentElement);
-      else rec.addedNodes.forEach(n => consider(n.nodeType === 3 ? n.parentElement : n));
+      else rec.addedNodes.forEach(n => consider(n.nodeType === 3 ? n.parentElement : n, n.nodeType === 1));
     }
-    if (pending.size && !timer) timer = setTimeout(flush, 120);
+    if ((pending.size || progress) && !timer) timer = setTimeout(flush, 120);
   });
   obs.observe(root, {childList: true, subtree: true, characterData: true});
   return () => {
