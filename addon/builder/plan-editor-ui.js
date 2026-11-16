@@ -244,12 +244,17 @@ export function FieldDetails({field, fields, objectHistory, onChange, suggest}) 
           })));
         const vals = (field.values || []).filter(Boolean);
         if (vals.length) {
-          rows.push(h(Select, {key: "def", label: "Default value", value: vals.includes(field.defaultValue) ? field.defaultValue : vals[0],
-            options: vals, onChange: v => onChange({defaultValue: v})}));
+          rows.push(h(Select, {key: "def", label: "Default value",
+            value: field.noDefault ? "" : vals.includes(field.defaultValue) ? field.defaultValue : vals[0],
+            options: [{value: "", label: "(no default)"}, ...vals],
+            onChange: v => onChange(v ? {defaultValue: v, noDefault: undefined} : {defaultValue: undefined, noDefault: true})}));
         }
         rows.push(h(Select, {key: "ctrl", label: "Controlling field", value: field.controllingField || "",
           options: [{value: "", label: "(none)"}, ...controllers.map(f => ({value: f.name, label: f.label || f.name}))],
-          onChange: v => onChange({controllingField: v || undefined, dependencies: v ? field.dependencies : undefined})}));
+          // Dependencies are keyed by the controller's values: a new
+          // controller starts with none (the old keys would not match).
+          onChange: v => onChange({controllingField: v || undefined,
+            dependencies: v && v === field.controllingField ? field.dependencies : undefined})}));
       }
       if (type === "MultiselectPicklist") {
         rows.push(h(Input, {key: "vl", label: "Visible lines", type: "number", value: field.visibleLines, onChange: set("visibleLines")}));

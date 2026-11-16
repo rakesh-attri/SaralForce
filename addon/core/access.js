@@ -266,9 +266,10 @@ export function splitPick(key) {
 
 // parts: [{host, data}] with data from loadCompareData for that org. Ids of
 // different orgs can't clash: every Id / ParentId becomes its pick key.
-// Returns one data set for buildCompareMatrix, sets in `order` (pick keys).
+// Returns one data set for buildCompareMatrix, sets in `order` (pick keys),
+// and `missing`: the keys of `order` no org returned (deleted since picked).
 export function mergeCompareData(parts, order) {
-  const out = {sets: [], objectPerms: [], tabSettings: [], appAccess: [], setupAccess: [], fieldPerms: [], owd: null};
+  const out = {sets: [], objectPerms: [], tabSettings: [], appAccess: [], setupAccess: [], fieldPerms: [], owd: null, missing: []};
   const sets = new Map();
   for (const {host, data} of parts) {
     const k = id => pickKey(host, id);
@@ -286,21 +287,53 @@ export function mergeCompareData(parts, order) {
   }
   // Sharing defaults only say something when more than one org is compared.
   if (parts.filter(p => p.data && p.data.owd).length < 2) out.owd = null;
+  out.missing = order.filter(key => !sets.has(key));
   out.sets = order.map(key => sets.get(key)).filter(Boolean);
   return out;
 }
 
+// Sections that could not be read in some org compare nothing: their rows
+// would all look like differences. failed: {sectionKey: ["UAT", …]} → the
+// section with no rows and `unread` (the orgs it failed in).
+export function markUnreadSections(sections, failed = {}) {
+  return sections.map(s => (failed[s.key] && failed[s.key].length ? {...s, rows: [], unread: [...failed[s.key]]} : s));
+}
+
 // ── Readable differences ──────────────────────────────────────────────
-// cols: [{item, org, kind}] (kind "Sandbox" / "Production"). The shortest
-// label that still tells the columns apart: the org when the same item is
-// compared across orgs (with its kind when two org names look alike), the
-// item when everything is in one org, otherwise both.
+// cols: [{item, org, kind, host}] (kind "Sandbox" / "Production"). The
+// shortest label that still tells the columns apart: the org when the same
+// item is compared across orgs (with its kind when two org names look alike),
+// the item when everything is in one org, otherwise both. Labels are always
+// unique: still-equal ones get the kind, then the host, then "#2".
 export function columnLabels(cols) {
+  return uniqueLabels(baseColumnLabels(cols), cols);
+}
+
+function uniqueLabels(labels, cols) {
+  const dup = (all, i) => all.some((o, j) => j !== i && o === all[i]);
+  let out = labels.map((l, i) => {
+    const k = cols[i].kind;
+    return dup(labels, i) && k && !l.includes(`(${k})`) ? `${l} (${k})` : l;
+  });
+  out = out.map((l, i, all) => (dup(all, i) && cols[i].host ? `${l} · ${cols[i].host}` : l));
+  const seen = new Map();
+  return out.map((l, i, all) => {
+    if (!dup(all, i)) return l;
+    let n = (seen.get(l) || 0) + 1;
+    seen.set(l, n);
+    if (n === 1) return l;
+    while (all.includes(`${l} #${n}`)) n++;
+    return `${l} #${n}`;
+  });
+}
+
+function baseColumnLabels(cols) {
   const items = new Set(cols.map(c => c.item));
-  const orgs = new Set(cols.map(c => c.org));
+  // Production and its sandbox share a name: the host tells the orgs apart.
+  const orgs = new Set(cols.map(c => (c.host != null ? c.host : c.org)));
   const orgLabel = c => {
     const twin = cols.some(o => o !== c && o.org !== c.org && String(o.org).toLowerCase() === String(c.org).toLowerCase());
-    const same = cols.some(o => o !== c && o.org === c.org);
+    const same = cols.some(o => o !== c && o.org === c.org && (o.host == null || o.host !== c.host));
     return (twin || same) && c.kind ? `${c.org} (${c.kind})` : c.org;
   };
   if (items.size === 1 && orgs.size > 1) return cols.map(orgLabel);
@@ -415,13 +448,16 @@ export function combineAccess(data, sourceIds, key, names = {}, general = null) 
     if (r.PermissionsRead || r.PermissionsEdit) note("fields|" + r.Field, r.ParentId);
   }
   const byTab = new Map();
+  const tabSources = [];
   for (const t of data.tabSettings || []) {
     if (!src.has(t.ParentId)) continue;
     const v = t.Visibility === "DefaultOn" ? "Visible" : t.Visibility === "DefaultOff" ? "Available" : (t.Visibility || "");
     const cur = byTab.get(t.Name);
-    if (!cur || (TAB_RANK[v] || 0) > (TAB_RANK[cur] || 0)) byTab.set(t.Name, v);
-    note("tabs|" + t.Name, t.ParentId);
+    if (cur === undefined || (TAB_RANK[v] || 0) > (TAB_RANK[cur] || 0)) byTab.set(t.Name, v);
+    tabSources.push([t.Name, v, t.ParentId]);
   }
+  // Where a tab's visibility comes from: only the sources giving the winning one.
+  for (const [name, v, id] of tabSources) if (byTab.get(name) === v) note("tabs|" + name, id);
   const VIS = {Visible: "DefaultOn", Available: "DefaultOff"};
   const SETUP_SECTION = {ApexClass: "apex", ApexPage: "pages", CustomPermission: "customPerms", ConnectedApplication: "connectedApps", FlowDefinition: "flows"};
   const apps = (data.appAccess || []).filter(a => src.has(a.ParentId));
@@ -442,16 +478,32 @@ export function combineAccess(data, sourceIds, key, names = {}, general = null) 
   };
 }
 
-// The same person in another org: by email first, then by username without
-// the sandbox suffix (passed in as base, e.g. from manual-steps baseUsername).
+// The same person in another org: by username without the sandbox suffix
+// first (passed in as base, e.g. from manual-steps baseUsername), then by
+// email when exactly one candidate has it.
 export function matchUser(user, candidates, base = u => String(u || "").toLowerCase()) {
+  const b = base(user.username);
+  const byName = b ? candidates.filter(c => base(c.username) === b) : [];
+  if (byName.length === 1) return byName[0];
   const email = String(user.email || "").toLowerCase();
   if (email) {
     const byEmail = candidates.filter(c => String(c.email || "").toLowerCase() === email);
     if (byEmail.length === 1) return byEmail[0];
   }
-  const b = base(user.username);
-  return candidates.find(c => base(c.username) === b) || null;
+  return null;
+}
+
+// The same profile / permission set / group in another org: same kind and
+// API name (+ namespace); by label only when exactly one candidate has it.
+// p, candidates: loadPermSetList items {kind, api, ns, name}.
+export function matchPermSet(p, candidates) {
+  const sameKind = candidates.filter(c => c.kind === p.kind);
+  if (p.api) {
+    const byApi = sameKind.filter(c => c.api === p.api && (c.ns || "") === (p.ns || ""));
+    if (byApi.length === 1) return byApi[0];
+  }
+  const byLabel = sameKind.filter(c => c.name === p.name);
+  return byLabel.length === 1 ? byLabel[0] : null;
 }
 
 // ── Roles, public groups and queues ───────────────────────────────────
@@ -480,6 +532,25 @@ const SHARE_TO = {group: "Group", role: "Role", roleAndSubordinates: "Role & sub
   portalRole: "Portal role", portalRoleAndSubordinates: "Portal role & subordinates", territory: "Territory", territoryAndSubordinates: "Territory & subordinates",
   queue: "Queue", guestUser: "Guest user"};
 const ACCESS = {Read: "Read Only", Edit: "Read/Write", All: "Full Access"};
+const CHILD_ACCESS = {None: "Private", Read: "Read Only", Edit: "Read/Write"};
+const decodeXml = s => String(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+
+// Account rules: access to the account's cases, contacts and opportunities;
+// any rule: whose records it includes. Each its own " · " part.
+function ruleExtras(x) {
+  const out = [];
+  const acct = tagText(x, "accountSettings");
+  if (acct) {
+    for (const [tag, label] of [["caseAccessLevel", "Case"], ["contactAccessLevel", "Contact"], ["opportunityAccessLevel", "Opportunity"]]) {
+      const v = tagText(acct, tag);
+      if (v) out.push(`${label}: ${CHILD_ACCESS[v] || v}`);
+    }
+  }
+  const incl = [["includeRecordsOwnedByAll", "records owned by all users"], ["includeHVUOwnedRecords", "high-volume users' records"]]
+    .filter(([tag]) => tagText(x, tag) === "true").map(([, label]) => label);
+  if (incl.length) out.push(`Includes ${incl.join(", ")}`);
+  return out.map(p => " · " + p).join("");
+}
 function whoText(block) {
   for (const [tag, label] of Object.entries(SHARE_TO)) {
     const v = tagText(block, tag);
@@ -494,12 +565,12 @@ export function summarizeSharingRule(type, xml) {
   const x = String(xml || "");
   const to = whoText(tagText(x, "sharedTo"));
   const access = ACCESS[tagText(x, "accessLevel")] || tagText(x, "accessLevel");
-  if (/Owner/.test(type)) return `Owner · ${whoText(tagText(x, "sharedFrom"))} → ${to} · ${access}`;
+  if (/Owner/.test(type)) return decodeXml(`Owner · ${whoText(tagText(x, "sharedFrom"))} → ${to} · ${access}${ruleExtras(x)}`);
   const items = [...x.matchAll(/<criteriaItems>([\s\S]*?)<\/criteriaItems>/g)].map(m =>
     `${tagText(m[1], "field")} ${tagText(m[1], "operation").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase()} ${tagText(m[1], "value")}`.trim());
   const logic = tagText(x, "booleanFilter");
   const label = /Guest/.test(type) ? "Guest" : /Territory/.test(type) ? "Territory" : "Criteria";
-  return `${label} · ${items.join(logic ? ` (${logic}) ` : " AND ") || "any record"} → ${to} · ${access}`;
+  return decodeXml(`${label} · ${items.join(logic ? ` (${logic}) ` : " AND ") || "any record"} → ${to} · ${access}${ruleExtras(x)}`);
 }
 
 // Columns' orgs → a section of rules: rulesByHost {host: {"Account.Rule": summary}}.

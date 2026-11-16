@@ -346,7 +346,7 @@ function ImportTab() {
       Row: x.row, Field: x.field, Severity: x.severity,
       Problem: x.problem, "Suggested correction": x.suggestion || ""
     }));
-    downloadText("import-validation-errors.csv", toCsvEx(cols, rows, {delimiter: ","}),
+    downloadText("import-validation-errors.csv", toCsvEx(cols, rows, {delimiter: ",", guardFormulas: true}),
       "text/csv;charset=utf-8");
   };
 

@@ -5,6 +5,10 @@ import {domLocal, domChildren, domFind, domFindAll, domMakeEl} from "./metadata-
 
 const XSI = "http://www.w3.org/2001/XMLSchema-instance";
 
+// LayoutItem elements that come after customLink in the Metadata API schema.
+const CUSTOMLINK_AFTER = new Set(["emptySpace", "field", "height", "page", "reportChartComponent", "scontrol",
+  "showLabel", "showScrollbars", "width"]);
+
 // Layout metadata requires every layoutItems to carry a customLink child
 // (valued or xsi:nil). Some readMetadata responses omit it on untouched
 // rows; updateMetadata validates the whole layout, so one bare row fails
@@ -27,21 +31,27 @@ export function ensureLayoutCustomLinks(root) {
     if (!has) {
       const cl = li.ownerDocument.createElement("customLink");
       cl.setAttributeNS(XSI, "xsi:nil", "true");
-      const fieldNode = domFind(li, "field");
-      const beh = domFind(li, "behavior");
-      if (fieldNode) li.insertBefore(cl, fieldNode);
-      else if (beh) li.insertBefore(cl, beh.nextSibling);
+      // LayoutItem children must follow the schema order; customLink goes
+      // before the first element that comes after it (emptySpace, field,
+      // height, page, …), not after them.
+      const next = domChildren(li).find(c => CUSTOMLINK_AFTER.has(domLocal(c)));
+      if (next) li.insertBefore(cl, next);
       else li.appendChild(cl);
     }
   }
 }
 
-// Drop empty layoutColumns (updateMetadata rejects / mis-validates them).
+const sectionColumns = sec => domChildren(sec).filter(n => domLocal(n) === "layoutColumns");
+
+// A section whose columns are ALL empty is dropped to no columns (the shape
+// updateMetadata mis-validated). In a section that still holds items, an
+// empty <layoutColumns/> is a valid placeholder that fixes the position of
+// the others: removing it would slide the right column's fields to the left.
 export function removeEmptyLayoutColumns(root) {
   for (const sec of domFindAll(root, "layoutSections")) {
-    for (const col of domChildren(sec)) {
-      if (domLocal(col) !== "layoutColumns") continue;
-      if (domChildren(col).length === 0) sec.removeChild(col);
+    const cols = sectionColumns(sec);
+    if (cols.length && cols.every(col => domChildren(col).length === 0)) {
+      for (const col of cols) sec.removeChild(col);
     }
   }
 }
@@ -60,6 +70,13 @@ export function fixCustomLinksWithFields(root) {
     });
     if (fieldItems.length > 0) {
       styleEl.textContent = "TwoColumnsTopToBottom";
+      // A two-column style allows at most two columns: move the items of
+      // any extra columns into the second one, in order, then drop them.
+      const cols = sectionColumns(sec);
+      for (const extra of cols.slice(2)) {
+        for (const item of domChildren(extra)) cols[1].appendChild(item);
+        sec.removeChild(extra);
+      }
       // Ensure section has a label (some CustomLinks sections omit it).
       if (!domFind(sec, "label")) {
         const label = sec.ownerDocument.createElement("label");
@@ -86,7 +103,11 @@ export function layoutNeedsRepair(records) {
       needsRepair = true;
     }
   }
-  if (domFindAll(records, "layoutColumns").some(c => domChildren(c).length === 0)) {
+  // Only all-empty sections are repaired (see removeEmptyLayoutColumns).
+  if (domFindAll(records, "layoutSections").some(sec => {
+    const cols = sectionColumns(sec);
+    return cols.length > 0 && cols.every(c => domChildren(c).length === 0);
+  })) {
     needsRepair = true;
   }
   for (const li of domFindAll(records, "layoutItems")) {

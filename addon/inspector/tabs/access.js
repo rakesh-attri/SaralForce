@@ -3,17 +3,19 @@ import {safeCopyText} from "../../utils.js";
 import {
   buildCompareMatrix, filterMatrix, effectiveAccess, summarizeRiskyAccess,
   humanizePermission, OBJECT_PERM_FLAGS, pickKey, splitPick, mergeCompareData,
-  columnLabels, describeRowDiff, diffSummary, COMPARE_PARTS, matchUser, buildRoleGroupMatrix, sharingRulesSection
+  columnLabels, describeRowDiff, diffSummary, COMPARE_PARTS, matchUser, matchPermSet, buildRoleGroupMatrix, sharingRulesSection,
+  markUnreadSections
 } from "../../core/access.js";
 import {baseUsername} from "../../core/manual-steps.js";
+import {toCsv as toCsvCore} from "../../core/csv.js";
 import {confirmDialog} from "../../ui/confirm.js";
 import {
-  loadPermSetList, loadPermFieldNames, loadCompareData, userPermSources,
+  ROW_CAP, loadPermSetList, loadPermFieldNames, loadCompareData, userPermSources,
   loadUserList, loadUserAccess, loadRoleGroupList, loadRoleGroupData, loadSharingRules,
   objectPermRows, fieldPermRows, systemPermRows, riskyAssignments
 } from "../shared/access-data.js";
 import {ffGetObjects} from "../shared/describe.js";
-import {toCsv, downloadText} from "../shared/csv.js";
+import {downloadText} from "../shared/csv.js";
 import {logsAskLlm} from "../shared/ai.js";
 import {AnalysisReport} from "../shared/analysis-report.js";
 import {FFBadge, EmptyState} from "../shared/ui.js";
@@ -101,6 +103,8 @@ function CompareSide({title, kind, host, onHost, keys, onKeys, total, orgs, curr
       emptyText: "No match", disabled: !list || total >= MAX_COMPARE,
       ariaLabel: `${title}: ${what}`, className: "acc-pick"
     }),
+    list && list.capped && h("div", {className: "insp-meta"},
+      `Only the first ${list.length.toLocaleString()} ${what} are listed: this org has more.`),
     h("div", {className: "insp-chips acc-side-chips"},
       keys.length ? keys.map(k => h("button", {key: k, className: "insp-chip", title: "Remove", onClick: () => onKeys(keys.filter(x => x !== k))}, itemOf(k), " ×"))
         : h("span", {className: "insp-meta"}, "Nothing picked yet")),
@@ -157,8 +161,9 @@ function CompareCard() {
   const itemFor = key => { const {host, id} = splitPick(key); return (listOf(host) || []).find(p => p.id === id) || null; };
   const itemOf = key => (itemFor(key) || {}).name || splitPick(key).id;
   const colOf = key => {
-    const o = orgOf(splitPick(key).host);
-    return {item: itemOf(key), org: orgName(splitPick(key).host), kind: o ? (o.isSandbox ? "Sandbox" : "Production") : ""};
+    const {host} = splitPick(key);
+    const o = orgOf(host);
+    return {item: itemOf(key), org: orgName(host), kind: o ? (o.isSandbox ? "Sandbox" : "Production") : "", host: host || (o ? o.host : "")};
   };
   // "Same as left": the left side's items in the right side's org.
   const listB = listOf(hostB);
@@ -167,18 +172,23 @@ function CompareCard() {
     if (!p) return null;
     if (kind === "users") return matchUser(p, listB, baseUsername);
     if (kind === "roles") return listB.find(x => x.dev === p.dev && x.kind === p.kind);
-    return listB.find(x => x.name === p.name && x.kind === p.kind);
+    return matchPermSet(p, listB);
   }).filter(p => p && !keysB.includes(pickKey(hostB, p.id)) && !(hostA === hostB && keysA.includes(pickKey(hostB, p.id))))
     .filter((p, i, a) => a.findIndex(x => x.id === p.id) === i).slice(0, MAX_COMPARE - total) : [];
   const twoOrgs = hostA !== hostB;
+  // A compare that ends after a newer one (or a kind switch) is ignored.
+  const runRef = React.useRef(0);
 
   const switchKind = async k => {
-    if (k === kind) return;
+    if (k === kind || loading) return;
     if (total && !(await confirmDialog({title: "Switch what you compare?", message: "The items picked on both sides are cleared.", confirmLabel: "Switch"}))) return;
-    setPickedA([]); setPickedB([]); setMatrix(null); setError(null); setKind(k);
+    runRef.current++;
+    setPickedA([]); setPickedB([]); setMatrix(null); setError(null); setLoading(""); setKind(k);
   };
 
   const compare = async () => {
+    const run = ++runRef.current;
+    const live = () => runRef.current === run;
     setLoading("Reading permissions…");
     setError(null);
     try {
@@ -186,80 +196,109 @@ function CompareCard() {
       const conns = Object.fromEntries(hosts.map(h => [h, h ? orgByHost(h) : null]));
       for (const h of hosts) if (h && !conns[h]) throw new Error(`Log in to ${h} in this browser first (it isn't in your org list).`);
       const idsOf = host => keys.filter(k => splitPick(k).host === host).map(k => splitPick(k).id);
+      const notes = [];
+      const failed = {}; // section key → org names it could not be read in
+      const addFailed = (host, list) => {
+        for (const k of list || []) { failed[k] = failed[k] || []; if (!failed[k].includes(orgName(host))) failed[k].push(orgName(host)); }
+      };
+      const addCut = (host, list) => {
+        if (list && list.length) notes.push(`Some data was cut off at ${ROW_CAP.toLocaleString("en-US")} rows in ${orgName(host)} (${list.join(", ")}): differences may be incomplete.`);
+      };
       let sections;
+      let found;
       const origins = {};
       if (kind === "roles") {
         const byKey = {};
         await Promise.all(hosts.map(async host => {
-          const items = idsOf(host).map(id => ({id, kind: (itemFor(pickKey(host, id)) || {}).kind || "group"}));
-          const got = await loadRoleGroupData(items, conns[host] ? conns[host].conn : undefined);
+          // Not listed yet: the id says which (00E role; 00G group or queue, read the same way).
+          const items = idsOf(host).map(id => ({id, kind: (itemFor(pickKey(host, id)) || {}).kind || (/^00E/.test(id) ? "role" : "group")}));
+          const info = {cut: []};
+          const got = await loadRoleGroupData(items, conns[host] ? conns[host].conn : undefined, info);
+          addCut(host, info.cut);
           for (const id of Object.keys(got)) byKey[pickKey(host, id)] = got[id];
         }));
-        sections = buildRoleGroupMatrix(keys.map(k => byKey[k] || {settings: {}, members: [], queueObjects: []}));
+        found = keys.filter(k => byKey[k]);
+        sections = buildRoleGroupMatrix(found.map(k => byKey[k]));
       } else {
         const loaded = await Promise.all(hosts.map(async host => {
           const conn = conns[host] ? conns[host].conn : undefined;
-          if (kind === "users") {
-            const r = await loadUserAccess(idsOf(host), conn, parts);
-            for (const id of Object.keys(r.origins)) origins[pickKey(host, id)] = r.origins[id];
-            return {host, data: r.data};
-          }
-          return {host, data: await loadCompareData(idsOf(host), conn, parts)};
+          const r = kind === "users" ? await loadUserAccess(idsOf(host), conn, parts) : {data: await loadCompareData(idsOf(host), conn, parts)};
+          for (const id of Object.keys(r.origins || {})) origins[pickKey(host, id)] = r.origins[id];
+          addFailed(host, r.data.failed);
+          addCut(host, r.data.cut);
+          return {host, data: r.data};
         }));
-        sections = buildCompareMatrix(mergeCompareData(loaded, keys));
+        const merged = mergeCompareData(loaded, keys);
+        found = keys.filter(k => !merged.missing.includes(k));
+        sections = buildCompareMatrix(merged);
       }
+      // Picks deleted since they were picked: left out, so the columns stay aligned.
+      const missing = keys.filter(k => !found.includes(k)).map(k => `${itemOf(k)} no longer exists in ${orgName(splitPick(k).host)}.`);
+      if (!found.length) throw new Error(missing.join(" ") || "Nothing to compare.");
       // Sharing rules: each column's org (only when the sides are in different orgs).
+      // An org that can't be read leaves the section out rather than making every rule "only in" the other.
       if (parts.includes("sharingRules") && twoOrgs) {
-        setLoading("Reading sharing rules…");
+        if (live()) setLoading("Reading sharing rules…");
+        const colHosts = found.map(k => splitPick(k).host);
         const rulesByHost = {};
-        await Promise.all(hosts.map(async host => {
+        await Promise.all([...new Set(colHosts)].map(async host => {
           const o = orgOf(host);
-          rulesByHost[host] = o && o.conn ? await loadSharingRules(o.conn) : {};
+          try {
+            if (!o || !o.conn) throw new Error("not connected");
+            rulesByHost[host] = await loadSharingRules(o.conn);
+          } catch (e) {
+            addFailed(host, ["sharingRules"]);
+          }
         }));
-        sections.push(sharingRulesSection(keys.map(k => splitPick(k).host), rulesByHost));
+        sections.push(failed.sharingRules ? {key: "sharingRules", title: "Sharing rules", rows: []} : sharingRulesSection(colHosts, rulesByHost));
       }
-      const cols = keys.map(colOf);
-      setMatrix({kind, ids: keys, cols, names: columnLabels(cols), sections, origins: kind === "users" ? origins : null});
+      if (!live()) return;
+      const cols = found.map(colOf);
+      setMatrix({kind, ids: found, picked: keys, hosts: [hostA, hostB], parts: [...parts], cols, names: columnLabels(cols),
+        sections: markUnreadSections(sections, failed), origins: kind === "users" ? origins : null, notes: [...missing, ...notes]});
     } catch (e) {
-      setError(e.message);
+      if (live()) setError(e.message);
     } finally {
-      setLoading("");
+      if (live()) setLoading("");
     }
   };
-  const visible = matrix ? matrix.sections.filter(s => parts.includes(s.key) || (s.key === "general" && parts.includes("general"))) : [];
-  const shown = matrix ? filterMatrix(visible, {onlyDiff, term}) : [];
+  // A result of another kind (from before a switch) is never shown.
+  const m = matrix && matrix.kind === kind ? matrix : null;
+  const changed = m && m.picked && (m.picked.join(",") !== keys.join(",") || m.hosts[0] !== hostA || m.hosts[1] !== hostB ||
+    parts.some(p => !m.parts.includes(p)));
+  const visible = m ? m.sections.filter(s => parts.includes(s.key) || (s.key === "general" && parts.includes("general"))) : [];
+  const shown = m ? filterMatrix(visible, {onlyDiff, term}) : [];
+  const unread = visible.filter(s => s.unread);
   // Users: which profile / permission set / group gives each column its access.
   const fromText = (s, r) => {
-    if (!matrix.origins) return "";
+    if (!m.origins) return "";
     const parts2 = r.values.map((v, i) => {
       if (!v || v === "—") return "";
-      const o = (matrix.origins[matrix.ids[i]] || {})[`${s.key}|${r.key}`];
-      return o && o.length ? `${matrix.names[i]}: from ${o.join(", ")}` : "";
+      const o = (m.origins[m.ids[i]] || {})[`${s.key}|${r.key}`];
+      return o && o.length ? `${m.names[i]}: from ${o.join(", ")}` : "";
     }).filter(Boolean);
     return parts2.join(" · ");
   };
+  // Cells by column position, so two columns with the same name never collide.
   const exportCsv = () => {
-    const cols = ["Section", "Item", ...matrix.names, "What differs", "Where it comes from"];
-    const rows = [];
+    const rows = [["Section", "Item", ...m.names, "What differs", "Where it comes from"]];
     for (const s of visible) {
       for (const r of s.rows) {
-        const row = {Section: s.title, Item: r.label, "What differs": r.differs ? describeRowDiff(s.key, r.values, matrix.names) : "",
-          "Where it comes from": fromText(s, r)};
-        matrix.names.forEach((n, i) => { row[n] = r.values[i]; });
-        rows.push(row);
+        rows.push([s.title, r.label, ...m.names.map((_, i) => r.values[i]),
+          r.differs ? describeRowDiff(s.key, r.values, m.names) : "", fromText(s, r)]);
       }
     }
-    downloadText("access-compare.csv", toCsv(cols, rows));
+    downloadText("access-compare.csv", toCsvCore(rows[0].map((_, i) => i), rows, {guardFormulas: true, headers: false}));
   };
   const sideProps = {kind, total, orgs, current, lists, orgName};
   const kindLabel = (COMPARE_KINDS.find(x => x[0] === kind) || COMPARE_KINDS[0])[2];
 
   return h("div", {className: "org-card org-card-wide", "data-tour": "access-compare"},
     h(CardHead, {icon: "⚖️", title: "Compare access"},
-      matrix && h("button", {className: "btn btn-secondary btn-sm", onClick: exportCsv}, "Download CSV")),
+      m && h("button", {className: "btn btn-secondary btn-sm", onClick: exportCsv}, "Download CSV")),
     h("div", {className: "acc-kinds", role: "group", "aria-label": "What to pick"},
       h("span", {className: "rel-org-l"}, "Compare"),
-      COMPARE_KINDS.map(([id, label]) => h("button", {key: id, type: "button", "aria-pressed": kind === id,
+      COMPARE_KINDS.map(([id, label]) => h("button", {key: id, type: "button", "aria-pressed": kind === id, disabled: !!loading,
         className: "insp-chip rel-chip" + (kind === id ? " on" : ""), onClick: () => switchKind(id)}, label))),
     h("div", {className: "sq3-card-sub"},
       `Pick ${kindLabel} on each side (up to ${MAX_COMPARE} in all). Each side can be in its own org: this one or another you're logged into, such as a sandbox against production.` +
@@ -286,12 +325,12 @@ function CompareCard() {
     loading && h("div", {className: "tr-progress"}, h("div", {className: "cov-progress"}, h("div", {className: "cov-progress-fill"})),
       h("span", {className: "insp-meta"}, loading)),
     error && h("div", {className: "insp-error"}, error),
-    !matrix && !loading && h(EmptyState, {art: kind === "users" ? "users" : "compare",
+    !m && !loading && h(EmptyState, {art: kind === "users" ? "users" : "compare",
       title: total < 2 ? "Pick what to compare" : "Ready when you are",
       text: total < 2
         ? `Left: what you start from. Right: what to compare it with, in the same org or another one. Use “＋ Same as left” to pick the same ${kind === "users" ? "person" : kind === "roles" ? "role or group" : "profile"} in the other org.`
         : `Press Compare to see ${total} of them side by side.`}),
-    matrix && h("div", {className: "acc-toolbar"},
+    m && h("div", {className: "acc-toolbar"},
       h("label", {className: "sq3-check"},
         h("input", {type: "checkbox", checked: onlyDiff, onChange: e => setOnlyDiff(e.target.checked)}),
         h("span", null, "Only differences")),
@@ -302,25 +341,30 @@ function CompareCard() {
         "aria-label": "Filter rows",
         onChange: e => setTerm(e.target.value)
       })),
-    matrix && h("div", {className: "acc-summary" + (diffSummary(visible).total ? "" : " same")}, diffSummary(visible).text),
+    m && changed && h("div", {className: "insp-warn"}, "Picks changed since this compare — press Compare to refresh."),
+    m && (m.notes || []).length > 0 && h("div", {className: "insp-warn"}, m.notes.join(" ")),
+    m && h("div", {className: "acc-summary" + (diffSummary(visible).total ? "" : " same")}, diffSummary(visible).text),
+    // Sections one org couldn't read: not compared, so they count no differences.
+    unread.length > 0 && h("div", {className: "insp-meta acc-empty-parts"},
+      "Not compared: " + unread.map(s => `${s.title.replace(/ \(.*\)$/, "")} (could not read in ${s.unread.join(", ")})`).join(", ") + "."),
     // Sections with nothing to show: one line, not a heading each.
-    matrix && shown.some(s => !s.rows.length) && h("div", {className: "insp-meta acc-empty-parts"},
-      (onlyDiff || term ? "No differences in: " : "Nothing in: ") + shown.filter(s => !s.rows.length).map(s => s.title.replace(/ \(.*\)$/, "")).join(", ") + "."),
-    matrix && shown.filter(s => s.rows.length).map(s => h("details", {key: s.key, className: "acc-section", open: s.rows.length < 60},
+    m && shown.some(s => !s.rows.length && !s.unread) && h("div", {className: "insp-meta acc-empty-parts"},
+      (onlyDiff || term ? "No differences in: " : "Nothing in: ") + shown.filter(s => !s.rows.length && !s.unread).map(s => s.title.replace(/ \(.*\)$/, "")).join(", ") + "."),
+    m && shown.filter(s => s.rows.length).map(s => h("details", {key: s.key, className: "acc-section", open: s.rows.length < 60},
       h("summary", null, `${s.title.replace(/ \(R C E D.*\)$/, "")} · ${s.rows.length}`),
       h("div", {className: "insp-table-wrap"},
         h("table", {className: "insp-table acc-matrix"},
           h("thead", null, h("tr", null,
             h("th", null, SECTION_HEAD[s.key] || "Permission"),
-            matrix.names.map((n, i) => h("th", {key: i, title: matrix.cols ? `${matrix.cols[i].item} · ${matrix.cols[i].org}${matrix.cols[i].kind ? " (" + matrix.cols[i].kind + ")" : ""}` : n},
+            m.names.map((n, i) => h("th", {key: i, title: m.cols ? `${m.cols[i].item} · ${m.cols[i].org}${m.cols[i].kind ? " (" + m.cols[i].kind + ")" : ""}` : n},
               h("div", null, n),
-              matrix.cols && matrix.names[i] !== matrix.cols[i].item && h("div", {className: "acc-th-sub"}, matrix.cols[i].item))),
+              m.cols && m.names[i] !== m.cols[i].item && h("div", {className: "acc-th-sub"}, m.cols[i].item))),
             h("th", {className: "acc-what"}, "What differs"))),
           h("tbody", null, s.rows.slice(0, 1000).map(r => h("tr", {key: r.key, className: r.differs ? "acc-diff" : ""},
             h("td", {title: r.key}, r.label),
             r.values.map((v, i) => h("td", {key: i}, h(AccessCell, {section: s.key, value: v, row: r}))),
             h("td", {className: "acc-what"},
-              r.differs ? describeRowDiff(s.key, r.values, matrix.names) : h("span", {className: "insp-meta"}, "Same"),
+              r.differs ? describeRowDiff(s.key, r.values, m.names) : h("span", {className: "insp-meta"}, "Same"),
               r.differs && fromText(s, r) && h("div", {className: "acc-from"}, fromText(s, r)))))))))));
 }
 
@@ -337,10 +381,11 @@ function auditFacts(summary) {
   for (const p of summary.perms) {
     lines.push(`- ${p.label}: ${p.userCount} user(s); granted by ${p.sources.slice(0, 5).map(s => `${s.name} (${s.count})`).join(", ") || "—"}`);
   }
-  lines.push("", "Users holding the most risky permissions:");
-  for (const u of summary.users.slice(0, 25)) {
-    lines.push(`- ${u.name} (${u.username}): ${u.perms.join(", ")} — via ${u.sources.join(", ")}`);
-  }
+  // People stay anonymous to the AI provider: "User 1", not names or usernames.
+  lines.push("", `Users holding the most risky permissions (${summary.users.length} in all, anonymised):`);
+  summary.users.slice(0, 25).forEach((u, i) => {
+    lines.push(`- User ${i + 1}: ${u.perms.length} risky permission(s): ${u.perms.join(", ")} — via ${u.sources.join(", ")}`);
+  });
   return lines.join("\n");
 }
 
@@ -359,8 +404,8 @@ function RiskCard() {
     setError(null);
     setReport(null);
     try {
-      const byPerm = await riskyAssignments((done, total) => setProgress(`${done} of ${total} permissions checked`));
-      setSummary({...summarizeRiskyAccess(byPerm), at: Date.now()});
+      const {byPerm, notes} = await riskyAssignments((done, total) => setProgress(`${done} of ${total} permissions checked`));
+      setSummary({...summarizeRiskyAccess(byPerm), notes, at: Date.now()});
     } catch (e) {
       setError(e.message);
     } finally {
@@ -403,6 +448,7 @@ function RiskCard() {
         setTimeout(() => setCopied(false), 1200);
       }
     }),
+    summary && summary.notes && summary.notes.length > 0 && h("div", {className: "insp-warn"}, summary.notes.join(" ")),
     summary && h("div", {className: "org-grid acc-risk-grid"},
       h("div", null,
         h("div", {className: "sq3-card-sub"}, "Per permission"),
@@ -461,11 +507,16 @@ function UserAccessCheck({userId}) {
   const [result, setResult] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
+  // Bumped per user and per check: an answer for an earlier one is dropped.
+  const reqRef = React.useRef(0);
 
   React.useEffect(() => {
     let stale = false;
+    reqRef.current++;
     setSources(null);
     setResult(null);
+    setError(null);
+    setBusy(false);
     userPermSources(userId).then(s => { if (!stale) setSources(s); })
       .catch(e => { if (!stale) setError(e.message); });
     return () => { stale = true; };
@@ -478,6 +529,8 @@ function UserAccessCheck({userId}) {
   const check = async () => {
     const t = target.trim();
     if (!t || !sources) return;
+    const req = ++reqRef.current;
+    const live = () => reqRef.current === req;
     setBusy(true);
     setError(null);
     setResult(null);
@@ -496,11 +549,11 @@ function UserAccessCheck({userId}) {
         rows = await systemPermRows(sources.ids, field);
         flags = [[field, humanizePermission(field)]];
       }
-      setResult({target: t, kind, ...effectiveAccess(rows, flags, sources.names)});
+      if (live()) setResult({target: t, kind, ...effectiveAccess(rows, flags, sources.names)});
     } catch (e) {
-      setError(e.message);
+      if (live()) setError(e.message);
     } finally {
-      setBusy(false);
+      if (live()) setBusy(false);
     }
   };
 

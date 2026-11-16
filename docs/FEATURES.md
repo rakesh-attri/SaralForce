@@ -37,7 +37,7 @@ what you can **change**, how to do it, and where the limits are.
 
 | Feature | What it does |
 |---|---|
-| **Launcher button** | A floating SaralForce button on every Salesforce page opens the side panel. A one-time tip points it out on your first visit. |
+| **Launcher button** | A floating SaralForce button on every Salesforce page opens the side panel. A one-time tip points it out on your first visit. **Drag it** anywhere if it covers something on the page: it stays there on every Salesforce tab, and **right-click** puts it back on the right edge. |
 | **Two-row tool bar** | Top row = Records, SOQL, Run-Apex, Export, Import, API Explorer, Logs, Users, Code Coverage. Bottom row = Access, Metadata, Org Info, App Tab Manager, SandShift. Each row stays on one line; tabs tighten as the panel narrows. A glass divider separates them; nothing scrolls sideways. |
 | **Header buttons** | **AI Object Builder ⇄ Inspector** switch · **Show / Hide API Names** · **Theme** (System → Light → Dark) · **?** Help menu · user initials. |
 | **Show API Names** 👁 | Adds each field's API name next to its label on the Salesforce record page behind the panel. The button changes to *Hide API Names* only once names are actually showing. |

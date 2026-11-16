@@ -78,10 +78,9 @@
     btn.id = "sf-object-creator-btn";
     btn.style.cssText = `
       position: fixed;
-      top: calc(50% - 1.5in);
-      right: 10px;
-      transform: translateY(-50%);
       z-index: 2147483647;
+      touch-action: none;
+      user-select: none;
       width: 42px;
       height: 42px;
       border-radius: 50%;
@@ -99,28 +98,159 @@
       opacity: 0.6;
     `;
     btn.innerHTML = `<svg width="26" height="26" viewBox="0 0 128 128" aria-hidden="true"><defs><linearGradient id="sfbTile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1c2452"/><stop offset="1" stop-color="#0a0f26"/></linearGradient><linearGradient id="sfbCloud" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#ffd36e"/><stop offset="0.5" stop-color="#ff9a1f"/><stop offset="1" stop-color="#f05a0e"/></linearGradient><radialGradient id="sfbHalo" cx="0.5" cy="0.55" r="0.5"><stop offset="0" stop-color="#ff9a1f" stop-opacity="0.45"/><stop offset="1" stop-color="#ff9a1f" stop-opacity="0"/></radialGradient></defs><rect x="2" y="2" width="124" height="124" rx="28" fill="url(#sfbTile)"/><rect x="2.5" y="2.5" width="123" height="123" rx="27.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/><circle cx="64" cy="70" r="54" fill="url(#sfbHalo)"/><g transform="translate(0 -4)"><path d="M36 98 H94 A19 19 0 0 0 97.5 60.4 A30 30 0 0 0 40.6 56.6 A21 21 0 0 0 36 98 Z" fill="url(#sfbCloud)"/><path d="M43 64 A16 16 0 0 1 57 50" fill="none" stroke="#fff6dc" stroke-opacity="0.55" stroke-width="3" stroke-linecap="round"/><g fill="none" stroke="#141a3c" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M51 69 L41 78.5 L51 88"/><path d="M71 64 L61 93"/><path d="M81 69 L91 78.5 L81 88"/></g></g><path d="M101 14 Q103 25 112 27 Q103 29 101 40 Q99 29 90 27 Q99 25 101 14 Z" fill="#fff3c4"/></svg>`;
-    btn.title = "SaralForce";
+    btn.title = "SaralForce: click to open, drag to move, right-click to put it back";
 
     btn.addEventListener("mouseenter", () => {
       btn.style.opacity = "1";
-      btn.style.transform = "translateY(-50%) scale(1.05)";
+      btn.style.transform = "scale(1.05)";
     });
 
     btn.addEventListener("mouseleave", () => {
-      if (!sidebarOpen) {
+      if (!sidebarOpen && !dragging) {
         btn.style.opacity = "0.6";
       }
-      btn.style.transform = "translateY(-50%) scale(1)";
+      btn.style.transform = "scale(1)";
     });
 
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // The click that ends a drag only moves the button.
+      if (justDragged) { justDragged = false; return; }
       toggleSidebar();
     });
 
+    makeLauncherDraggable(btn);
+    applyLauncherPos(btn, null);
     document.body.appendChild(btn);
-    maybeShowLauncherTip(btn);
+    loadLauncherPos((pos) => {
+      launcherPos = pos;
+      applyLauncherPos(btn, pos);
+      maybeShowLauncherTip(btn);
+    });
+  }
+
+  // ─── Moving the launcher ───────────────────────────────────────────
+  // Drag it anywhere (it may cover something on the page); right-click puts
+  // it back. Saved for every Salesforce tab as a share of the free space, so
+  // it lands in about the same place on another screen size.
+  const LAUNCHER_POS_KEY = "sfoc_launcher_pos";
+  const LAUNCHER_SIZE = 42;
+  const LAUNCHER_MARGIN = 8;
+  const DRAG_THRESHOLD = 4;
+  let launcherPos = null; // {x, y} in 0..1, null = default spot
+  let dragging = false;
+  let justDragged = false;
+
+  function freeSpace() {
+    return {w: Math.max(1, window.innerWidth - LAUNCHER_SIZE), h: Math.max(1, window.innerHeight - LAUNCHER_SIZE)};
+  }
+
+  function clampPx(left, top) {
+    const {w, h} = freeSpace();
+    return {
+      left: Math.min(Math.max(LAUNCHER_MARGIN, left), Math.max(LAUNCHER_MARGIN, w - LAUNCHER_MARGIN)),
+      top: Math.min(Math.max(LAUNCHER_MARGIN, top), Math.max(LAUNCHER_MARGIN, h - LAUNCHER_MARGIN))
+    };
+  }
+
+  // Default: 10px from the right edge, a little above the middle.
+  function defaultPx() {
+    return clampPx(window.innerWidth - 10 - LAUNCHER_SIZE, window.innerHeight / 2 - 144 - LAUNCHER_SIZE / 2);
+  }
+
+  function applyLauncherPos(btn, pos) {
+    const {w, h} = freeSpace();
+    const p = pos ? clampPx(pos.x * w, pos.y * h) : defaultPx();
+    btn.style.left = p.left + "px";
+    btn.style.top = p.top + "px";
+  }
+
+  function loadLauncherPos(cb) {
+    try {
+      chrome.storage.local.get(LAUNCHER_POS_KEY, (items) => {
+        void chrome.runtime.lastError;
+        const p = items && items[LAUNCHER_POS_KEY];
+        cb(p && Number.isFinite(p.x) && Number.isFinite(p.y) ? p : null);
+      });
+    } catch (e) {
+      cb(null);
+    }
+  }
+
+  function saveLauncherPos(pos) {
+    try {
+      if (pos) chrome.storage.local.set({[LAUNCHER_POS_KEY]: pos});
+      else chrome.storage.local.remove(LAUNCHER_POS_KEY);
+    } catch (e) { /* extension reloaded: keep it for this page only */ }
+  }
+
+  function makeLauncherDraggable(btn) {
+    let start = null;
+    // Move / up are followed on the whole window from the press on: a quick
+    // drag leaves the 42px button before the first move event arrives.
+    const move = (e) => {
+      if (!start || e.pointerId !== start.id) return;
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (!dragging) {
+        if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+        dragging = true;
+        btn.style.cursor = "grabbing";
+        btn.style.opacity = "1";
+        btn.style.transition = "opacity 0.2s ease, transform 0.2s ease";
+        if (launcherTip) dismissLauncherTip();
+      }
+      e.preventDefault();
+      const p = clampPx(start.left + dx, start.top + dy);
+      btn.style.left = p.left + "px";
+      btn.style.top = p.top + "px";
+    };
+    const end = (e) => {
+      if (!start || e.pointerId !== start.id) return;
+      start = null;
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", end, true);
+      window.removeEventListener("pointercancel", end, true);
+      if (!dragging) return;
+      dragging = false;
+      justDragged = true;
+      // The page under the drop point must not get this click.
+      const eat = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+      window.addEventListener("click", eat, {capture: true, once: true});
+      setTimeout(() => window.removeEventListener("click", eat, true), 300);
+      btn.style.cursor = "pointer";
+      btn.style.transition = "all 0.2s ease";
+      if (!sidebarOpen && !btn.matches(":hover")) btn.style.opacity = "0.6";
+      const {w, h} = freeSpace();
+      const r = btn.getBoundingClientRect();
+      launcherPos = {x: +(r.left / w).toFixed(4), y: +(r.top / h).toFixed(4)};
+      saveLauncherPos(launcherPos);
+      // Some browsers send no click after a captured drag: don't eat the next real one.
+      setTimeout(() => { justDragged = false; }, 300);
+    };
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      const r = btn.getBoundingClientRect();
+      start = {x: e.clientX, y: e.clientY, left: r.left, top: r.top, id: e.pointerId};
+      justDragged = false;
+      e.preventDefault(); // no text selection while dragging
+      window.addEventListener("pointermove", move, true);
+      window.addEventListener("pointerup", end, true);
+      window.addEventListener("pointercancel", end, true);
+    });
+    // Right-click: back to the default spot (a double-click would also open
+    // and close the sidebar).
+    btn.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      launcherPos = null;
+      saveLauncherPos(null);
+      applyLauncherPos(btn, null);
+    });
+    window.addEventListener("resize", () => {
+      if (btn.isConnected && !dragging) applyLauncherPos(btn, launcherPos);
+    });
   }
 
   // ─── First-run tip next to the launcher ────────────────────────────
@@ -155,7 +285,9 @@
       const host = document.createElement("div");
       host.id = "sf-object-creator-tip";
       const r = btn.getBoundingClientRect();
-      host.style.cssText = `position:fixed;z-index:2147483647;top:${Math.max(8, r.top + r.height / 2 - 52)}px;right:${Math.max(8, window.innerWidth - r.left + 12)}px;`;
+      // Beside the button, on whichever side has room for the 260px card.
+      const side = r.left < 290 ? `left:${r.right + 12}px` : `right:${Math.max(8, window.innerWidth - r.left + 12)}px`;
+      host.style.cssText = `position:fixed;z-index:2147483647;top:${Math.max(8, Math.min(window.innerHeight - 140, r.top + r.height / 2 - 52))}px;${side};`;
       const shadow = host.attachShadow({mode: "open"});
       const style = document.createElement("style");
       style.textContent = `

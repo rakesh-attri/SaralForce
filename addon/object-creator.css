@@ -7590,10 +7590,6 @@ th.covdash-c-cov.sorted {
   background: var(--cov-soft-hover);
 }
 
-.covdash-noact {
-  color: var(--cov-text-2);
-}
-
 /* Footer — counts + pager */
 .covdash-foot {
   display: flex;

@@ -18,6 +18,43 @@ export function summarizeQueue(items) {
   };
 }
 
+// Polling a run gives up after this many failed queue queries in a row, and
+// calls a run empty after this many polls in a row that returned no items.
+export const POLL_MAX_FAILURES = 3;
+export const POLL_MAX_EMPTY = 5;
+
+// One poll of the queue → the next poll state. `outcome` is {items} or
+// {error}. `stop` is null (keep polling), "finished", "empty" or "error".
+export function nextPoll(prev, outcome) {
+  const s = prev || {failures: 0, empties: 0, progress: null};
+  if (outcome && outcome.error) {
+    const failures = s.failures + 1;
+    const message = outcome.error.message || String(outcome.error);
+    return {...s, failures, error: message, stop: failures >= POLL_MAX_FAILURES ? "error" : null};
+  }
+  const progress = summarizeQueue(outcome && outcome.items);
+  const empties = progress.total === 0 ? s.empties + 1 : 0;
+  const stop = progress.finished ? "finished" : empties >= POLL_MAX_EMPTY ? "empty" : null;
+  return {failures: 0, empties, progress, error: null, stop};
+}
+
+// ApexCodeCoverage rows → the distinct test classes that cover a class or
+// trigger, sorted by name: [{classId, name}].
+export function coveringTestClasses(rows) {
+  const byId = new Map();
+  for (const r of rows || []) {
+    const id = r.ApexTestClassId;
+    if (!id || byId.has(id)) continue;
+    byId.set(id, {classId: id, name: (r.ApexTestClass && r.ApexTestClass.Name) || id});
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// A 15- or 18-character Salesforce id (safe to put in a SOQL literal).
+export function isSfId(id) {
+  return /^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$/.test(String(id || ""));
+}
+
 // Queue items that can still be aborted.
 export function abortableItems(items) {
   return (items || []).filter(i => PENDING.has(i.Status));

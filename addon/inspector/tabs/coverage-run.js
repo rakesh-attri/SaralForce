@@ -5,7 +5,7 @@ import {sfConn, apiVersion} from "../../inspector.js";
 import {hasValidConfig} from "../../llm/llm-service.js";
 import {escapeSoqlString} from "../../core/soql.js";
 import {
-  summarizeQueue, abortableItems, groupTestResults, coverageLineMap, extractMethodSource, parseStackTrace
+  nextPoll, POLL_MAX_FAILURES, abortableItems, groupTestResults, coverageLineMap, extractMethodSource, parseStackTrace
 } from "../../core/test-run.js";
 import {queryAll} from "../shared/query.js";
 import {explainTestFailure} from "../shared/ai.js";
@@ -43,16 +43,33 @@ export function useTestRun(signal, onFinished) {
     try {
       const jobId = await startJob(body);
       setRun(r => ({...r, jobId, status: "running"}));
-      let progress = null;
+      let poll = null;
       for (let i = 0; i < 400 && mine === seq.current; i++) {
         await ffSleep(i < 3 ? 1500 : 3000, signal);
-        progress = summarizeQueue(await queueItems(jobId).catch(() => []));
-        setRun(r => (r && r.jobId === jobId ? {...r, progress} : r));
-        if (progress.finished) break;
+        let outcome;
+        try {
+          outcome = {items: await queueItems(jobId)};
+        } catch (e) {
+          if (ffIsStopped(e)) throw e;
+          outcome = {error: e};
+        }
+        poll = nextPoll(poll, outcome);
+        const progress = poll.progress;
+        if (progress) setRun(r => (r && r.jobId === jobId ? {...r, progress} : r));
+        if (poll.stop) break;
       }
       if (mine !== seq.current) return;
+      if (poll && poll.stop === "error") {
+        setRun(r => ({...r, status: "error",
+          error: `Could not check the run's progress (${POLL_MAX_FAILURES} tries in a row): ${poll.error}. ` +
+            "The run may still be going in Salesforce — see Setup → Apex Test Execution."}));
+        return;
+      }
+      const progress = poll && poll.progress;
+      const empty = !!poll && poll.stop === "empty";
       const results = groupTestResults(await testResults(jobId).catch(() => []));
-      const final = {label, jobId, status: progress && progress.finished ? "done" : "timeout", progress, results, error: null};
+      const finished = !!poll && (poll.stop === "finished" || empty);
+      const final = {label, jobId, status: finished ? "done" : "timeout", progress, results, error: null, empty};
       setRun(r => ({...r, ...final}));
       if (onFinished) onFinished(final);
     } catch (e) {
@@ -151,7 +168,8 @@ export function TestRunPanel({testRun}) {
       h("div", {className: "tr-passes"}, c.methods.filter(m => m.outcome === "Pass" || m.outcome === "Skip").map(m =>
         h("span", {key: m.id, className: "tr-pass" + (m.outcome === "Skip" ? " skip" : ""), title: m.ms != null ? `${m.ms} ms` : ""},
           m.outcome === "Skip" ? "○ " : "✓ ", m.name))))),
-    r && !r.classes.length && run.status === "done" && h("div", {className: "insp-meta"}, "No test results were returned for this run."));
+    r && !r.classes.length && run.status === "done" && h("div", {className: "insp-meta"},
+      run.empty ? "Salesforce queued no test classes for this run, so nothing ran." : "No test results were returned for this run."));
 }
 
 // Source of a class or trigger with covered lines green and uncovered red.

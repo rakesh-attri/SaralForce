@@ -4,12 +4,44 @@
 //
 // lintFiles(files, {apiVersion}) → [{path, line, message}]
 
-function strip(code) {
-  // Keep line breaks so line numbers stay right.
-  return String(code || "")
-    .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, " "))
-    .replace(/\/\/[^\n]*/g, "")
-    .replace(/'(?:\\.|[^'\\\n])*'/g, "''");
+// Larger sources are linted only up to this size (keeps every check fast).
+export const LINT_MAX_CHARS = 1024 * 1024;
+
+// One left-to-right pass over comments and string literals, so "//" or "/*"
+// inside a string never starts a comment and a quote inside a comment never
+// starts a string. Comments become blanks (line breaks kept, so line numbers
+// stay right). Strings are emptied to '' unless keepStrings. quotes: the
+// string delimiters of the language (Apex: ', JS: ' " `).
+function strip(code, {quotes = "'", keepStrings = false} = {}) {
+  const src = String(code || "").slice(0, LINT_MAX_CHARS);
+  const n = src.length;
+  let out = "";
+  let i = 0;
+  while (i < n) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === "/" && next === "/") {
+      const end = src.indexOf("\n", i);
+      i = end < 0 ? n : end;
+    } else if (ch === "/" && next === "*") {
+      const close = src.indexOf("*/", i + 2);
+      const end = close < 0 ? n : close + 2;
+      out += src.slice(i, end).replace(/[^\n]/g, " ");
+      i = end;
+    } else if (quotes.includes(ch)) {
+      // Apex and plain JS strings end at the line; template literals don't.
+      const multiline = ch === "`";
+      let j = i + 1;
+      while (j < n && src[j] !== ch && (multiline || src[j] !== "\n")) j += src[j] === "\\" ? 2 : 1;
+      const end = Math.min(n, src[j] === ch ? j + 1 : j);
+      out += keepStrings ? src.slice(i, end) : ch + ch;
+      i = end;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
 }
 
 const lineOf = (src, index) => src.slice(0, index).split("\n").length;
@@ -30,11 +62,17 @@ function argCount(src, open) {
   const inner = src.slice(open + 1, end < 0 ? src.length : end);
   if (!inner.trim()) return 0;
   let depth = 0;
+  let angle = 0;
   let n = 1;
-  for (const ch of inner) {
-    if ("([{<".includes(ch)) depth++;
-    else if (")]}>".includes(ch)) depth--;
-    else if (ch === "," && depth === 0) n++;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    const prev = inner[i - 1] || "";
+    if ("([{".includes(ch)) depth++;
+    else if (")]}".includes(ch)) depth--;
+    // Generic brackets only (Map<String,Object>); "=>", ">=", "a < b" are not.
+    else if (ch === "<" && /\w/.test(prev) && inner[i + 1] !== "=") angle++;
+    else if (ch === ">" && angle > 0 && prev !== "=" && prev !== "-") angle--;
+    else if (ch === "," && depth === 0 && angle === 0) n++;
   }
   return n;
 }
@@ -53,10 +91,15 @@ const FAKE_APIS = [
 // SOQL inside [ … ]: WITH must come after WHERE and before GROUP BY / ORDER BY / LIMIT.
 function soqlIssues(src) {
   const out = [];
-  const re = /\[\s*SELECT\b[\s\S]*?\]/gi;
+  // "[ SELECT" then the next "]" via indexOf: a lazy [\s\S]*?\] regex is
+  // quadratic on unclosed brackets. Resume after the "]" as the regex did.
+  const re = /\[\s*SELECT\b/gi;
   let m;
   while ((m = re.exec(src))) {
-    const q = m[0];
+    const close = src.indexOf("]", m.index + m[0].length);
+    if (close < 0) break;
+    re.lastIndex = close + 1;
+    const q = src.slice(m.index, close + 1);
     const withAt = q.search(/\bWITH\s+(USER_MODE|SYSTEM_MODE|SECURITY_ENFORCED)\b/i);
     if (withAt < 0) continue;
     // Ignore ORDER BY / LIMIT inside sub-queries: (SELECT … FROM Contacts LIMIT 5)
@@ -113,22 +156,27 @@ export function lintApex(code, {apiVersion} = {}) {
     }
   }
   // Cacheable methods can't do DML.
-  const cacheRe = /@AuraEnabled\s*\(\s*cacheable\s*=\s*true\s*\)[^{]*\{/gi;
+  const cacheRe = /@AuraEnabled\s*\(\s*cacheable\s*=\s*true\s*\)/gi;
   while ((m = cacheRe.exec(src))) {
+    // indexOf instead of [^{]*\{ (quadratic when no "{" follows).
+    const brace = src.indexOf("{", m.index + m[0].length);
+    if (brace < 0) break;
     let depth = 1;
-    let i = m.index + m[0].length;
+    let i = brace + 1;
     for (; i < src.length && depth; i++) {
       if (src[i] === "{") depth++;
       else if (src[i] === "}") depth--;
     }
-    const body = src.slice(m.index + m[0].length, i);
+    const body = src.slice(brace + 1, i);
+    // Skip past this body: keeps the scan linear on deeply nested input.
+    cacheRe.lastIndex = Math.max(cacheRe.lastIndex, i);
     if (/(^|[;{\s])(insert|update|upsert|delete|undelete)\s+[\w(]/i.test(body) || /\bDatabase\.(insert|update|upsert|delete)\s*\(/.test(body)) {
       out.push({line: lineOf(src, m.index), message: "An @AuraEnabled(cacheable=true) method cannot do DML; remove cacheable=true or move the DML to another method."});
     }
   }
   // Test methods need at least one assert (mocks and data factories are
   // @isTest classes without test methods: fine).
-  const hasTestMethods = /@isTest(?:\s*\([^)]*\))?\s+(?:(?:public|private|global|static)\s+)*void\b/i.test(src) || /\btestMethod\b/i.test(src);
+  const hasTestMethods = /@isTest(?:\s*\([^)]{0,200}\))?\s+(?:(?:public|private|global|static)\s+)*void\b/i.test(src) || /\btestMethod\b/i.test(src);
   if (hasTestMethods && !/\b(System\.)?assert\w*\s*\(|\bAssert\.\w+\s*\(/i.test(src)) {
     out.push({line: 1, message: "This test class has no assert; add System.assertEquals / Assert.areEqual checks."});
   }
@@ -137,20 +185,20 @@ export function lintApex(code, {apiVersion} = {}) {
 
 export function lintLwcJs(code) {
   // Imports are strings: keep them, drop only comments.
-  const src = String(code || "").replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, " ")).replace(/\/\/[^\n]*/g, "");
+  const src = strip(code, {quotes: "'\"`", keepStrings: true});
   const out = [];
   const rules = [
     [/from\s+['"]lightning\/platformShowToastEvent['"]/, null],
-    [/\bthis\.template\.querySelector\s*\([^)]*\)\s*\.innerHTML\s*=/, "LWC does not allow setting innerHTML."],
+    [/\bthis\.template\.querySelector\s*\([^)]{0,500}\)\s*\.innerHTML\s*=/, "LWC does not allow setting innerHTML."],
     [/@track\s+@api|@api\s+@track/, "A property can't be both @api and @track."],
-    [/import\s+\{[^}]*\bwire\b[^}]*\}\s+from\s+['"]lightning\/uiRecordApi['"]/, "Import wire from 'lwc', not from 'lightning/uiRecordApi'."]
+    [/import\s+\{[^}]{0,2000}?\bwire\b[^}]{0,2000}\}\s+from\s+['"]lightning\/uiRecordApi['"]/, "Import wire from 'lwc', not from 'lightning/uiRecordApi'."]
   ];
   for (const [re, message] of rules) {
     if (!message) continue;
     const m = re.exec(src);
     if (m) out.push({line: lineOf(src, m.index), message});
   }
-  if (/ShowToastEvent/.test(src) && !/import\s+\{[^}]*ShowToastEvent[^}]*\}\s+from\s+['"]lightning\/platformShowToastEvent['"]/.test(src)) {
+  if (/ShowToastEvent/.test(src) && !/import\s+\{[^}]{0,2000}?ShowToastEvent[^}]{0,2000}\}\s+from\s+['"]lightning\/platformShowToastEvent['"]/.test(src)) {
     out.push({line: 1, message: "ShowToastEvent is used but not imported: import { ShowToastEvent } from 'lightning/platformShowToastEvent';"});
   }
   return out;

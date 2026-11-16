@@ -216,3 +216,77 @@ test("sharing rule differences say only what changed", async () => {
   assert.equal(describeRowDiff("sharingRules", ["Owner · Group A → All internal users · Read Only", "Owner · Group A → All internal users · Read/Write"], L),
     "Demo: Read Only · UAT: Read/Write");
 });
+
+test("column labels are always unique: production and its sandbox share a name", async () => {
+  const {columnLabels} = await import("../../addon/core/access.js");
+  // Same item, two orgs both called "Admin": the host says they differ, the kind tells them apart.
+  assert.deepEqual(columnLabels([{item: "Sales (profile)", org: "Admin", kind: "Production", host: "acme.my.salesforce.com"},
+    {item: "Sales (profile)", org: "Admin", kind: "Sandbox", host: "acme--uat.sandbox.my.salesforce.com"}]), ["Admin (Production)", "Admin (Sandbox)"]);
+  // Two sandboxes with one name: the host.
+  assert.deepEqual(columnLabels([{item: "P", org: "Admin", kind: "Sandbox", host: "a.sandbox"}, {item: "P", org: "Admin", kind: "Sandbox", host: "b.sandbox"}]),
+    ["Admin (Sandbox) · a.sandbox", "Admin (Sandbox) · b.sandbox"]);
+  // Two permission sets with one label in one org: "#2".
+  assert.deepEqual(columnLabels([{item: "Ops", org: "X", host: ""}, {item: "Ops", org: "X", host: ""}]), ["Ops", "Ops #2"]);
+});
+
+test("a pick that no longer exists is reported, not shifted into another column", async () => {
+  const {mergeCompareData, pickKey, buildCompareMatrix} = await import("../../addon/core/access.js");
+  const order = [pickKey("", "A"), pickKey("", "GONE"), pickKey("", "B")];
+  const merged = mergeCompareData([{host: "", data: {sets: [{Id: "A", PermissionsApiEnabled: true}, {Id: "B"}]}}], order);
+  assert.deepEqual(merged.missing, [pickKey("", "GONE")]);
+  assert.deepEqual(merged.sets.map(s => s.Id), [pickKey("", "A"), pickKey("", "B")]);
+  assert.equal(buildCompareMatrix(merged).find(s => s.key === "system").rows[0].values.length, 2);
+});
+
+test("sections an org could not read are not compared", async () => {
+  const {markUnreadSections, diffSummary} = await import("../../addon/core/access.js");
+  const sections = [{key: "tabs", title: "Tab settings", rows: [{differs: true}]}, {key: "objects", title: "Objects", rows: [{differs: true}]}];
+  const m = markUnreadSections(sections, {tabs: ["UAT"]});
+  assert.deepEqual(m[0].rows, []);
+  assert.deepEqual(m[0].unread, ["UAT"]);
+  assert.equal(m[1].unread, undefined);
+  assert.equal(diffSummary(m).total, 1);
+});
+
+test("same as left: permission sets match on API name and namespace, labels only when unique", async () => {
+  const {matchPermSet} = await import("../../addon/core/access.js");
+  const right = [{id: "1", kind: "set", api: "Sales_Ops", ns: "", name: "Sales Ops"}, {id: "2", kind: "set", api: "Sales_Ops_Old", ns: "", name: "Sales Ops"},
+    {id: "3", kind: "set", api: "Sales_Ops", ns: "pkg", name: "Sales Ops (pkg)"}, {id: "4", kind: "profile", api: "Admin", ns: "", name: "Admin (profile)"}];
+  assert.equal(matchPermSet({kind: "set", api: "Sales_Ops", ns: "", name: "Sales Ops"}, right).id, "1");
+  assert.equal(matchPermSet({kind: "set", api: "Sales_Ops", ns: "pkg", name: "x"}, right).id, "3");
+  assert.equal(matchPermSet({kind: "set", api: "Renamed", ns: "", name: "Sales Ops"}, right), null, "label shared by two");
+  assert.equal(matchPermSet({kind: "profile", api: "Other", ns: "", name: "Admin (profile)"}, right).id, "4");
+  assert.equal(matchPermSet({kind: "set", api: "Admin", name: "Admin (profile)"}, right), null, "kind must match");
+});
+
+test("users: username first, email only when exactly one has it", async () => {
+  const {matchUser} = await import("../../addon/core/access.js");
+  const {baseUsername} = await import("../../addon/core/manual-steps.js");
+  const prod = [{id: "1", username: "ops@acme.com", email: "team@acme.com"}, {id: "2", username: "ana@acme.com", email: "team@acme.com"}];
+  // A shared mailbox email must not decide: the username does.
+  assert.equal(matchUser({username: "ana@acme.com.uat", email: "team@acme.com"}, prod, baseUsername).id, "2");
+  assert.equal(matchUser({username: "new@acme.com.uat", email: "team@acme.com"}, prod, baseUsername), null);
+  assert.equal(matchUser({username: "x@y.com", email: "ANA@acme.com"}, [{id: "9", username: "z@y.com", email: "ana@acme.com"}], baseUsername).id, "9");
+});
+
+test("users: a tab comes from the sources giving the winning visibility only", async () => {
+  const {combineAccess} = await import("../../addon/core/access.js");
+  const data = {sets: [{Id: "P"}, {Id: "S"}], tabSettings: [{ParentId: "P", Name: "Invoice", Visibility: "DefaultOff"}, {ParentId: "S", Name: "Invoice", Visibility: "DefaultOn"}]};
+  const {origins} = combineAccess(data, ["P", "S"], "U", {P: "Profile: Std", S: "Perm set: Inv"});
+  assert.deepEqual(origins["tabs|Invoice"], ["Perm set: Inv"]);
+});
+
+test("sharing rules: account access, included owners and XML entities", async () => {
+  const {summarizeSharingRule, describeRowDiff} = await import("../../addon/core/access.js");
+  const acct = level => "<sharingCriteriaRules><accessLevel>Read</accessLevel>" +
+    `<accountSettings><caseAccessLevel>Edit</caseAccessLevel><contactAccessLevel>Read</contactAccessLevel><opportunityAccessLevel>${level}</opportunityAccessLevel></accountSettings>` +
+    "<sharedTo><group>R&amp;D</group></sharedTo><criteriaItems><field>Name</field><operation>equals</operation><value>A &lt;&amp;&gt; &quot;B&quot; &apos;C&apos;</value></criteriaItems>" +
+    "<includeRecordsOwnedByAll>true</includeRecordsOwnedByAll></sharingCriteriaRules>";
+  const a = summarizeSharingRule("SharingCriteriaRule", acct("None"));
+  assert.equal(a, "Criteria · Name equals A <&> \"B\" 'C' → Group R&D · Read Only · Case: Read/Write · Contact: Read Only · Opportunity: Private · Includes records owned by all users");
+  const b = summarizeSharingRule("SharingCriteriaRule", acct("Read"));
+  assert.equal(describeRowDiff("sharingRules", [a, b], ["Prod", "UAT"]), "Prod: Opportunity: Private · UAT: Opportunity: Read Only");
+  const owner = "<sharingOwnerRules><accessLevel>Edit</accessLevel><sharedFrom><group>A</group></sharedFrom><sharedTo><group>B</group></sharedTo>" +
+    "<includeHVUOwnedRecords>true</includeHVUOwnedRecords></sharingOwnerRules>";
+  assert.equal(summarizeSharingRule("SharingOwnerRule", owner), "Owner · Group A → Group B · Read/Write · Includes high-volume users' records");
+});

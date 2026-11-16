@@ -49,6 +49,10 @@ let h = React.createElement;
 // "Help" in the ? menu: questions, bug reports and feature requests.
 const HELP_URL = "https://github.com/rakesh-attri/SaralForce/issues/";
 
+// Experience Cloud guest-user profiles (unauthenticated site visitors).
+function isGuestProfile(r) {
+  return !!(r && r.UserType === "Guest");
+}
 
 class App extends React.Component {
   constructor(props) {
@@ -409,7 +413,18 @@ class App extends React.Component {
     saveChatHistory(this.props.sfHost, trimmed);
   }
 
+  // A running deploy or AI reply writes into the current chat's state when
+  // it finishes; switching chats under it would mix the two.
+  chatSwitchBlocked() {
+    const {deploymentStatus, isGenerating, isEnhancing} = this.state;
+    if (deploymentStatus === "deploying") return "Wait for the deploy to finish (or cancel it) before switching chats.";
+    if (isGenerating || isEnhancing) return "Wait for the AI reply to finish before switching chats.";
+    return null;
+  }
+
   newChat() {
+    const blocked = this.chatSwitchBlocked();
+    if (blocked) { this.setState({error: blocked}); return; }
     this.resetPlanHistory();
     this.setState({
       messages: [],
@@ -533,6 +548,8 @@ class App extends React.Component {
   }
 
   loadChat(chatId) {
+    const blocked = this.chatSwitchBlocked();
+    if (blocked) { this.setState({error: blocked}); return; }
     const chat = this.state.chatHistory.find(c => c.id === chatId);
     if (!chat) return;
     this.resetPlanHistory();
@@ -547,6 +564,12 @@ class App extends React.Component {
     const chatHistory = this.state.chatHistory.filter(c => c.id !== chatId);
     this.setState({chatHistory});
     saveChatHistory(this.props.sfHost, chatHistory);
+    // Deleting the open chat: start fresh, or the next auto-save would bring
+    // it back. Mid-deploy/AI, only detach it (it saves as a new chat later).
+    if (chatId === this.state.activeChatId) {
+      if (this.chatSwitchBlocked()) this.setState({activeChatId: null});
+      else this.newChat();
+    }
   }
 
   addSystemMessage(text) {
@@ -618,9 +641,15 @@ class App extends React.Component {
           this.addAssistantMessage(response, proposal);
           // An AI change to an existing plan can be undone like a manual edit.
           if (currentProposal) { this._lastPlanPush = 0; this.pushPlanHistory(currentProposal); }
+          // Keep the user's unticked fields unticked when they survive the
+          // AI change (same name); new fields start ticked.
+          const prevNames = new Set(((this.state.currentProposal || {}).fields || []).map(f => f.name));
+          const prevSelected = this.state.selectedFields;
           this.setState({
             currentProposal: proposal,
-            selectedFields: proposal.fields.filter(f => !f.existing).map(f => f.name),
+            selectedFields: proposal.fields.filter(f => !f.existing)
+              .filter(f => !prevSelected || !prevNames.has(f.name) || prevSelected.includes(f.name))
+              .map(f => f.name),
             deploymentStatus: null,
             deploymentResults: [],
             recordTypesDone: false,
@@ -744,11 +773,18 @@ class App extends React.Component {
       return;
     }
 
+    // "Choose profiles" with none ticked must not quietly mean everyone.
+    if (this.state.visibilityMode === "selected" && !(this.state.selectedProfiles || []).length) {
+      this.setState({error: "Pick at least one profile, or choose All profiles."});
+      return;
+    }
+
     const objectName = currentProposal.object.name;
     const resume = !!opts.resume && deployedObjectName === objectName;
 
     this._deployAborted = false;
     this._abortController = new AbortController();
+    this._fallbackLayouts = null;
     this._profileMetadataNames = null;
 
     this.setState({
@@ -848,7 +884,9 @@ class App extends React.Component {
       for (let i = 0; i < fieldsToDeploy.length; i++) {
         if (this._deployAborted) throw new Error("Deployment cancelled");
 
-        const field = fieldsToDeploy[i];
+        // A copy: a collision retry below renames the relationship, and that
+        // must not edit the plan held in React state (and the saved chat).
+        let field = fieldsToDeploy[i];
         const fieldNum = i + 1;
 
         if (existingFieldNames.has(String(field.name).toLowerCase())) {
@@ -900,7 +938,7 @@ class App extends React.Component {
                 : safeRelationshipName(field, objectName);
               const next = `${base.replace(/_+\d+$/, "")}_${1 + relCollisionRetries}`;
               console.warn(`[SaralForce]   Relationship collision on ${coll?.parent || "?"} — retrying as "${next}"`);
-              field.relationshipName = next;
+              field = {...field, relationshipName: next};
               await this.delay(500);
               attempt--; // collision retry does not consume the normal attempt budget
               continue;
@@ -952,8 +990,10 @@ class App extends React.Component {
               error: changes.removedValues.length ? `Not removed: ${changes.removedValues.join(", ")} — remove picklist values in Setup` : undefined
             }],
             // The org now matches: later deploys don't re-apply these edits.
-            currentProposal: {...prev.currentProposal, fields: prev.currentProposal.fields.map(x =>
-              (x.name === field.name ? {...x, _orig: snapshotEditable(x)} : x))}
+            ...(prev.currentProposal ? {
+              currentProposal: {...prev.currentProposal, fields: (prev.currentProposal.fields || []).map(x =>
+                (x.name === field.name ? {...x, _orig: snapshotEditable(x)} : x))}
+            } : {})
           }));
         } catch (upErr) {
           this.setState(prev => ({
@@ -993,7 +1033,13 @@ class App extends React.Component {
           // Warnings only: the fields exist; access can be fixed in Setup.
           status: flsSummary.error && !flsSummary.granted ? "error" : "success",
           error: flsSummary.error && !flsSummary.granted ? flsSummary.error : undefined
-        }],
+        }, ...(flsSummary.objectFailed ? [{
+          type: "fls",
+          name: "ObjectPermissions",
+          label: `Object access — not granted on ${flsSummary.objectFailed} permission set(s)/profile(s)`,
+          status: "error",
+          error: flsSummary.objectError
+        }] : [])],
         deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
       }));
 
@@ -1084,32 +1130,43 @@ class App extends React.Component {
         }
       }
       if (!tabResult) tabResult = await this.createTab(currentProposal.object.name, currentProposal.object.label);
+      // The tab was already in the org (Edit existing object, or a resume):
+      // its visibility and app placement are the admin's, not ours to reset.
+      const tabExisted = !!(tabResult.ok && tabResult.method === "existing");
       completedSteps++;
       this.setState(prev => ({
         deploymentResults: [...prev.deploymentResults, {
           type: "tab",
           name: currentProposal.object.name + "_tab",
-          label: currentProposal.object.label + " Tab",
+          label: currentProposal.object.label + (tabExisted ? " Tab (already exists)" : " Tab"),
           status: tabResult.ok ? "success" : "error",
           error: tabResult.ok ? undefined : (tabResult.error || "Tab creation failed")
         }],
         deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
       }));
 
+      if (!this._deployAborted && tabExisted) {
+        completedSteps++;
+        this.setState(prev => ({
+          deploymentResults: [...prev.deploymentResults, {
+            type: "visibility",
+            name: currentProposal.object.name + "_visibility",
+            label: "Tab Visibility — left unchanged (the tab already existed)",
+            status: "success"
+          }],
+          deploymentProgress: Math.round((completedSteps / totalSteps) * 100)
+        }));
+      }
+
       // Tab visibility: all profiles (default) or the user's selected list.
-      if (!this._deployAborted && tabResult.ok) {
+      if (!this._deployAborted && tabResult.ok && !tabExisted) {
         try {
           let visLabels = this.getVisibilityLabels();
           // Refresh full list when covering everyone so listMetadata is warm.
           if (this.state.visibilityMode !== "selected") {
             try {
-              const pres = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-                encodeURIComponent(`SELECT Name FROM Profile ORDER BY Name`));
-              const all = (pres.records || []).map(r => r.Name).filter(Boolean);
-              if (all.length) {
-                visLabels = all;
-                this.setState({availableProfiles: all});
-              }
+              const all = await this.allGrantableProfileNames();
+              if (all.length) visLabels = all;
             } catch (e) {
               console.warn("[SaralForce] Profile list query failed:", e.message);
             }
@@ -1172,22 +1229,28 @@ class App extends React.Component {
           }
         }
         // Your own access, read back from Salesforce and repaired when the
-        // profile write did not stick (tab setting / object access).
+        // profile write did not stick (tab setting / object access). Skipped
+        // for a tab that already existed: a Hidden setting there may be on
+        // purpose. The read-only check below still reports it, with "Fix it".
         this.setState({deploymentStep: "Checking your access to the tab..."});
-        try {
-          const acc = await ensureTabVisibleForUser(objName, {resaveTab: () => appTabsResaveTab(objName)});
-          addRow({
-            type: "access", name: objName + "_access",
-            label: acc.ok ? `Your access — confirmed via ${acc.how}${acc.steps.includes("tab saved again") ? "; tab saved so the App Launcher picks it up" : ""}` : "Your access — could not confirm",
-            status: acc.ok ? "success" : "error",
-            error: acc.ok ? undefined : acc.steps.join("; ")
-          });
-        } catch (e) {
-          addRow({type: "access", name: objName + "_access", label: "Your access", status: "error", error: e.message});
+        if (!tabExisted) {
+          try {
+            const acc = await ensureTabVisibleForUser(objName, {resaveTab: () => appTabsResaveTab(objName)});
+            addRow({
+              type: "access", name: objName + "_access",
+              label: acc.ok ? `Your access — confirmed via ${acc.how}${acc.steps.includes("tab saved again") ? "; tab saved so the App Launcher picks it up" : ""}` : "Your access — could not confirm",
+              status: acc.ok ? "success" : "error",
+              error: acc.ok ? undefined : acc.steps.join("; ")
+            });
+          } catch (e) {
+            addRow({type: "access", name: objName + "_access", label: "Your access", status: "error", error: e.message});
+          }
         }
-        // Show in app (Plan → Deployment Targets).
+        // Show in app (Plan → Deployment Targets). For a tab that already
+        // existed, only when the app was picked in this session — the app
+        // remembered from an earlier session is not a choice for this object.
         const app = this.state.targetApp;
-        if (app && !this._deployAborted) {
+        if (app && !this._deployAborted && (!tabExisted || this._targetAppPicked)) {
           this.setState({deploymentStep: "Adding the tab to the app..."});
           const appLabel = this.state.targetAppLabel || app;
           try {
@@ -1200,6 +1263,9 @@ class App extends React.Component {
         this.setState({deploymentStep: "Checking the App Launcher..."});
         await this.runAccessCheck(objName, {label: currentProposal.object.label});
       }
+
+      // A cancel during the tab steps skips them; end as cancelled, not complete.
+      if (this._deployAborted) throw new Error("Deployment cancelled");
 
       this.setState({
         deploymentStatus: "complete",
@@ -1232,19 +1298,38 @@ class App extends React.Component {
     if (this._abortController) {
       this._abortController.abort();
     }
-    if (this._delayTimer) {
-      clearTimeout(this._delayTimer);
-      this._delayTimer = null;
+    this._flushDelays();
+  }
+
+  // Settle every pending delay() now. Clearing a timer alone leaves its
+  // promise pending forever, so an awaiting deploy would never reach its
+  // "cancelled" state.
+  _flushDelays() {
+    const pending = this._pendingDelays;
+    this._pendingDelays = new Map();
+    if (!pending) return;
+    for (const [timer, resolve] of pending) {
+      clearTimeout(timer);
+      resolve();
     }
   }
 
   delay(ms) {
     return new Promise(resolve => {
       if (this._deployAborted) { resolve(); return; }
-      this._delayTimer = setTimeout(() => {
-        this._delayTimer = null;
+      if (!this._pendingDelays) this._pendingDelays = new Map();
+      const timer = setTimeout(() => {
+        this._pendingDelays.delete(timer);
         resolve();
       }, ms);
+      this._pendingDelays.set(timer, resolve);
+      // Abort from any source (not only the Cancel button) ends the wait too.
+      // One listener per controller, not one per delay.
+      const signal = this._abortController && this._abortController.signal;
+      if (signal && signal !== this._delaySignal) {
+        this._delaySignal = signal;
+        signal.addEventListener("abort", () => this._flushDelays(), {once: true});
+      }
     });
   }
 
@@ -1390,6 +1475,8 @@ class App extends React.Component {
 
   setTargetApp(fullName) {
     const app = (this.state.targetApps || []).find(a => a.fullName === fullName);
+    // An explicit pick in this session (vs. the app remembered in localStorage).
+    this._targetAppPicked = !!fullName;
     this.setState({targetApp: fullName || "", targetAppLabel: app ? app.label : ""});
     try { localStorage.setItem("sfoc_target_app", JSON.stringify({fullName: fullName || "", label: app ? app.label : ""})); } catch (e) { /* ignore */ }
   }
@@ -1480,8 +1567,7 @@ class App extends React.Component {
     if (target === "profiles") {
       let names = this.getVisibilityLabels();
       if (this.state.visibilityMode !== "selected") {
-        const pres = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` + encodeURIComponent("SELECT Name FROM Profile ORDER BY Name"));
-        names = (pres.records || []).map(r => r.Name).filter(Boolean);
+        names = await this.allGrantableProfileNames();
       }
       const parents = [];
       for (let i = 0; i < names.length; i += 50) {
@@ -1500,7 +1586,7 @@ class App extends React.Component {
   }
 
   async grantFieldPermissions(objectName, fieldNames, readOnly = new Set(), target = "me") {
-    const summary = {label: "your profile", granted: 0, failed: 0, error: null};
+    const summary = {label: "your profile", granted: 0, failed: 0, error: null, objectFailed: 0, objectError: null};
     try {
       const {parents, label} = await this.resolveFlsParents(objectName, target);
       summary.label = label;
@@ -1522,6 +1608,8 @@ class App extends React.Component {
             });
           } catch (opErr) {
             if (!/duplicate|already exists/i.test(opErr.message || "")) {
+              summary.objectFailed++;
+              if (!summary.objectError) summary.objectError = opErr.message;
               console.warn("[SaralForce] Object access skip for", parent.id, opErr.message);
             }
           }
@@ -1563,15 +1651,30 @@ class App extends React.Component {
   // "Add Field" step, where all layouts are ticked. A layout that fails is
   // reported; the others still get the fields. Never throws.
   async addFieldsToDefaultLayout(objectName, fieldNames) {
-    const baseName = objectName.replace(/__c$/, "");
+    // "ns__Obj__c": DeveloperName is "Obj" and the namespace is separate, or
+    // a namespaced object (or an unmanaged one with the same base) is missed.
+    const nsMatch = /^([A-Za-z][A-Za-z0-9]*)__(.+)__c$/.exec(objectName);
+    const ns = nsMatch ? nsMatch[1] : null;
+    const baseName = nsMatch ? nsMatch[2] : objectName.replace(/__c$/, "");
+    const where = `EntityDefinition.DeveloperName = '${escapeSoqlString(baseName)}'`;
+    const nsWhere = ns ? ` AND EntityDefinition.NamespacePrefix = '${escapeSoqlString(ns)}'` : " AND EntityDefinition.NamespacePrefix = null";
+    // Layout metadata fullName is "Object__c-Layout Name" ("ns__Layout Name" for packaged layouts).
+    const toLayouts = res => (res.records || []).filter(r => r.Name)
+      .map(r => ({name: r.Name, fullName: `${objectName}-${r.NamespacePrefix ? r.NamespacePrefix + "__" : ""}${r.Name}`}));
     let layouts = [];
     try {
       const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` + encodeURIComponent(
-        `SELECT Id, Name FROM Layout WHERE EntityDefinition.DeveloperName = '${escapeSoqlString(baseName)}' LIMIT 50`));
-      // Layout metadata fullName is "Object__c-Layout Name".
-      layouts = (res.records || []).filter(r => r.Name).map(r => ({name: r.Name, fullName: `${objectName}-${r.Name}`}));
+        `SELECT Id, Name, NamespacePrefix FROM Layout WHERE ${where}${nsWhere} LIMIT 50`));
+      layouts = toLayouts(res);
     } catch (e) {
-      console.warn("[SaralForce] Layout lookup failed:", e.message);
+      // Older behaviour if the namespace filter isn't accepted.
+      try {
+        const res = await sfConn.rest(`/services/data/v${apiVersion}/tooling/query/?q=` + encodeURIComponent(
+          `SELECT Id, Name FROM Layout WHERE ${where} LIMIT 50`));
+        layouts = toLayouts(res);
+      } catch (e2) {
+        console.warn("[SaralForce] Layout lookup failed:", e2.message);
+      }
     }
     if (!layouts.length) {
       return {ok: false, error: "No page layout found (open Setup to add fields manually)"};
@@ -1604,7 +1707,7 @@ class App extends React.Component {
   // write back. (Tooling PATCH of Layout metadata is rejected with
   // FIELD_INTEGRITY_EXCEPTION: Required field is missing: customLink, so it is
   // deliberately not used here.) Never throws — returns {ok, error}.
-  async addFieldsToLayout(objectName, fullName, fieldNames) {
+  async addFieldsToLayout(objectName, fullName, fieldNames, {noFallback = false} = {}) {
     try {
       let records;
       try {
@@ -1668,6 +1771,7 @@ class App extends React.Component {
         // Fallback: create a FRESH layout via the proven async create() op.
         // We author 100% of this XML (no round-trip), so whatever strictness
         // rejects the update can't bite here.
+        if (noFallback) return {ok: false, error: updErr.message, debug: updDebug};
         const fb = await this.createLayoutWithFields(objectName, records, toAdd);
         if (fb.ok) return fb;
         console.warn("[SaralForce] Layout fallback failed:", fb.error);
@@ -1713,13 +1817,26 @@ class App extends React.Component {
         col.appendChild(buildLayoutItem(doc, template, f));
       }
       section.appendChild(col);
-      // fullName for a custom layout is Object.LayoutDeveloperName — a
-      // spacey/hyphenated name without the object prefix is rejected and
-      // confuses field resolution ("no CustomField named Object.Field").
-      const layoutDevName = "ForceForge_Layout";
-      const newName = `${objectName}.${layoutDevName}`;
+      // Layout fullName is "Object-Layout Name" (with the object prefix: a
+      // bare name is rejected and confuses field resolution, "no CustomField
+      // named Object.Field").
+      const newName = `${objectName}-SaralForce Layout`;
+      // Several layouts can fail in one deploy: the fallback is made once and
+      // already holds these fields, so the next ones reuse it.
+      if (this._fallbackLayouts && this._fallbackLayouts.has(newName)) {
+        return {ok: true, method: "create-fallback", added: 0, layoutName: newName};
+      }
       const xml = buildLayoutXml(newName, domToMetXml(section));
-      await this.metadataCreate(xml);
+      try {
+        await this.metadataCreate(xml);
+      } catch (createErr) {
+        // Left from an earlier deploy: add the fields to it instead.
+        if (!isDuplicateError(createErr)) throw createErr;
+        const r = await this.addFieldsToLayout(objectName, newName, toAdd, {noFallback: true});
+        if (!r.ok) throw new Error(r.error);
+      }
+      if (!this._fallbackLayouts) this._fallbackLayouts = new Set();
+      this._fallbackLayouts.add(newName);
       console.log("[SaralForce] Fallback layout created:", newName);
       return {ok: true, method: "create-fallback", added: toAdd.length, layoutName: newName};
     } catch (e) {
@@ -1933,9 +2050,14 @@ class App extends React.Component {
     const {currentProposal} = this.state;
     if (!currentProposal) return;
     const next = nextRetryName(currentProposal.object.name, currentProposal.object.label);
+    const oldName = String(currentProposal.object.name || "").toLowerCase();
     this.setState(prev => ({
       currentProposal: {
         ...prev.currentProposal,
+        // Self-lookups / master-detail to this object follow the rename;
+        // otherwise they would point at the object that already exists.
+        fields: (prev.currentProposal.fields || []).map(f =>
+          (f && f.relatedTo && String(f.relatedTo).toLowerCase() === oldName ? {...f, relatedTo: next.name} : f)),
         object: {
           ...prev.currentProposal.object,
           name: next.name,
@@ -2281,17 +2403,30 @@ class App extends React.Component {
     }));
   }
 
+  // Profiles that "All profiles" covers: every profile except Guest ones
+  // (Experience Cloud site guests are unauthenticated users).
+  async allGrantableProfileNames() {
+    const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+      encodeURIComponent("SELECT Name, UserType FROM Profile ORDER BY Name"));
+    const records = res.records || [];
+    this._guestProfileNames = new Set(records.filter(isGuestProfile).map(r => r.Name));
+    return records.filter(r => r && r.Name && !isGuestProfile(r)).map(r => r.Name);
+  }
+
   async loadProfiles() {
+    // Restored profile lists carry no UserType: load once more so guest
+    // profiles are known before "All profiles" uses the list.
     if (this.state.profilesLoading || this._profilesLoading ||
-        (this.state.availableProfiles && this.state.availableProfiles.length)) {
+        (this.state.availableProfiles && this.state.availableProfiles.length && this._guestProfileNames)) {
       return;
     }
     this._profilesLoading = true;
     this.setState({profilesLoading: true});
     try {
       const res = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
-        encodeURIComponent(`SELECT Name FROM Profile ORDER BY Name`));
+        encodeURIComponent("SELECT Name, UserType FROM Profile ORDER BY Name"));
       const names = (res.records || []).map(r => r.Name).filter(Boolean);
+      this._guestProfileNames = new Set((res.records || []).filter(isGuestProfile).map(r => r.Name));
       this._profilesLoading = false;
       this.setState({availableProfiles: names, profilesLoading: false});
     } catch (e) {
@@ -2318,12 +2453,16 @@ class App extends React.Component {
 
   getVisibilityLabels() {
     const {visibilityMode, selectedProfiles, availableProfiles} = this.state;
-    if (visibilityMode === "selected" && selectedProfiles && selectedProfiles.length > 0) {
-      return [...selectedProfiles];
+    const fallback = [this._myProfileName || "System Administrator"];
+    if (visibilityMode === "selected") {
+      // None ticked never widens to everyone (deploy blocks this case too).
+      return selectedProfiles && selectedProfiles.length ? [...selectedProfiles] : fallback;
     }
-    return availableProfiles && availableProfiles.length
-      ? [...availableProfiles]
-      : ["System Administrator"];
+    // Guest profiles are only filtered once known; until then the list is
+    // not trusted for "all".
+    const guests = this._guestProfileNames;
+    if (!guests || !availableProfiles || !availableProfiles.length) return fallback;
+    return availableProfiles.filter(n => !guests.has(n));
   }
 
   // Always include the running user's profile so the tab is usable even when
@@ -2339,6 +2478,7 @@ class App extends React.Component {
         encodeURIComponent(`SELECT Name FROM Profile WHERE Id = '${pid}'`));
       const name = pres?.records?.[0]?.Name;
       if (!name) return null;
+      this._myProfileName = name;
       console.log(`[SaralForce] Ensuring tab DefaultOn on current user profile "${name}"`);
       const res = await this.setTabVisibilityForProfiles(objectName, [name], []);
       return res;
@@ -2406,15 +2546,27 @@ class App extends React.Component {
     }
     // Make new RTs visible on the profiles used for tab visibility.
     try {
-      const visLabels = this.getVisibilityLabels();
-      await this.setTabVisibilityForProfiles(currentProposal.object.name, visLabels, rts);
+      let visLabels = this.getVisibilityLabels();
+      if (this.state.visibilityMode !== "selected") {
+        try {
+          const all = await this.allGrantableProfileNames();
+          if (all.length) visLabels = all;
+        } catch (e) {
+          console.warn("[SaralForce] Profile list query failed:", e.message);
+        }
+      }
+      if (!this._deployAborted) await this.setTabVisibilityForProfiles(currentProposal.object.name, visLabels, rts);
     } catch (e) {
       console.warn("[SaralForce] Record type visibility update failed:", e.message);
     }
+    // Status stays "complete" even on cancel: the object deploy itself
+    // succeeded, and that is what lets the user run record types again.
     this.setState({
       deploymentStatus: "complete",
-      deploymentStep: okCount === rts.length ? "Record types created" : "Record types finished with errors",
-      recordTypesDone: true
+      deploymentStep: this._deployAborted ? "Record type creation cancelled"
+        : okCount === rts.length ? "Record types created" : "Record types finished with errors",
+      // Only when every record type made it; otherwise the button stays to retry.
+      recordTypesDone: okCount === rts.length
     });
   }
 
@@ -2441,7 +2593,7 @@ class App extends React.Component {
         h("div", {className: "app-header"},
           h("div", {className: "header-left"},
             h("img", {className: "logo-chip", src: "logo-mark.png", alt: ""}),
-            h("h1", {className: "app-title"}, "SaralForce | AI Object Builder & Org Toolkit")
+            h("h1", {className: "app-title"}, "SaralForce | Build, Inspect & Deploy Salesforce")
           ),
           h("div", {className: "header-right"},
             h("button", {
@@ -2496,7 +2648,7 @@ class App extends React.Component {
       h("div", {className: "app-header"},
         h("div", {className: "header-left"},
           h("img", {className: "logo-chip", src: "logo-mark.png", alt: ""}),
-          h("h1", {className: "app-title"}, "SaralForce | AI Object Builder & Org Toolkit")
+          h("h1", {className: "app-title"}, "SaralForce | Build, Inspect & Deploy Salesforce")
         ),
         h("div", {className: "header-right"},
           h("button", {
@@ -2519,7 +2671,8 @@ class App extends React.Component {
           h("button", {
             className: "header-btn header-btn-new",
             onClick: () => this.newChat(),
-            title: "New Chat"
+            disabled: !!this.chatSwitchBlocked(),
+            title: this.chatSwitchBlocked() || "New Chat"
           }, "\u2795 New"),
           h("button", {
             className: `header-btn${this.state.showHistory ? " active" : ""}`,
@@ -2556,7 +2709,13 @@ class App extends React.Component {
           return h("div", {
             key: chat.id,
             className: `history-item ${chat.id === this.state.activeChatId ? "active" : ""}`,
-            onClick: () => { this.loadChat(chat.id); this.setState({showHistory: false}); }
+            title: this.chatSwitchBlocked() || undefined,
+            onClick: () => {
+              // When blocked, loadChat shows why and the panel stays open.
+              const blocked = this.chatSwitchBlocked();
+              this.loadChat(chat.id);
+              if (!blocked) this.setState({showHistory: false});
+            }
           },
             h("div", {className: "history-item-preview"}, preview + (firstUserMsg?.text?.length > 60 ? "..." : "")),
             h("div", {className: "history-item-meta"},

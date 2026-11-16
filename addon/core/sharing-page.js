@@ -148,6 +148,16 @@ export function buildSharingPageMatrix(sides, objectFilter = "") {
   ];
 }
 
+// Sections one side could not read (side.failed: section keys) are not
+// comparable: no rows, so nothing counts as a difference, and `unread`
+// names the orgs (labels) they failed in.
+export function markUnreadSharing(sections, sides, labels) {
+  return sections.map(s => {
+    const unread = labels.filter((_, i) => ((sides[i] || {}).failed || []).includes(s.key));
+    return unread.length ? {...s, rows: [], unread} : s;
+  });
+}
+
 // Every object named anywhere on the page, for the object picker.
 export function sharingPageObjects(sides) {
   const objs = new Map();

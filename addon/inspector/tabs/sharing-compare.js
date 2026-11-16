@@ -1,10 +1,11 @@
 // Access → Sharing settings: Setup's Sharing Settings page, org against org,
 // section by section, with what differs in plain words in the last column.
 import {
-  SHARING_PAGE_PARTS, buildSharingPageMatrix, sharingPageObjects, describeSharingDiff, sharingPageSummary
+  SHARING_PAGE_PARTS, buildSharingPageMatrix, sharingPageObjects, describeSharingDiff, sharingPageSummary, markUnreadSharing
 } from "../../core/sharing-page.js";
 import {loadSharingPage} from "../shared/access-data.js";
-import {toCsv, downloadText} from "../shared/csv.js";
+import {toCsv as toCsvCore} from "../../core/csv.js";
+import {downloadText} from "../shared/csv.js";
 import {EmptyState} from "../shared/ui.js";
 import {useFfSession} from "../shared/session-state.js";
 import {SearchSelect} from "../shared/combo.js";
@@ -46,32 +47,42 @@ function SharingCompareCard() {
   const [onlyDiff, setOnlyDiff] = React.useState(true);
   const [term, setTerm] = React.useState("");
   const same = hostA === hostB;
+  // A compare that ends after a newer one is ignored.
+  const runRef = React.useRef(0);
 
   const compare = async () => {
+    const run = ++runRef.current;
+    const live = () => runRef.current === run;
     setLoading("Reading org-wide defaults and sharing settings…");
     setError(null);
     try {
       const a = orgOf(hostA);
       const b = orgOf(hostB);
       for (const [o, host] of [[a, hostA], [b, hostB]]) if (!o || !o.conn) throw new Error(`Log in to ${host || "this org"} in this browser first (it isn't in your org list).`);
-      const status = s => setLoading(s);
+      const status = s => { if (live()) setLoading(s); };
       const sides = await Promise.all([loadSharingPage(a.conn, parts, status), loadSharingPage(b.conn, parts, status)]);
+      if (!live()) return;
+      const lower = l => l.map(x => x.toLowerCase());
       let labels = [orgName(hostA), orgName(hostB)];
-      if (labels[0] === labels[1] || labels[0].toLowerCase() === labels[1].toLowerCase()) {
-        labels = [a, b].map((o, i) => `${labels[i]} (${o.isSandbox ? "Sandbox" : "Production"})`);
-      }
+      if (lower(labels)[0] === lower(labels)[1]) labels = [a, b].map((o, i) => `${labels[i]} (${o.isSandbox ? "Sandbox" : "Production"})`);
+      // Two sandboxes (or productions) with one name: the host tells them apart.
+      if (lower(labels)[0] === lower(labels)[1]) labels = [a, b].map((o, i) => `${labels[i]} · ${o.host}`);
       const notes = sides.flatMap((s, i) => s.notes.map(n => `${labels[i]}: ${n}`));
-      setData({sides, labels, parts: [...parts], notes});
+      setData({sides, labels, parts: [...parts], hosts: [hostA, hostB], notes});
       setObject("");
     } catch (e) {
-      setError(e.message);
+      if (live()) setError(e.message);
     } finally {
-      setLoading("");
+      if (live()) setLoading("");
     }
   };
 
-  const all = data ? buildSharingPageMatrix(data.sides, "").filter(s => data.parts.includes(s.key)) : [];
-  const sections = data ? buildSharingPageMatrix(data.sides, object).filter(s => data.parts.includes(s.key)) : [];
+  // A section one org couldn't read is not compared (no rows, no differences).
+  const build = obj => markUnreadSharing(buildSharingPageMatrix(data.sides, obj).filter(s => data.parts.includes(s.key)), data.sides, data.labels);
+  const all = data ? build("") : [];
+  const sections = data ? build(object) : [];
+  const unread = sections.filter(s => s.unread);
+  const changed = data && data.hosts && (data.hosts[0] !== hostA || data.hosts[1] !== hostB || parts.join(",") !== data.parts.join(","));
   const t = term.trim().toLowerCase();
   const shown = sections.map(s => ({...s, rows: s.rows.filter(r => (!onlyDiff || r.differs) &&
     (!t || `${r.key} ${r.label} ${r.group || ""}`.toLowerCase().includes(t)))}));
@@ -92,18 +103,18 @@ function SharingCompareCard() {
     setObject(diffList[next]);
   };
 
+  // Cells by column position, so two orgs with the same label never collide.
   const exportCsv = () => {
     const [la, lb] = data.labels;
-    const cols = ["Section", "Object", "Item", la, lb, "What differs"];
-    const rows = [];
+    const rows = [["Section", "Object", "Item", la, lb, "What differs"]];
+    const val = v => Array.isArray(v) ? `Internal: ${v[0] || "—"} · External: ${v[1] || "—"}` : v || "";
     for (const s of sections) {
       for (const r of s.rows) {
-        const val = v => Array.isArray(v) ? `Internal: ${v[0] || "—"} · External: ${v[1] || "—"}` : v || "";
-        rows.push({Section: s.title, Object: s.key === "owd" ? r.key : r.group || "", Item: r.label,
-          [la]: val(r.values[0]), [lb]: val(r.values[1]), "What differs": r.differs ? describeSharingDiff(s.key, r.values, data.labels) : ""});
+        rows.push([s.title, s.key === "owd" ? r.key : r.group || "", r.label, val(r.values[0]), val(r.values[1]),
+          r.differs ? describeSharingDiff(s.key, r.values, data.labels) : ""]);
       }
     }
-    downloadText("sharing-settings-compare.csv", toCsv(cols, rows));
+    downloadText("sharing-settings-compare.csv", toCsvCore(rows[0].map((_, i) => i), rows, {guardFormulas: true, headers: false}));
   };
 
   const table = s => {
@@ -177,9 +188,12 @@ function SharingCompareCard() {
         h("span", null, "Only differences")),
       h("input", {className: "soql-save-input acc-filter", value: term, placeholder: "filter…", "aria-label": "Filter rows", onChange: e => setTerm(e.target.value)})),
     data && h("div", {className: "acc-summary" + (summary.total ? "" : " same")}, (object ? `${object}: ` : "") + summary.text),
+    changed && h("div", {className: "insp-warn"}, "Orgs or sections changed since this compare — press Compare to refresh."),
     data && data.notes.length > 0 && h("div", {className: "insp-meta"}, data.notes.join(" · ")),
-    data && shown.some(s => !s.rows.length) && h("div", {className: "insp-meta acc-empty-parts"},
-      (onlyDiff || term ? "No differences in: " : "Nothing in: ") + shown.filter(s => !s.rows.length).map(s => s.title).join(", ") +
+    unread.length > 0 && h("div", {className: "insp-meta acc-empty-parts"},
+      "Not compared: " + unread.map(s => `${s.title} (could not read in ${s.unread.join(", ")})`).join(", ") + "."),
+    data && shown.some(s => !s.rows.length && !s.unread) && h("div", {className: "insp-meta acc-empty-parts"},
+      (onlyDiff || term ? "No differences in: " : "Nothing in: ") + shown.filter(s => !s.rows.length && !s.unread).map(s => s.title).join(", ") +
       (object && data.parts.includes("settings") ? " (other settings are org-wide: pick All objects to see them)" : "") + "."),
     data && shown.filter(s => s.rows.length).map(s => h("details", {key: s.key, className: "acc-section", open: true},
       h("summary", null, `${s.title} · ${s.rows.length}`),

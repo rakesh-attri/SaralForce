@@ -4,6 +4,9 @@ import {escapeSoqlString, escapeSoqlLike} from "../../core/soql.js";
 import {useUnmountSignal} from "../shared/hooks.js";
 import {fmtNum} from "../shared/format.js";
 import {useTestRun, TestRunPanel, CoverageLines} from "./coverage-run.js";
+import {queryAll} from "../shared/query.js";
+import {coveringTestClasses, isSfId} from "../../core/test-run.js";
+import {confirmDialog} from "../../ui/confirm.js";
 
 const h = React.createElement;
 
@@ -21,7 +24,9 @@ function CoverageTab() {
   // Test runs follow their job id; coverage reloads when a run finishes.
   const testRun = useTestRun(unmountRef.current.signal, (final) => {
     const r = final.results;
-    setRunMsg(final.status === "done"
+    setRunMsg(final.status === "done" && final.empty
+      ? "Run complete: Salesforce queued no test classes."
+      : final.status === "done"
       ? `Run complete: ${r.passed} passed, ${r.failed} failed${r.skipped ? `, ${r.skipped} skipped` : ""} — coverage refreshed.`
       : "Still running — results so far are shown below.");
     setSeq(x => x + 1);
@@ -87,6 +92,8 @@ function CoverageTab() {
       }
       setRunning(false);
       await runTests({tests: [{classId: id}]}, name);
+    } catch (e) {
+      if (!unmountRef.current.signal.aborted) setRunMsg(`Could not run ${name}: ${e.message || e}`);
     } finally {
       if (!unmountRef.current.signal.aborted) setRunning(false);
     }
@@ -94,7 +101,52 @@ function CoverageTab() {
 
   // ─── Dashboard shell — presentation only. Every query, threshold and
   //     handler above is exactly what the coverage tab always used.
-  const runAll = () => runTests({testLevel: "RunLocalTests"}, "all tests");
+  const runAll = async () => {
+    if (running) return;
+    let sandbox = null;
+    try {
+      const o = await sfConn.rest(`/services/data/v${apiVersion}/query/?q=` +
+        encodeURIComponent("SELECT IsSandbox FROM Organization"), {useCache: false});
+      sandbox = !!(o.records && o.records[0] && o.records[0].IsSandbox);
+    } catch (e) { /* unknown: warn as if production */ }
+    const ok = await confirmDialog(sandbox
+      ? {title: "Run all local tests?", message: "Every local test class in this sandbox runs, then the table reloads.",
+        confirmLabel: "Run all tests"}
+      : {title: "Run all tests in production?",
+        message: (sandbox === null ? "Could not tell whether this org is a sandbox. " : "") +
+          "This runs every local test in PRODUCTION. It can take a long time and holds up deployments.",
+        confirmLabel: "Run all tests", danger: true});
+    if (!ok || unmountRef.current.signal.aborted) return;
+    await runTests({testLevel: "RunLocalTests"}, "all tests");
+  };
+
+  // Row "Run": the rows are the code under test, so run the test classes
+  // that cover it (from ApexCodeCoverage), not the row's own id.
+  const runCovering = async (r) => {
+    if (running) return;
+    const name = nm(r);
+    const id = r.ApexClassOrTriggerId;
+    if (!isSfId(id)) { setRunMsg(`Could not run tests for ${name}: it has no valid id.`); return; }
+    setRunning(true);
+    setRunMsg(`Finding the tests that cover ${name}…`);
+    try {
+      const rows = await queryAll(
+        `SELECT ApexTestClassId, ApexTestClass.Name FROM ApexCodeCoverage WHERE ApexClassOrTriggerId = '${id}'`,
+        {tooling: true});
+      const tests = coveringTestClasses(rows);
+      if (!tests.length) {
+        setRunMsg(`No test class covers ${name} yet.`);
+        return;
+      }
+      setRunning(false);
+      await runTests({tests: tests.map(t => ({classId: t.classId}))},
+        `tests covering ${name} (${tests.length} class${tests.length === 1 ? "" : "es"})`);
+    } catch (e) {
+      if (!unmountRef.current.signal.aborted) setRunMsg(`Could not find the tests covering ${name}: ${e.message || e}`);
+    } finally {
+      if (!unmountRef.current.signal.aborted) setRunning(false);
+    }
+  };
 
   return h("div", {className: "covdash"},
     linesOf && h(CoverageLines, {target: linesOf, onClose: () => setLinesOf(null)}),
@@ -121,7 +173,7 @@ function CoverageTab() {
           disabled: running,
           tabIndex: -1,
           "aria-label": "Run all org tests",
-          title: "Run all org tests, then reload the table",
+          title: "Run all org tests (asks first), then reload the table",
           onClick: runAll
         }, "▾")
       ),
@@ -183,11 +235,21 @@ function CoverageTab() {
           (t.records || []).forEach(x => { trig[x.Id] = true; });
         } catch (e) { /* unknown types */ }
         rows.forEach(r => { r._isTrigger = !!trig[r.ApexClassOrTriggerId]; });
+        // Test classes: the ones Salesforce recorded running as tests
+        // (ApexCodeCoverage.ApexTestClassId). A text search for "@IsTest"
+        // also hits classes that only mention it and stops at 2,000 hits,
+        // so it is only the fallback.
+        const testIds = {};
+        try {
+          const g = await queryAll("SELECT ApexTestClassId FROM ApexCodeCoverage GROUP BY ApexTestClassId", {tooling: true});
+          g.forEach(x => { if (x.ApexTestClassId) testIds[x.ApexTestClassId] = true; });
+          setFilterNote(null);
+          return rows.filter(r => r._isTrigger || !testIds[r.ApexClassOrTriggerId]);
+        } catch (e) { /* GROUP BY not accepted: fall back to the search */ }
         try {
           const s = await sfConn.rest(`/services/data/v${apiVersion}/search/?q=` +
             encodeURIComponent("FIND {@IsTest} IN ALL FIELDS RETURNING ApexClass(Id, Name)"),
             {useCache: false});
-          const testIds = {};
           (s.searchRecords || []).forEach(x => { testIds[x.Id] = true; });
           setFilterNote(null);
           return rows.filter(r => r._isTrigger || !testIds[r.ApexClassOrTriggerId]);
@@ -202,7 +264,7 @@ function CoverageTab() {
       nameOf: nm,
       pctOf,
       running,
-      runRow: (r) => runTests({tests: [{classId: r.ApexClassOrTriggerId}]}, nm(r), nm(r))
+      runRow: runCovering
     })
   );
 }
@@ -238,9 +300,8 @@ function CoverageDataPanel({tooling, soql, postFetch, emptyText, placeholder,
     setBusy(true);
     setError(null);
     try {
-      const res = await sfConn.rest(`/services/data/v${apiVersion}/${tooling ? "tooling/" : ""}query/?q=` +
-        encodeURIComponent(soql), {useCache: false});
-      let recs = (res && res.records) || [];
+      // Every page (nextRecordsUrl), not just the first 2000 rows.
+      let recs = await queryAll(soql, {tooling: !!tooling});
       if (postFetch) recs = await postFetch(recs);
       setRows(recs);
     } catch (e) {
@@ -441,25 +502,19 @@ function CoverageDataPanel({tooling, soql, postFetch, emptyText, placeholder,
                         onLines({id: r.ApexClassOrTriggerId, name: nameOf(r), isTrigger: !!r._isTrigger});
                       }
                     }, "Lines"),
-                    r._isTrigger
-                      ? h("span", {
-                          className: "covdash-noact",
-                          title: "Triggers are covered through their test classes — run the class instead"
-                        }, "—")
-                      : h("button", {
-                          className: "covdash-runbtn",
-                          title: `Run tests in ${nameOf(r)}`,
-                          onClick: (e) => {
-                            e.stopPropagation();
-                            runRow(r);
-                          }
-                        }, running ? "…" : "Run"))
+                    h("button", {
+                      className: "covdash-runbtn",
+                      disabled: running,
+                      title: `Run the test classes that cover ${nameOf(r)}`,
+                      onClick: (e) => {
+                        e.stopPropagation();
+                        runRow(r);
+                      }
+                    }, running ? "…" : "Run"))
                 );
               })
             )
-          ),
-          list.length >= 200 &&
-            h("div", {className: "perm-more"}, "Showing the newest 200 rows.")
+          )
         )),
       sorted.length > 0 && h("div", {className: "covdash-foot"},
         h("span", {className: "covdash-foot-t"},

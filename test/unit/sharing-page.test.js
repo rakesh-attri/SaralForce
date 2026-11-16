@@ -94,3 +94,16 @@ test("sharing models read like Setup", () => {
   assert.equal(shareModel("ControlledByParent"), "Controlled by Parent");
   assert.equal(shareModel(""), "");
 });
+
+test("a section one org could not read is not compared", async () => {
+  const {markUnreadSharing} = await import("../../addon/core/sharing-page.js");
+  const m = markUnreadSharing(buildSharingPageMatrix([left, {...right, sharingSets: {}, restrictionRules: {}, failed: ["sharingSets", "restrictionRules"]}]),
+    [left, {failed: ["sharingSets", "restrictionRules"]}], L);
+  const by = Object.fromEntries(m.map(s => [s.key, s]));
+  assert.deepEqual(by.sharingSets.rows, []);
+  assert.deepEqual(by.sharingSets.unread, ["Prod"]);
+  assert.deepEqual(by.restrictionRules.unread, ["Prod"]);
+  assert.equal(by.rules.unread, undefined);
+  // Without the mark the left's sharing set would count as "only in Dev".
+  assert.equal(sharingPageSummary(m).text, "6 differences: 3 org-wide defaults, 1 other setting, 2 sharing rules");
+});
