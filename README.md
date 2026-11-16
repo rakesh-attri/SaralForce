@@ -280,6 +280,19 @@ debug-log analysis.
 
 ## What's New
 
+### v2.3.3
+- **Movable launcher** — drag the SaralForce button anywhere on the page; it stays there on every
+  Salesforce tab, and right-click puts it back
+- **Code Coverage** — a row's **Run** runs the test classes that cover it; **Run All Tests** asks first
+  (with a production warning); every class is loaded; a stuck or failed run is reported
+- **Object Builder** — Cancel always ends a deploy; editing an existing object leaves its tab visibility
+  and app alone; "Choose profiles" with none ticked is blocked; guest profiles are left out of "All profiles"
+- **Access compare** — unique production / sandbox column names, warnings when data is cut off, sections
+  an org can't read are marked instead of showing false differences, "Same as left" by API name
+- **Fixes from a full code review** — metadata XML values checked, exact profile matching, Apex checks
+  that no longer miss code after `//` in strings, layouts keep their columns, and more
+- New headline: **SaralForce | Build, Inspect & Deploy Salesforce**
+
 ### v2.3.2
 - **Access → Sharing settings** — Setup's Sharing Settings page in two orgs side by side: org-wide defaults
   (internal and external), other sharing settings, sharing rules, sharing sets and restriction / scoping rules,

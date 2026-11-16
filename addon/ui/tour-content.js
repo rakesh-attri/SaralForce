@@ -70,6 +70,17 @@ export const SETTINGS_TOUR = {
 // Highlights per release, shown once after an update (newest first).
 export const RELEASE_NOTES = [
   {
+    version: "2.3.3",
+    title: "What's new in SaralForce 2.3.3",
+    items: [
+      "Move the SaralForce button: drag it anywhere if it covers something on the page. Right-click puts it back.",
+      "Code Coverage: a row's Run button now runs the tests that cover that class, and Run All Tests asks first (with a clear warning in production).",
+      "Object Builder: Cancel always stops a deploy, and editing an existing object no longer changes its tab visibility.",
+      "Access compare: clearer columns for production vs sandbox, warnings when data is cut off, and no false differences when an org can't be read.",
+      "Many smaller fixes from a full review, and a new headline: Build, Inspect & Deploy Salesforce."
+    ]
+  },
+  {
     version: "2.3.2",
     title: "What's new in SaralForce 2.3.2",
     items: [

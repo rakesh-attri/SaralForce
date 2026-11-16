@@ -394,7 +394,7 @@
         <span style="display:flex;align-items:center;gap:8px;">
           <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><defs><linearGradient id="sfhCloud" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#ffc24a"/><stop offset="1" stop-color="#f05a0e"/></linearGradient></defs><rect x="0" y="0" width="16" height="16" rx="3.5" fill="#141a3c"/><g transform="translate(0 -0.8)"><path d="M3 14 H12.5 A2.8 2.8 0 0 0 13 8.4 A4.6 4.6 0 0 0 4.3 7.6 A3.3 3.3 0 0 0 3 14 Z" fill="url(#sfhCloud)"/><path d="M6.6 9.4 L5 11 L6.6 12.6 M9.4 9.4 L11 11 L9.4 12.6" fill="none" stroke="#141a3c" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></g></svg>
           SaralForce
-          <span style="font-weight:400;opacity:0.7;font-size:11px;">Developer Inspector Utility</span>
+          <span style="font-weight:400;opacity:0.7;font-size:11px;">Admin &amp; Developer Toolkit</span>
         </span>
       `;
 
