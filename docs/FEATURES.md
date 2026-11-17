@@ -23,7 +23,7 @@ what you can **change**, how to do it, and where the limits are.
 10. [Code Coverage](#10-code-coverage)
 11. [Users](#11-users)
 12. [Access](#12-access) — Compare · Sharing settings · Risky access · Approvals
-13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · New · package.xml
+13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · Org Handbook · New · package.xml
 14. [Org Info](#14-org-info)
 15. [App Tab Manager](#15-app-tab-manager)
 16. [SandShift (release center)](#16-sandshift-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · GitHub
@@ -457,6 +457,29 @@ the **draft editor** (nothing is saved to the org yet); **✓ Deploy** creates i
 Add any class, trigger, page, component, flow, rule, object, custom metadata type or single
 custom metadata record with **＋ package.xml**. The bar at the top shows the count;
 **Download package.xml** (sorted, de-duplicated, your API version) or **Clear**.
+
+### 13.13 Org Handbook 👁 ✨
+
+For someone who just joined: what the business does, how its records move through their stages, and every flow explained step by step with a simple diagram. **Build the handbook** reads the org once (read-only, Cancel stops it); **↻ Refresh** reads it again.
+
+| Tab | What you get |
+|---|---|
+| 🏠 **Handbook** | Counts; ✨ **How the business works** (optional AI summary from app, object, stage and flow names, 1 request, you confirm); **🚀 Start here**, a reading order for day one (the busiest process, its key flows, screen flows to try in a sandbox, the Apex everything uses); **🏢 Departments**: each app with the records its team works on; **🔄 Business processes**: the records with the most automation and their stages (New → Working → Closed); **📖 Glossary**: those records' stages, options and record types. Everything links to its page. |
+| ⇢ **Flows** | Every active flow, grouped by the record it runs on (or by kind: screen flows, scheduled, platform events, called by other automation), each with a one-line summary in plain words ("When a Case is created or updated: finds the Account linked to this Case, checks "Gold customer?", updates this Case…"). Search by name, object or what it does. Open one for: when it starts; a **Simple diagram** (plain labels and icons, field updates in a row folded into one box, outcomes on the arrows, 🖐 where a person does something, failures in red) or the **Detailed** flowchart; **the story, step by step** (numbered, with "Gold → step 3, Other tiers → step 4", "if it fails → step 5"); what it is **used by** and **uses** (flows and Apex, clickable); ✨ **Explain it simply** (ELI5, 1 AI request); **Open in Flow Builder**; **Copy the story**. |
+| 🔄 **Business processes** | **The life of a record**: its stage values across (from the Status / Stage picklist), and down when the automation runs (Before save · Checks · After save · Later / scheduled), with each flow, trigger and validation rule in the stage where it acts (from its entry conditions, decisions or ISPICKVAL formula) and "set by …" where a flow moves the record to a stage. Plus the flows on that record and its words (stages, options, record types). |
+| 🛠 **Technical map** | For developers: one business area (or the whole org) component by component, as below. |
+
+**Technical map** details:
+
+| You can | Details |
+|---|---|
+| Pick a scope | **One business area**: an object such as Case, Opportunity or Invoice__c, and everything that runs around it (its triggers, record-triggered flows and validation rules, the Apex they call, subflows and Apex actions, and the LWC / Aura that use that Apex, two steps out). **Whole org overview**: the busiest objects (triggers, flows, rules per object) with **Open guide →**, and a business map. |
+| Read the org | Non-managed Apex classes and triggers, active flows (their full definition), LWC, Aura, validation rules (formulas for the area's object), object relationships and Salesforce's dependency data. Read-only; Cancel stops it. Large orgs: the first 200 active flows. |
+| **The big picture** | A system map: the record being saved → triggers, flows and rules → the classes they call → the objects they read and change. Click a box to jump to its section. |
+| One section per component | In the order Salesforce runs a save: before-save flows, before triggers, validation rules, after triggers, after-save flows, then Apex classes, other flows and components. Each has: **Flow** diagram (flows as a real flowchart: decisions as diamonds with their branch conditions, loops, fault paths in red, subflow and Apex steps linking to their own sections; code as who calls it → it → what it calls and touches), **What this shows** in plain words (no AI needed), **Related flows and components** with why they're related, **ELI5**, and **Good to know** (no fault path, without sharing, callouts, logic in a trigger body, several triggers on one object, steps never reached). |
+| ✨ AI notes | Optional: a **How the business works** summary and an **ELI5** note per component, in a few batched requests (you confirm first). Only names, outlines and step summaries are sent: no record data, no full code. |
+| Diagrams | Zoom, **Fit**, drag to pan, legend, light and dark. Drawn by SaralForce itself (no library, nothing loaded from the internet). |
+| Export | **Download HTML** (one self-contained page with the diagrams, ready to share or print to PDF), **Download Markdown** (Mermaid diagrams that render on GitHub, Azure DevOps and Notion), **Copy** the whole guide or one section. |
 
 ---
 

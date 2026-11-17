@@ -25,6 +25,7 @@ import {NewDialog, DraftEditor, withOriginals, fileIcon} from "./metadata-new.js
 import {CmdtDetail} from "./metadata-cmdt.js";
 import {DataQualityPanel} from "./metadata-quality.js";
 import {DETAIL_VIEWS} from "./metadata-views.js";
+import {OrgGuideView} from "./org-guide.js";
 import {openMetadataInTab, metadataTargetFromUrl, isInspectorTab} from "../shared/inspector-tab.js";
 
 // True when this page is the inspector opened in its own browser tab.
@@ -714,7 +715,7 @@ function MetadataTab() {
   return h("div", {className: "insp-panel"},
     h("div", {className: "md-top"},
       h("div", {className: "md-kinds", role: "tablist", "aria-label": "Metadata type"},
-        [...KINDS, {id: "schema", label: "Schema", icon: "▦", tone: "schema"}].map(k => h("button", {
+        [...KINDS, {id: "schema", label: "Schema", icon: "▦", tone: "schema"}, {id: "guide", label: "Org Handbook", icon: "📘", tone: "guide"}].map(k => h("button", {
           key: k.id,
           role: "tab",
           "aria-selected": kindId === k.id,
@@ -726,7 +727,7 @@ function MetadataTab() {
           lists[k.id] && h("span", {className: "md-kind-count"}, lists[k.id].length)))),
       kind && h("button", {className: "btn btn-primary btn-sm md-new-btn", onClick: openNew, "data-tour": "metadata-new"},
         "＋ New " + (NEW_LABEL[kind.id] || kind.label))),
-    h("div", {className: "md-pkg-bar"},
+    kindId !== "guide" && h("div", {className: "md-pkg-bar"},
       h("span", {className: "md-pkg-ico", "aria-hidden": "true"}, "📦"),
       h("span", {className: "insp-meta"}, count ? `package.xml · ${count} item(s)` : "package.xml · add items with “＋ package.xml”"),
       count > 0 && h("button", {
@@ -736,7 +737,9 @@ function MetadataTab() {
       count > 0 && h("button", {className: "btn btn-secondary btn-sm", onClick: () => setPkg({})}, "Clear")),
     notice && h("div", {className: "insp-status-ok"}, notice),
     editErr && h("div", {className: "insp-error"}, editErr),
-    kindId === "schema"
+    kindId === "guide"
+      ? h(OrgGuideView, null)
+      : kindId === "schema"
       ? h(SchemaView, {pkg, onTogglePkg})
       : h("div", {className: "usr-layout"},
           h("div", {className: "usr-side"},

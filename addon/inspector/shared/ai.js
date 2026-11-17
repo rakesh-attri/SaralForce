@@ -555,4 +555,37 @@ function explainImpact(summary, {signal} = {}) {
   return askAi({feature: "Impact analysis", system: IMPACT_SYSTEM, user: summary, signal});
 }
 
-export {suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, chatDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};
+// ── Org Guide ─────────────────────────────────────────────────────────
+// Input is names, outlines and step summaries only: never record data and
+// never whole code bodies (core/org-guide.js aiInputFor / businessPrompt).
+const ORG_GUIDE_BUSINESS_SYSTEM =
+  "You help a developer who just joined a company understand its Salesforce org (an Org Guide). From the facts given " +
+  "(objects, how they link, and which automation runs on them) write a short onboarding overview with these sections in " +
+  "CAPITALS on their own line: WHAT THIS BUSINESS DOES, MAIN AREAS, HOW A RECORD MOVES, WHERE TO START. Plain words, 2-5 short " +
+  "bullets per section starting with \"- \", no code, no Markdown headings. " +
+  "Only say what the facts support; say \"probably\" when you infer the business purpose from names.";
+
+const ORG_GUIDE_ELI5_SYSTEM =
+  "You explain Salesforce components for an Org Guide read by a brand-new developer. The user message lists components " +
+  "separated by ---, each with an ID. For EVERY ID write: eli5 = 2-3 sentences explaining it as if to a 5-year-old, with an " +
+  "everyday comparison (a mail sorter, a door guard, a recipe); plain = 2-3 sentences in plain business words saying what it " +
+  "does and when it runs. No code. Reply with ONLY JSON: {\"items\":[{\"id\":\"<ID>\",\"eli5\":\"...\",\"plain\":\"...\"}]}.";
+
+function orgGuideBusiness(facts, {signal} = {}) {
+  return askAi({system: ORG_GUIDE_BUSINESS_SYSTEM, user: String(facts || "").slice(0, 12000), signal, feature: "Org Guide · business"});
+}
+
+// One batch → {id: {eli5, plain}} (ids not answered are simply missing).
+async function orgGuideEli5(text, ids, {signal} = {}) {
+  const reply = await askAiJson({
+    system: ORG_GUIDE_ELI5_SYSTEM, user: String(text || "").slice(0, 16000), signal, feature: "Org Guide · ELI5",
+    validate: o => (Array.isArray(o.items) && o.items.some(x => ids.includes(x && x.id)) ? null : "Expected {\"items\": [...]} with the given IDs.")
+  });
+  const out = {};
+  for (const x of reply.items || []) {
+    if (x && ids.includes(x.id)) out[x.id] = {eli5: String(x.eli5 || "").slice(0, 800), plain: String(x.plain || "").slice(0, 800)};
+  }
+  return out;
+}
+
+export {orgGuideBusiness, orgGuideEli5, suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, chatDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};

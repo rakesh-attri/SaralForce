@@ -13,6 +13,7 @@ import {fileURLToPath} from "node:url";
 import {accessTables, metadataTables, permissionSetDescribe, applyWhere} from "./mock-access-metadata.js";
 import {Readable} from "node:stream";
 import {releaseSoap, releaseRest, resetRelease} from "./mock-release.js";
+import {addOrgGuideMock, orgGuideLlm, addOrgGuideDescribes, addOrgGuideApps} from "./mock-org-guide.js";
 import {mockGithub, githubState, resetGithub} from "./mock-github.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -168,6 +169,10 @@ const tables = {
   ...metadataTables(apexClasses)
 };
 
+addOrgGuideMock(tables);
+addOrgGuideApps(tables);
+addOrgGuideDescribes(describes, field);
+
 // Bundle files need ids so edits PATCH them in place.
 let lastMemberBody = "";
 for (const t of ["lightningcomponentresource", "auradefinition"]) {
@@ -184,7 +189,9 @@ const mockTabDesc = new Map();
 function dynamicTable(obj, q, tooling) {
   if (obj === "tabdefinition") {
     return mockCustomTabs.filter(t => tooling || appliedTabs.has(t.fullName))
-      .map(t => ({Name: t.fullName, SobjectName: t.fullName, Label: t.fullName.replace(/__c$/, "").replace(/_/g, " ")}));
+      .map(t => ({Name: t.fullName, SobjectName: t.fullName, Label: t.fullName.replace(/__c$/, "").replace(/_/g, " ")}))
+      // The Org Handbook also reads standard tabs (its query asks for DurableId).
+      .concat(/DurableId/.test(q) ? (tables.tabdefinition || []).filter(t => !mockCustomTabs.some(c => c.fullName === t.Name)) : []);
   }
   if (obj === "permissionsettabsetting") return mockTabSettings;
   if (obj === "layout") {
@@ -634,7 +641,8 @@ function mockLlm(req, res) {
     const system = String(((body.messages || [])[0] || {}).content || "");
     const msgs = body.messages || [];
     const user = String((msgs[msgs.length - 1] || {}).content || "");
-    const content = /anonymous Apex; fix THAT error/.test(system)
+    const guideReply = orgGuideLlm(system, user);
+    const content = guideReply != null ? guideReply : /anonymous Apex; fix THAT error/.test(system)
       ? (() => {
         // Run Apex fix: drop the "oops" line Salesforce rejected; data errors get no code change.
         const code = user.split("Apex code:\n").slice(1).join("Apex code:\n");

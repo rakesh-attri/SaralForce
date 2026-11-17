@@ -59,7 +59,8 @@ const FF_TRIM_KEYS = {
   export: ["preview"],
   logs: ["analyses", "chats", "openLog"],
   apex: ["log"],
-  access: ["matrix", "shareData"]
+  access: ["matrix", "shareData"],
+  metadata: ["guide"]
 };
 
 function ffClone(obj) {
