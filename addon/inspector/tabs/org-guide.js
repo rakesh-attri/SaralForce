@@ -5,16 +5,17 @@
 import {hasValidConfig, getSavedConfig, LLM_PROVIDERS} from "../../llm/llm-service.js";
 import {safeCopyText} from "../../utils.js";
 import {buildGuide, eli5Batches, businessPrompt, guideToMarkdown, guideToHtml, GUIDE_TYPES, buildGuideGraph, areaRanking, flowDiagram} from "../../core/org-guide.js";
-import {buildHandbook, handbookPrompt, FLOW_KIND_LABEL} from "../../core/handbook.js";
+import {buildHandbook, handbookPrompt, FLOW_KIND_LABEL, an} from "../../core/handbook.js";
 import {flowStory, simpleFlowDiagram, storyText} from "../../core/flow-story.js";
 import {layoutGraph} from "../../core/diagram-layout.js";
 import {diagramSvg, legendKinds} from "../../core/diagram-svg.js";
-import {loadGuideData, loadHandbookExtras} from "../shared/org-guide-data.js";
-import {orgGuideBusiness, orgGuideEli5} from "../shared/ai.js";
+import {loadGuideData, loadHandbookExtras, loadRecordAccess, loadRecordPages} from "../shared/org-guide-data.js";
+import {orgGuideBusiness, orgGuideEli5, askOrg} from "../shared/ai.js";
+import {askContext, parseCitations, suggestedQuestions, buildChecklist, checklistProgress, accessSummary, explainFlexiPage, changesSince} from "../../core/handbook-plus.js";
 import {ffGetObjects} from "../shared/describe.js";
 import {downloadText} from "../shared/csv.js";
 import {EmptyState} from "../shared/ui.js";
-import {useFfSession} from "../shared/session-state.js";
+import {useFfSession, ffLoadJson, ffSaveJson} from "../shared/session-state.js";
 import {SearchSelect} from "../shared/combo.js";
 import {confirmDialog} from "../../ui/confirm.js";
 import {sfConn} from "../../inspector.js";
@@ -364,7 +365,9 @@ const scrollToId = (domId, smooth = true) => setTimeout(() => {
   if (el) { el.scrollIntoView({behavior: smooth ? "smooth" : "auto", block: "start"}); el.classList.add("og-flash"); setTimeout(() => el.classList.remove("og-flash"), 1200); }
 }, 60);
 
-const TAB_DEFS = [["home", "🏠", "Handbook"], ["flows", "⇢", "Flows"], ["processes", "🔄", "Business processes"], ["technical", "🛠", "Technical map"]];
+const TAB_DEFS = [["home", "🏠", "Handbook"], ["flows", "⇢", "Flows"], ["processes", "🔄", "Business processes"], ["ask", "💬", "Ask the org"],
+  ["changes", "🆕", "What's new"], ["technical", "🛠", "Technical map"]];
+const CHECK_KEY = "sfoc_org_onboarding";
 
 function OrgGuideView() {
   const cached = HB_CACHE && HB_CACHE.host === hostNow() ? HB_CACHE.hb : null;
@@ -377,6 +380,10 @@ function OrgGuideView() {
   const [flowSel, setFlowSel] = React.useState(null);
   const [procSel, setProcSel] = React.useState(null);
   const [techReq, setTechReq] = React.useState(null);
+  // My onboarding: ticked items, kept in this browser per org.
+  const [done, setDoneState] = React.useState(() => ffLoadJson(CHECK_KEY, {}));
+  const setDone = (id, on = true) => setDoneState(d => { const n = {...d, [id]: on || undefined}; if (!on) delete n[id]; ffSaveJson(CHECK_KEY, n); return n; });
+  const [chat, setChat] = React.useState([]); // Ask the org, kept while the panel is open
   const abortRef = React.useRef(null);
   React.useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
   const setHb = v => { setHbState(v); HB_CACHE = v ? {host: hostNow(), hb: v} : null; };
@@ -425,8 +432,9 @@ function OrgGuideView() {
   // Move between the tabs: {tab, ref, object}.
   const go = target => {
     if (!target) return;
-    if (target.tab === "flows") { setTab("flows"); setFlowSel(target.ref); scrollToId(flowAnchor(target.ref)); }
-    else if (target.tab === "processes") { setTab("processes"); if (target.ref) setProcSel(target.ref); }
+    if (target.tab === "flows") { setTab("flows"); setFlowSel(target.ref); scrollToId(flowAnchor(target.ref)); if (target.ref) setDone(target.ref); }
+    else if (target.tab === "processes") { setTab("processes"); if (target.ref) { setProcSel(target.ref); setDone(`process:${target.ref}`); } }
+    else if (target.tab === "home" && target.ref) { setTab("home"); scrollToId("og-" + target.ref); }
     else if (target.tab === "technical") {
       const object = target.object || procSel || (hb && hb.processes[0] && hb.processes[0].object) || "";
       setTab("technical");
@@ -452,7 +460,7 @@ function OrgGuideView() {
       error && h("div", {className: "insp-error"}, error),
       h("div", {className: "og-tabs", role: "tablist", "aria-label": "Handbook sections"},
         TAB_DEFS.map(([id, icon, label]) => h("button", {
-          key: id, role: "tab", "aria-selected": tab === id, className: "og-tab" + (tab === id ? " on" : ""), onClick: () => setTab(id),
+          key: id, role: "tab", "aria-selected": tab === id, className: "og-tab" + (tab === id ? " on" : ""), onClick: () => { setTab(id); if (id === "changes") setDone("changes"); },
           disabled: !hb && id !== "home" && id !== "technical"
         }, h("span", {"aria-hidden": "true"}, icon), " ", label,
         id === "flows" && hb ? h("span", {className: "og-tab-n"}, hb.flows.length) : null,
@@ -464,11 +472,15 @@ function OrgGuideView() {
         ? (!busy && h(EmptyState, {art: "apps", title: "Get to know this org",
           text: "Build the handbook once: SaralForce reads the org's apps, objects, flows, triggers, Apex and rules (read-only) and explains them in plain words, with a diagram for every flow."},
           h("button", {className: "btn btn-primary btn-sm", onClick: () => build(false)}, "Build the handbook")))
+        : tab === "ask"
+          ? h(AskOrg, {hb, go, chat, setChat, onAsked: () => setDone("ask")})
+        : tab === "changes"
+          ? h(WhatsNew, {hb, go})
         : tab === "flows"
-          ? h(FlowLibrary, {hb, sel: flowSel, setSel: setFlowSel, go, copied, copyMd})
+          ? h(FlowLibrary, {hb, sel: flowSel, setSel: setFlowSel, go, copied, copyMd, onOpen: id => setDone(id)})
           : tab === "processes"
             ? h(Processes, {hb, sel: procSel || (hb.processes[0] && hb.processes[0].object), setSel: setProcSel, go})
-            : h(HandbookHome, {hb, go, copied, copyMd, canAi: hasValidConfig(), busy,
+            : h(HandbookHome, {hb, go, copied, copyMd, canAi: hasValidConfig(), busy, done, setDone,
               onSummary: () => writeSummary(hb, null).finally(() => setStatus(""))}));
 }
 
@@ -491,9 +503,10 @@ function StageChain({p, big}) {
     i > 0 && h("span", {className: "og-arrow", "aria-hidden": "true"}, "→"), h("span", {className: "og-stage"}, s))));
 }
 
-function HandbookHome({hb, go, copied, copyMd, canAi, busy, onSummary}) {
+function HandbookHome({hb, go, copied, copyMd, canAi, busy, onSummary, done, setDone}) {
   return h("div", {className: "og-home"},
     h(StatTiles, {counts: hb.counts}),
+    h(Checklist, {hb, go, done, setDone}),
     hb.notes.map((n, i) => h("div", {key: i, className: "insp-meta og-note"}, n)),
     h("section", {className: "sq3-card og-sec"},
       h("h3", {className: "og-h2"}, "How the business works"),
@@ -517,7 +530,7 @@ function HandbookHome({hb, go, copied, copyMd, canAi, busy, onSummary}) {
         h("div", {className: "og-chips"}, d.objects.slice(0, 14).map((o, i) => {
           const proc = hb.processes.find(p => p.object === o.name);
           return h("button", {key: i, className: "og-chip" + (proc ? " live" : ""), disabled: !proc,
-            title: proc ? `See how a ${proc.label} moves through its life` : "No automation on this object",
+            title: proc ? `See how ${an(proc.label)} ${proc.label} moves through its life` : "No automation on this object",
             onClick: () => proc && go({tab: "processes", ref: proc.object})}, o.label, o.automations ? h("span", {className: "og-chip-n"}, o.automations) : null);
         })))))),
     hb.processes.length > 0 && h("section", {className: "sq3-card og-sec"},
@@ -527,7 +540,7 @@ function HandbookHome({hb, go, copied, copyMd, canAi, busy, onSummary}) {
         h("div", {className: "og-card-h"}, p.label, p.label !== p.object && h("span", {className: "insp-meta"}, " ", p.object)),
         h(StageChain, {p}),
         h("div", {className: "insp-meta"}, `${p.counts.flows} flows · ${p.counts.triggers} triggers · ${p.counts.rules} rules`))))),
-    hb.glossary.length > 0 && h("section", {className: "sq3-card og-sec"},
+    hb.glossary.length > 0 && h("section", {className: "sq3-card og-sec", id: "og-glossary"},
       h("h3", {className: "og-h2"}, "📖 Glossary"),
       h("div", {className: "sq3-card-sub"}, "The main records, their stages and options, in the org's own words."),
       h("div", {className: "og-gloss2"}, hb.glossary.map(g => h("div", {key: g.name, className: "og-gloss-item"},
@@ -538,7 +551,7 @@ function HandbookHome({hb, go, copied, copyMd, canAi, busy, onSummary}) {
 }
 
 // ─── Flow library ────────────────────────────────────────────────────
-function FlowLibrary({hb, sel, setSel, go, copied, copyMd}) {
+function FlowLibrary({hb, sel, setSel, go, copied, copyMd, onOpen}) {
   const [term, setTerm] = React.useState("");
   const [kind, setKind] = React.useState("all");
   const t = term.trim().toLowerCase();
@@ -565,7 +578,7 @@ function FlowLibrary({hb, sel, setSel, go, copied, copyMd}) {
     ordered.map(([group, list]) => h("section", {key: group, className: "og-lib-group"},
       h("div", {className: "og-phase"}, group, h("span", {className: "og-chip-n"}, list.length)),
       list.map(f => h("div", {key: f.id, id: flowAnchor(f.id), className: "sq3-card og-flow" + (sel === f.id ? " open" : "")},
-        h("button", {className: "og-flow-row", "aria-expanded": sel === f.id, onClick: () => setSel(sel === f.id ? null : f.id)},
+        h("button", {className: "og-flow-row", "aria-expanded": sel === f.id, onClick: () => { setSel(sel === f.id ? null : f.id); if (sel !== f.id && onOpen) onOpen(f.id); }},
           h("span", {className: "og-flow-ico", "aria-hidden": "true"}, KIND_ICON[f.kind]),
           h("span", {className: "og-flow-main"},
             h("span", {className: "og-flow-name"}, f.label),
@@ -642,7 +655,7 @@ function FlowDetail({f, hb, go, copied, copyMd}) {
         f.calls.length > 0 && h("div", {className: "og-conn"}, h("span", {className: "og-tag-inline"}, "Uses"),
           f.calls.map(id => h("button", {key: id, className: "og-chip live", onClick: () => openRef(id)}, id.startsWith("class:") ? "⚙ " + id.split(":")[1] : label(id)))),
         f.object && hb.processes.some(p => p.object === f.object) && h("div", {className: "og-conn"}, h("span", {className: "og-tag-inline"}, "Record"),
-          h("button", {className: "og-chip live", onClick: () => go({tab: "processes", ref: f.object})}, `Life of a ${f.object}`)),
+          h("button", {className: "og-chip live", onClick: () => go({tab: "processes", ref: f.object})}, `Life of ${an(f.object)} ${f.object}`)),
         !f.calledBy.length && !f.calls.length && !f.object && h("div", {className: "insp-meta"}, "Not connected to other flows or Apex."),
         h("div", {className: "og-eli5" + (eli5 ? "" : " empty")},
           h("div", {className: "og-tag"}, "🧸 ELI5 (explained like you're 5)"),
@@ -663,9 +676,9 @@ function Processes({hb, sel, setSel, go}) {
     h("div", {className: "acc-kinds og-proc-pick"}, hb.processes.map(x => h("button", {key: x.object, type: "button", "aria-pressed": x.object === p.object,
       className: "insp-chip rel-chip" + (x.object === p.object ? " on" : ""), onClick: () => setSel(x.object)}, x.label, h("span", {className: "og-chip-n"}, x.total)))),
     h("section", {className: "sq3-card og-sec"},
-      h("h3", {className: "og-h2"}, `The life of a ${p.label}`),
+      h("h3", {className: "og-h2"}, `The life of ${an(p.label)} ${p.label}`),
       h("div", {className: "sq3-card-sub"}, p.stageField
-        ? `Across: the ${p.stageField.label} values a ${p.label} goes through. Down: when the automation runs. Click any box to read it.`
+        ? `Across: the ${p.stageField.label} values ${an(p.label)} ${p.label} goes through. Down: when the automation runs. Click any box to read it.`
         : "This object has no stage or status picklist, so automation is shown for \"Created\" and \"Any change\". Click any box to read it."),
       h(StageChain, {p, big: true}),
       p.lanes.length
@@ -689,7 +702,234 @@ function Processes({hb, sel, setSel, go}) {
       h("h3", {className: "og-h2"}, `${p.label}: words you'll see`),
       g.recordTypes.length > 0 && h("div", {className: "og-gloss-line"}, h("span", {className: "og-tag-inline"}, "Kinds"), g.recordTypes.join(", ")),
       g.picklists.map(x => h("div", {key: x.name, className: "og-gloss-line"}, h("span", {className: "og-tag-inline"}, x.label), x.values.join(" · ")))),
+    h(WhoWorks, {key: "who-" + p.object, p}),
+    h(RecordPages, {key: "pages-" + p.object, p, hb, go}),
     h("button", {className: "field-action-btn og-tech-link", onClick: () => go({tab: "technical", object: p.object, ref: null})}, `🛠 Technical map of ${p.label} →`));
+}
+
+
+// ─── My onboarding: a checklist with progress (kept per org) ───────
+function Checklist({hb, go, done, setDone}) {
+  const list = buildChecklist(hb);
+  const prog = checklistProgress(list, done);
+  const [open, setOpen] = React.useState(prog.done < prog.total);
+  return h("section", {className: "sq3-card og-sec og-check"},
+    h("div", {className: "og-check-head"},
+      h("h3", {className: "og-h2"}, "✅ My onboarding"),
+      h("span", {className: "og-check-n"}, `${prog.done} of ${prog.total}`),
+      h("div", {className: "og-check-bar", role: "progressbar", "aria-valuenow": prog.pct, "aria-valuemin": 0, "aria-valuemax": 100},
+        h("div", {className: "og-check-fill", style: {width: prog.pct + "%"}})),
+      h("button", {className: "field-action-btn", onClick: () => setOpen(!open)}, open ? "Hide" : "Show")),
+    open && h("ul", {className: "og-check-list"}, list.map(it => h("li", {key: it.id, className: done[it.id] ? "done" : ""},
+      h("input", {type: "checkbox", checked: !!done[it.id], "aria-label": "Done: " + it.text, onChange: e => setDone(it.id, e.target.checked)}),
+      h("div", null,
+        h("button", {className: "og-start-link", onClick: () => { go(it.go); if (!it.manual) setDone(it.id); }}, it.text),
+        h("div", {className: "insp-meta"}, it.why))))),
+    prog.done === prog.total && h("div", {className: "insp-status-ok"}, "🎉 Onboarding done: you know your way around this org."));
+}
+
+// ─── Ask the org: answers from the handbook, with links ────────────
+const lcs = s => String(s || "").toLowerCase();
+function refLabel(hb, ref) {
+  const [type, rest] = [ref.split(":")[0], ref.slice(ref.indexOf(":") + 1)];
+  if (type === "flow") { const f = hb.flows.find(x => x.id === ref); return f ? f.label : null; }
+  if (type === "process") { const p = hb.processes.find(x => lcs(x.object) === lcs(rest)); return p ? `Life of ${an(p.label)} ${p.label}` : null; }
+  // Real names (refs are lower case) from the org read.
+  const it = SHARED ? SHARED.items : {};
+  const pick = (list, name) => ((list || []).find(x => lcs(x.name) === name) || {});
+  if (type === "trigger") return pick(it.triggers, rest).name || rest;
+  if (type === "class") return pick(it.classes, rest).name || rest;
+  if (type === "lwc") return pick(it.lwc, rest).label || rest;
+  if (type === "aura") return pick(it.aura, rest).label || rest;
+  if (type === "rule") {
+    const r = (it.rules || []).find(x => `${lcs(x.object)}.${lcs(x.name)}` === rest);
+    return r ? r.name : rest.split(".").pop();
+  }
+  return null;
+}
+function refTarget(hb, ref) {
+  const [type, rest] = [ref.split(":")[0], ref.slice(ref.indexOf(":") + 1)];
+  if (type === "flow") return {tab: "flows", ref};
+  if (type === "process") { const p = hb.processes.find(x => lcs(x.object) === lcs(rest)); return p ? {tab: "processes", ref: p.object} : null; }
+  const obj = type === "rule" ? rest.split(".")[0] : "";
+  const p = obj && hb.processes.find(x => lcs(x.object) === obj);
+  return {tab: "technical", ref, object: p ? p.object : undefined};
+}
+
+function AnswerText({text, hb, go}) {
+  const lines = String(text || "").split("\n");
+  const seg = line => parseCitations(line, ref => refLabel(hb, ref)).map((x, i) => (x.ref
+    ? h("button", {key: i, className: "og-cite", onClick: () => go(refTarget(hb, x.ref)), title: x.ref}, x.label)
+    : h(React.Fragment, {key: i}, inline(x.text))));
+  const out = [];
+  let bullets = [];
+  const flush = () => { if (bullets.length) { out.push(h("ul", {key: "u" + out.length, className: "og-list"}, bullets)); bullets = []; } };
+  lines.forEach((l, i) => {
+    const t = l.trim();
+    if (!t) { flush(); return; }
+    if (/^[-*•]\s+/.test(t)) bullets.push(h("li", {key: i}, seg(t.replace(/^[-*•]\s+/, ""))));
+    else if (/^\d+[.)]\s+/.test(t)) bullets.push(h("li", {key: i}, seg(t)));
+    else { flush(); out.push(h("p", {key: i, className: "og-p"}, seg(t.replace(/^#+\s*/, "")))); }
+  });
+  flush();
+  return h("div", {className: "og-answer"}, out);
+}
+
+function AskOrg({hb, go, chat, setChat, onAsked}) {
+  const [q, setQ] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const ctrlRef = React.useRef(null);
+  const endRef = React.useRef(null);
+  React.useEffect(() => () => { if (ctrlRef.current) ctrlRef.current.abort(); }, []);
+  React.useEffect(() => { if (endRef.current) endRef.current.scrollIntoView({block: "nearest"}); }, [chat.length]);
+  const canAi = hasValidConfig();
+  const send = async text => {
+    const question = String(text || q).trim();
+    if (!question || busy) return;
+    setQ("");
+    const ctx = askContext(hb, SHARED ? SHARED.items : {}, question);
+    const found = [...ctx.found.processes.map(x => `process:${x.p.object}`), ...ctx.found.flows.map(x => x.f.id),
+      ...ctx.found.rules.map(x => `rule:${lcs(x.r.object)}.${lcs(x.r.name)}`)].slice(0, 8);
+    const history = [...chat.map(m => ({role: m.role, content: m.content})), {role: "user", content: question}];
+    const next = [...chat, {role: "user", content: question}, {role: "assistant", content: canAi ? "" : null, found}];
+    setChat(next);
+    onAsked();
+    if (!canAi) return;
+    const ctrl = new AbortController();
+    ctrlRef.current = ctrl;
+    setBusy(true);
+    let acc = "";
+    const update = content => setChat(c => c.map((m, i) => (i === c.length - 1 ? {...m, content} : m)));
+    try {
+      const full = await askOrg({context: ctx.text, history: history.slice(-7), signal: ctrl.signal,
+        onChunk: d => { acc += d; update(acc); }});
+      update(full || acc);
+    } catch (e) {
+      if (!ctrl.signal.aborted) update(`(The AI could not answer: ${e.message})`);
+    } finally {
+      setBusy(false);
+      ctrlRef.current = null;
+    }
+  };
+  return h("div", {className: "og-ask"},
+    h("section", {className: "sq3-card og-sec"},
+      h("h3", {className: "og-h2"}, "💬 Ask the org"),
+      h("div", {className: "sq3-card-sub"}, canAi
+        ? "Ask anything about how this org works. Answers come only from this handbook (flows, stages, rules and triggers), with links to where they come from. Each question is one AI request; no record data is sent."
+        : "Set up an AI provider in Settings for written answers. Without AI you still get the parts of the handbook that match your question."),
+      !chat.length && h("div", {className: "og-chips og-suggest"}, suggestedQuestions(hb).map((s, i) => h("button", {key: i, className: "og-chip live", onClick: () => send(s)}, s))),
+      chat.length > 0 && h("div", {className: "og-chat"}, chat.map((m, i) => (m.role === "user"
+        ? h("div", {key: i, className: "og-msg me"}, m.content)
+        : h("div", {key: i, className: "og-msg bot"},
+          m.content == null ? h("div", {className: "insp-meta"}, "From the handbook:")
+            : m.content ? h(AnswerText, {text: m.content, hb, go}) : h("div", {className: "insp-meta"}, "Thinking…"),
+          m.found && m.found.length > 0 && h("div", {className: "og-found"},
+            m.content != null && h("span", {className: "og-tag-inline"}, "See also"),
+            m.found.map(ref => refLabel(hb, ref) && h("button", {key: ref, className: "og-chip live", onClick: () => go(refTarget(hb, ref))}, refLabel(hb, ref)))),
+          m.content == null && (!m.found || !m.found.length) && h("div", {className: "insp-meta"}, "Nothing in the handbook matches those words.")))),
+      h("div", {ref: endRef})),
+      h("div", {className: "og-ask-row"},
+        h("input", {className: "soql-save-input og-ask-input", value: q, placeholder: "e.g. What happens when a case is escalated?",
+          "aria-label": "Your question", onChange: e => setQ(e.target.value), onKeyDown: e => { if (e.key === "Enter") send(); }}),
+        busy ? h("button", {className: "btn btn-secondary btn-sm", onClick: () => ctrlRef.current && ctrlRef.current.abort()}, "Stop")
+          : h("button", {className: "btn btn-primary btn-sm", disabled: !q.trim(), onClick: () => send()}, "Ask"),
+        chat.length > 0 && !busy && h("button", {className: "field-action-btn", onClick: () => setChat([])}, "New chat"))));
+}
+
+// ─── What's new: components created or changed lately ─────────────
+const SINCE_KEY = "sfoc_org_joined";
+function WhatsNew({hb, go}) {
+  const [days, setDays] = React.useState(() => (ffLoadJson(SINCE_KEY, null) ? "joined" : "30"));
+  const [joined, setJoined] = React.useState(() => ffLoadJson(SINCE_KEY, "") || "");
+  const since = days === "joined" && joined ? Date.parse(joined) : Date.now() - Number(days === "joined" ? 30 : days) * 86400e3;
+  const list = SHARED ? changesSince(SHARED.items, since) : [];
+  const typeIcon = {flow: "⇢", trigger: "⚡", class: "</>", lwc: "⚛", aura: "✦", rule: "✓"};
+  const open = c => {
+    if (c.type === "flow" && hb.flows.some(f => f.id === c.ref)) return go({tab: "flows", ref: c.ref});
+    const p = c.object && hb.processes.find(x => lcs(x.object) === lcs(c.object));
+    return go({tab: "technical", ref: c.ref, object: p ? p.object : undefined});
+  };
+  const byDay = new Map();
+  for (const c of list) {
+    const d = new Date(c.when).toLocaleDateString(undefined, {weekday: "short", day: "numeric", month: "short", year: "numeric"});
+    (byDay.get(d) || byDay.set(d, []).get(d)).push(c);
+  }
+  return h("div", {className: "og-new"},
+    h("section", {className: "sq3-card og-sec"},
+      h("h3", {className: "og-h2"}, "🆕 What's new"),
+      h("div", {className: "sq3-card-sub"}, "Flows, triggers, Apex, components and validation rules created or changed lately, newest first, so you know what moved before you touch it."),
+      h("div", {className: "acc-kinds og-new-pick"},
+        [["7", "Last 7 days"], ["30", "30 days"], ["90", "90 days"], ["joined", "Since I joined"]].map(([id, label]) => h("button", {key: id, type: "button",
+          "aria-pressed": days === id, className: "insp-chip rel-chip" + (days === id ? " on" : ""), onClick: () => setDays(id)}, label)),
+        days === "joined" && h("input", {type: "date", className: "soql-save-input og-date", value: joined, "aria-label": "The day I joined",
+          onChange: e => { setJoined(e.target.value); ffSaveJson(SINCE_KEY, e.target.value); }}))),
+    !list.length && h("div", {className: "insp-meta og-note"}, days === "joined" && !joined ? "Pick the day you joined." : "Nothing changed in that time."),
+    [...byDay].map(([day, items]) => h("section", {key: day, className: "og-new-day"},
+      h("div", {className: "og-phase"}, day, h("span", {className: "og-chip-n"}, items.length)),
+      h("div", {className: "sq3-card og-new-list"}, items.map((c, i) => h("button", {key: i, className: "og-new-row", onClick: () => open(c)},
+        h("span", {className: "md-kind-ico t-" + TYPE_TONE[c.type], "aria-hidden": "true"}, typeIcon[c.type]),
+        h("span", {className: "og-flow-main"},
+          h("span", {className: "og-flow-name"}, c.label, c.object && h("span", {className: "insp-meta"}, ` on ${c.object}`)),
+          h("span", {className: "og-flow-sum"}, `${GUIDE_TYPES[c.type].label}${c.by ? ` · by ${c.by}` : ""}`,
+            c.type === "flow" && (hb.flows.find(f => f.id === c.ref) || {}).summary ? ` · ${(hb.flows.find(f => f.id === c.ref) || {}).summary}` : "")),
+        h("span", {className: "og-badge " + c.change}, c.change === "new" ? "New" : "Changed")))))));
+}
+
+// ─── Business processes: who works on the record, and its pages ────
+const ACCESS_CACHE = new Map();
+const PAGES_CACHE = new Map();
+function useOrgRead(cache, key, load) {
+  const [state, setState] = React.useState(() => cache.get(key) || null);
+  React.useEffect(() => {
+    if (cache.has(key)) { setState(cache.get(key)); return undefined; }
+    let alive = true;
+    setState({loading: true});
+    load().then(v => { const r = {value: v}; cache.set(key, r); if (alive) setState(r); })
+      .catch(e => { const r = {error: e.message}; if (alive) setState(r); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return state || {loading: true};
+}
+
+function WhoWorks({p}) {
+  const st = useOrgRead(ACCESS_CACHE, hostNow() + "|" + p.object, () => loadRecordAccess(p.object));
+  const rows = st.value ? accessSummary(st.value.rows, st.value.users) : [];
+  return h("section", {className: "sq3-card og-sec"},
+    h("h3", {className: "og-h2"}, `👥 Who works on ${p.label} records`),
+    h("div", {className: "sq3-card-sub"}, "Profiles and permission sets that can see this record, what they can do, and how many active people have each."),
+    st.loading && h("div", {className: "insp-meta"}, "Reading access…"),
+    st.error && h("div", {className: "insp-meta"}, "Access could not be read: " + st.error),
+    st.value && !rows.length && h("div", {className: "insp-meta"}, "Nobody has access through a profile or permission set with active users."),
+    rows.length > 0 && h("div", {className: "insp-table-wrap"}, h("table", {className: "insp-table og-who"},
+      h("thead", null, h("tr", null, h("th", null, "Who"), h("th", null, "Can"), h("th", null, "People"))),
+      h("tbody", null, rows.slice(0, 25).map(r => h("tr", {key: r.id},
+        h("td", null, r.name, " ", h("span", {className: "og-type"}, r.kind)),
+        h("td", null, r.access.join(", ")),
+        h("td", null, r.users || "—")))))),
+    rows.length > 25 && h("div", {className: "insp-meta"}, `${rows.length - 25} more not shown.`));
+}
+
+function RecordPages({p, hb, go}) {
+  const st = useOrgRead(PAGES_CACHE, hostNow() + "|" + p.object, () => loadRecordPages(p.object));
+  const flowIds = new Set(hb.flows.map(f => f.id));
+  const lwcNames = new Set(((SHARED && SHARED.items.lwc) || []).map(l => lcs(l.name)));
+  const pages = st.value ? st.value.map(pg => ({...pg, x: explainFlexiPage(pg.meta, {flowIds, lwcNames})})) : [];
+  const icon = {flow: "⇢", lwc: "⚛", custom: "🧩", std: "▫"};
+  return h("section", {className: "sq3-card og-sec"},
+    h("h3", {className: "og-h2"}, `🧩 What people see on ${an(p.label)} ${p.label} page`),
+    h("div", {className: "sq3-card-sub"}, "The Lightning record pages for this record and what is on each one: standard parts, the org's own components and flows that run right on the page."),
+    st.loading && h("div", {className: "insp-meta"}, "Reading record pages…"),
+    st.error && h("div", {className: "insp-meta"}, "Record pages could not be read: " + st.error),
+    st.value && !pages.length && h("div", {className: "insp-meta"}, "No custom Lightning record page: people see the standard page."),
+    pages.map(pg => h("div", {key: pg.id, className: "og-page"},
+      h("div", {className: "og-card-h"}, pg.label || pg.name),
+      h("div", {className: "og-page-regions"}, pg.x.regions.map(r => h("div", {key: r.name, className: "og-region"},
+        h("div", {className: "og-tag"}, r.name.replace(/_/g, " ")),
+        r.components.map((c, i) => (c.ref
+          ? h("button", {key: i, className: "og-comp-chip link", onClick: () => go(c.ref.startsWith("flow:") ? {tab: "flows", ref: c.ref} : {tab: "technical", ref: c.ref, object: p.object})},
+            icon[c.kind] + " ", c.label)
+          : h("div", {key: i, className: "og-comp-chip " + c.kind}, icon[c.kind] + " ", c.label)))))))));
 }
 
 export {OrgGuideView, Diagram};

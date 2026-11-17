@@ -14,6 +14,8 @@ const COMMON_OBJECTS = ["Account", "Contact", "Opportunity", "Case", "Lead"];
 
 const tooling = soql => queryAll(soql, {tooling: true});
 const idList = ids => ids.map(id => `'${escapeSoqlString(id)}'`).join(",");
+// When a component was created / last changed, and by whom (for "What's new").
+const stamp = r => ({created: r.CreatedDate || null, modified: r.LastModifiedDate || null, by: (r.LastModifiedBy && r.LastModifiedBy.Name) || ""});
 const stop = signal => { if (signal && signal.aborted) throw new Error("Cancelled"); };
 
 // fn over items, `limit` at a time.
@@ -48,16 +50,16 @@ export async function loadGuideData(scope, {onStatus = () => {}, signal} = {}) {
 
   onStatus("Reading Apex classes and triggers…");
   const [classes, triggers] = await Promise.all([
-    tooling("SELECT Id, Name, ApiVersion, Body FROM ApexClass WHERE NamespacePrefix = null ORDER BY Name"),
-    tooling("SELECT Id, Name, TableEnumOrId, Status, Body FROM ApexTrigger WHERE NamespacePrefix = null ORDER BY Name"),
+    tooling("SELECT Id, Name, ApiVersion, Body, CreatedDate, LastModifiedDate, LastModifiedBy.Name FROM ApexClass WHERE NamespacePrefix = null ORDER BY Name"),
+    tooling("SELECT Id, Name, TableEnumOrId, Status, Body, CreatedDate, LastModifiedDate, LastModifiedBy.Name FROM ApexTrigger WHERE NamespacePrefix = null ORDER BY Name"),
   ]);
   stop(signal);
-  items.classes = classes.filter(c => c.Body && c.Body !== "(hidden)").map(c => ({name: c.Name, body: c.Body}));
-  items.triggers = triggers.filter(t => t.Status !== "Inactive" && t.Body).map(t => ({name: t.Name, object: t.TableEnumOrId, body: t.Body}));
+  items.classes = classes.filter(c => c.Body && c.Body !== "(hidden)").map(c => ({name: c.Name, body: c.Body, stamp: stamp(c)}));
+  items.triggers = triggers.filter(t => t.Status !== "Inactive" && t.Body).map(t => ({name: t.Name, object: t.TableEnumOrId, body: t.Body, stamp: stamp(t)}));
   if (classes.truncated) notes.push(`Only the first ${classes.length} Apex classes were read.`);
 
   onStatus("Reading flows…");
-  const defs = (await tooling("SELECT Id, DeveloperName, MasterLabel, ActiveVersionId, NamespacePrefix FROM FlowDefinition ORDER BY DeveloperName"))
+  const defs = (await tooling("SELECT Id, DeveloperName, MasterLabel, ActiveVersionId, NamespacePrefix, CreatedDate, LastModifiedDate, LastModifiedBy.Name FROM FlowDefinition ORDER BY DeveloperName"))
     .filter(d => d.ActiveVersionId && !d.NamespacePrefix);
   stop(signal);
   if (defs.length > MAX_FLOWS) notes.push(`${defs.length} active flows: only the first ${MAX_FLOWS} were read.`);
@@ -69,12 +71,12 @@ export async function loadGuideData(scope, {onStatus = () => {}, signal} = {}) {
     if (done % 5 === 0 || done === flowDefs.length) onStatus(`Reading flows… ${done} of ${flowDefs.length}`);
     return (r[0] || {}).Metadata || null;
   }, signal);
-  items.flows = flowDefs.map((d, i) => ({name: d.DeveloperName, label: d.MasterLabel, versionId: d.ActiveVersionId, meta: metas[i]})).filter(f => f.meta);
+  items.flows = flowDefs.map((d, i) => ({name: d.DeveloperName, label: d.MasterLabel, versionId: d.ActiveVersionId, meta: metas[i], stamp: stamp(d)})).filter(f => f.meta);
 
   onStatus("Reading Lightning components…");
   const [lwcBundles, auraBundles] = await Promise.all([
-    tooling("SELECT Id, DeveloperName, MasterLabel, NamespacePrefix FROM LightningComponentBundle ORDER BY DeveloperName").catch(() => []),
-    tooling("SELECT Id, DeveloperName, MasterLabel, NamespacePrefix FROM AuraDefinitionBundle ORDER BY DeveloperName").catch(() => []),
+    tooling("SELECT Id, DeveloperName, MasterLabel, NamespacePrefix, CreatedDate, LastModifiedDate, LastModifiedBy.Name FROM LightningComponentBundle ORDER BY DeveloperName").catch(() => []),
+    tooling("SELECT Id, DeveloperName, MasterLabel, NamespacePrefix, CreatedDate, LastModifiedDate, LastModifiedBy.Name FROM AuraDefinitionBundle ORDER BY DeveloperName").catch(() => []),
   ]);
   stop(signal);
   const lwcOwn = lwcBundles.filter(b => !b.NamespacePrefix);
@@ -84,18 +86,18 @@ export async function loadGuideData(scope, {onStatus = () => {}, signal} = {}) {
     const files = lwcFiles.filter(f => f.LightningComponentBundleId === b.Id && /\.(js|js-meta\.xml)$/.test(f.FilePath || ""))
       .map(f => ({path: f.FilePath, source: f.Source || ""}));
     const metaXml = (files.find(f => /\.js-meta\.xml$/.test(f.path)) || {}).source || "";
-    return {name: b.DeveloperName, label: b.MasterLabel, files: files.filter(f => !/\.js-meta\.xml$/.test(f.path)),
+    return {name: b.DeveloperName, label: b.MasterLabel, stamp: stamp(b), files: files.filter(f => !/\.js-meta\.xml$/.test(f.path)),
       meta: {masterLabel: b.MasterLabel, targets: {target: targetsFromMeta(metaXml)}}};
   });
   const auraOwn = auraBundles.filter(b => !b.NamespacePrefix);
   const auraDefs = await inChunks(auraOwn.map(b => b.Id), 50, ids =>
     tooling(`SELECT AuraDefinitionBundleId, DefType, Source FROM AuraDefinition WHERE AuraDefinitionBundleId IN (${ids})`).catch(() => []));
-  items.aura = auraOwn.map(b => ({name: b.DeveloperName, label: b.MasterLabel,
+  items.aura = auraOwn.map(b => ({name: b.DeveloperName, label: b.MasterLabel, stamp: stamp(b),
     defs: auraDefs.filter(d => d.AuraDefinitionBundleId === b.Id && /^(COMPONENT|APPLICATION|CONTROLLER)$/.test(d.DefType))
       .map(d => ({defType: d.DefType, source: d.Source || ""}))}));
 
   onStatus("Reading validation rules…");
-  const rules = (await tooling("SELECT Id, ValidationName, Active, EntityDefinition.QualifiedApiName, ErrorMessage, NamespacePrefix FROM ValidationRule").catch(() => []))
+  const rules = (await tooling("SELECT Id, ValidationName, Active, EntityDefinition.QualifiedApiName, ErrorMessage, NamespacePrefix, CreatedDate, LastModifiedDate, LastModifiedBy.Name FROM ValidationRule").catch(() => []))
     .filter(r => !r.NamespacePrefix);
   stop(signal);
   const objOf = r => (r.EntityDefinition && r.EntityDefinition.QualifiedApiName) || "";
@@ -108,7 +110,7 @@ export async function loadGuideData(scope, {onStatus = () => {}, signal} = {}) {
     .then(x => (x[0] || {}).Metadata || {}).catch(() => ({})), signal);
   const formulaOf = new Map(want.map((r, i) => [r.Id, formulas[i]]));
   items.rules = rules.map(r => ({name: r.ValidationName, object: objOf(r), active: r.Active !== false,
-    formula: (formulaOf.get(r.Id) || {}).errorConditionFormula || "", message: r.ErrorMessage || ""}));
+    formula: (formulaOf.get(r.Id) || {}).errorConditionFormula || "", message: r.ErrorMessage || "", stamp: stamp(r)}));
 
   onStatus("Reading objects…");
   const all = await ffGetObjects().catch(() => []);
@@ -185,4 +187,42 @@ export async function loadHandbookExtras(objectNames, {onStatus = () => {}, sign
     };
   });
   return {apps, objectInfo, notes};
+}
+
+// ── Who works on a record: profiles / permission sets with access, and
+// how many active users each one has.
+export async function loadRecordAccess(object, {signal} = {}) {
+  const rows = await queryAll("SELECT ParentId, Parent.Label, Parent.Name, Parent.IsOwnedByProfile, Parent.Profile.Name, " +
+    "PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords " +
+    `FROM ObjectPermissions WHERE SobjectType = '${escapeSoqlString(object)}'`);
+  stop(signal);
+  const ids = [...new Set(rows.filter(r => r.PermissionsRead).map(r => r.ParentId))];
+  const users = {};
+  for (let i = 0; i < ids.length; i += 100) {
+    const counts = await queryAll("SELECT PermissionSetId, COUNT(Id) n FROM PermissionSetAssignment WHERE Assignee.IsActive = true " +
+      `AND PermissionSetId IN (${idList(ids.slice(i, i + 100))}) GROUP BY PermissionSetId`).catch(() => []);
+    for (const c of counts) users[c.PermissionSetId] = c.n || c.expr0 || 0;
+    stop(signal);
+  }
+  return {rows, users};
+}
+
+// ── Record pages: the Lightning record pages of an object and what is on them.
+export async function loadRecordPages(object, {signal, max = 4} = {}) {
+  let pages = await tooling("SELECT Id, DeveloperName, MasterLabel, Type FROM FlexiPage " +
+    `WHERE Type = 'RecordPage' AND EntityDefinition.QualifiedApiName = '${escapeSoqlString(object)}'`).catch(() => null);
+  let metas;
+  if (pages) {
+    metas = await pool(pages.slice(0, max), 2, p => tooling(`SELECT Id, Metadata FROM FlexiPage WHERE Id = '${escapeSoqlString(p.Id)}'`)
+      .then(x => (x[0] || {}).Metadata || null).catch(() => null), signal);
+  } else {
+    // No relationship filter in this org: look at record pages one by one.
+    pages = (await tooling("SELECT Id, DeveloperName, MasterLabel, Type FROM FlexiPage WHERE Type = 'RecordPage'").catch(() => [])).slice(0, 25);
+    const all = await pool(pages, 3, p => tooling(`SELECT Id, Metadata FROM FlexiPage WHERE Id = '${escapeSoqlString(p.Id)}'`)
+      .then(x => (x[0] || {}).Metadata || null).catch(() => null), signal);
+    const keep = pages.map((p, i) => [p, all[i]]).filter(([, m]) => m && String(m.sobjectType || "").toLowerCase() === object.toLowerCase()).slice(0, max);
+    pages = keep.map(x => x[0]);
+    metas = keep.map(x => x[1]);
+  }
+  return pages.slice(0, max).map((p, i) => ({id: p.Id, name: p.DeveloperName, label: p.MasterLabel, meta: metas[i]})).filter(p => p.meta);
 }

@@ -13,7 +13,7 @@ import {fileURLToPath} from "node:url";
 import {accessTables, metadataTables, permissionSetDescribe, applyWhere} from "./mock-access-metadata.js";
 import {Readable} from "node:stream";
 import {releaseSoap, releaseRest, resetRelease} from "./mock-release.js";
-import {addOrgGuideMock, orgGuideLlm, addOrgGuideDescribes, addOrgGuideApps} from "./mock-org-guide.js";
+import {addOrgGuideMock, orgGuideLlm, addOrgGuideDescribes, addOrgGuideApps, addOrgGuidePeople, askOrgLlm} from "./mock-org-guide.js";
 import {mockGithub, githubState, resetGithub} from "./mock-github.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -171,6 +171,7 @@ const tables = {
 
 addOrgGuideMock(tables);
 addOrgGuideApps(tables);
+addOrgGuidePeople(tables);
 addOrgGuideDescribes(describes, field);
 
 // Bundle files need ids so edits PATCH them in place.
@@ -194,6 +195,12 @@ function dynamicTable(obj, q, tooling) {
       .concat(/DurableId/.test(q) ? (tables.tabdefinition || []).filter(t => !mockCustomTabs.some(c => c.fullName === t.Name)) : []);
   }
   if (obj === "permissionsettabsetting") return mockTabSettings;
+  // Org Handbook: active users per permission set (an aggregate query).
+  if (obj === "permissionsetassignment" && /GROUP BY PermissionSetId/i.test(q)) {
+    const counts = {};
+    for (const a of tables.permissionsetassignment || []) if (a.Assignee && a.Assignee.IsActive) counts[a.PermissionSetId] = (counts[a.PermissionSetId] || 0) + 1;
+    return Object.entries(counts).map(([PermissionSetId, n]) => ({PermissionSetId, n}));
+  }
   if (obj === "layout") {
     // Two layouts per object, like an org with a profile-specific layout.
     const base = (/DeveloperName\s*=\s*'([^']+)'/i.exec(q) || [])[1];
@@ -641,7 +648,7 @@ function mockLlm(req, res) {
     const system = String(((body.messages || [])[0] || {}).content || "");
     const msgs = body.messages || [];
     const user = String((msgs[msgs.length - 1] || {}).content || "");
-    const guideReply = orgGuideLlm(system, user);
+    const guideReply = askOrgLlm(system, user) != null ? askOrgLlm(system, user) : orgGuideLlm(system, user);
     const content = guideReply != null ? guideReply : /anonymous Apex; fix THAT error/.test(system)
       ? (() => {
         // Run Apex fix: drop the "oops" line Salesforce rejected; data errors get no code change.

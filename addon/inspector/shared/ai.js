@@ -588,4 +588,21 @@ async function orgGuideEli5(text, ids, {signal} = {}) {
   return out;
 }
 
-export {orgGuideBusiness, orgGuideEli5, suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, chatDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};
+// Ask the org: a new team member's question, answered only from the
+// handbook context (core/handbook-plus.js askContext) for that question.
+const ASK_ORG_SYSTEM = [
+  "You answer questions from a new team member about their company's Salesforce org (Ask the org, in an Org Handbook).",
+  "Use ONLY the CONTEXT given with each question: flows, record stages, validation rules and triggers of this org. Do not invent components.",
+  "Cite every flow, rule, trigger or process you rely on with its reference exactly as written in the context, in square brackets, e.g. [flow:case_route_vip].",
+  "If the context doesn't answer the question, say so plainly and suggest where in the handbook to look. Plain words, short; bullets are fine; no code."
+].join(" ");
+
+// history: [{role: "user"|"assistant", content}]; the latest user turn gets its own context.
+function askOrg({context, history, onChunk, signal}) {
+  const messages = [{role: "system", content: ASK_ORG_SYSTEM}];
+  history.forEach((m, i) => messages.push(i === history.length - 1 && m.role === "user"
+    ? {role: "user", content: `CONTEXT\n${context}\n\nQUESTION: ${m.content}`} : {role: m.role, content: String(m.content).slice(0, 3000)}));
+  return askAi({feature: "Org Handbook · Ask the org", messages, onChunk, signal});
+}
+
+export {askOrg, orgGuideBusiness, orgGuideEli5, suggestSoqlFix, soqlFromText, explainSoql, explainMetadata, explainDataQuality, validationRuleFromText, lwcFromText, codeFromText, reviseDraftFromText, explainTestFailure, apexAiCheck, logsAskLlm, releaseNotesFromChanges, explainDeployFailures, chatDeployFailures, runbookFromSteps, explainLogProfile, explainImpact};

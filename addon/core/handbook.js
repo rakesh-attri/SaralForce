@@ -7,6 +7,10 @@ import {buildGuideGraph, areaRanking, GUIDE_TYPES} from "./org-guide.js";
 import {flowKind, flowSummary, flowStory} from "./flow-story.js";
 import {triggerOutline} from "./code-outline.js";
 
+// "a Case" / "an Account".
+export const an = w => (/^[aeiou]/i.test(String(w || "")) ? "an" : "a");
+export const An = w => (an(w) === "an" ? "An" : "A");
+
 const asList = v => (v == null ? [] : Array.isArray(v) ? v : [v]);
 const lc = s => String(s || "").toLowerCase();
 
@@ -165,7 +169,7 @@ export function buildHandbook(items, extras = {}, {orgName = "", maxProcesses = 
 
   // A reading order for day one.
   const startHere = [];
-  if (processes[0]) startHere.push({text: `Read how a ${processes[0].label} moves through its life`, go: {tab: "processes", ref: processes[0].object}});
+  if (processes[0]) startHere.push({text: `Read how ${an(processes[0].label)} ${processes[0].label} moves through its life`, go: {tab: "processes", ref: processes[0].object}});
   const keyFlows = flows.filter(f => f.kind === "record" && processes.slice(0, 3).some(p => lc(p.object) === lc(f.object)))
     .sort((a, b) => b.steps - a.steps).slice(0, 3);
   for (const f of keyFlows) startHere.push({text: `Open the flow "${f.label}": ${f.summary}`, go: {tab: "flows", ref: f.id}});

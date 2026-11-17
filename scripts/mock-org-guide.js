@@ -175,3 +175,45 @@ export function addOrgGuideApps(tables) {
     {AppDefinitionId: "06m000000000002AAA", TabDefinitionId: "Invoice__c", SortOrder: 3},
   ];
 }
+
+// Phase 2: who works on Cases, the Case record page, and created dates.
+export function addOrgGuidePeople(tables) {
+  const ps = id => (tables.permissionset || []).find(p => p.Id === id) || {};
+  const row = (i, parent, flags) => ({Id: `110000000000C${String(i).padStart(2, "0")}AAA`, ParentId: parent, Parent: ps(parent), SobjectType: "Case",
+    PermissionsRead: flags.includes("R"), PermissionsCreate: flags.includes("C"), PermissionsEdit: flags.includes("E"),
+    PermissionsDelete: flags.includes("D"), PermissionsViewAllRecords: flags.includes("V"), PermissionsModifyAllRecords: flags.includes("M")});
+  tables.objectpermissions = [...(tables.objectpermissions || []),
+    row(1, "0PS000000000003AAA", "RCEDVM"), row(2, "0PS000000000004AAA", "RCE"), row(3, "0PS000000000001AAA", "R")];
+  tables.flexipage = [{Id: "0M0dN0000000CG1AAA", DeveloperName: "Case_Record_Page", MasterLabel: "Case Record Page", Type: "RecordPage",
+    EntityDefinition: {QualifiedApiName: "Case"},
+    Metadata: {masterLabel: "Case Record Page", type: "RecordPage", sobjectType: "Case", flexiPageRegions: [
+      {name: "header", type: "Region", itemInstances: [{componentInstance: {componentName: "force:highlightsPanel"}},
+        {componentInstance: {componentName: "runtime_sales_pathassistant:pathAssistant"}}]},
+      {name: "main", type: "Region", itemInstances: [{componentInstance: {componentName: "force:detailPanel"}},
+        {componentInstance: {componentName: "force:relatedListContainer"}}]},
+      {name: "sidebar", type: "Region", itemInstances: [{componentInstance: {componentName: "c:caseSummary"}},
+        {componentInstance: {componentName: "flowruntime:interview", componentInstanceProperties: [{name: "flowName", value: "Notify_Support_Team"}]}},
+        {componentInstance: {componentName: "runtime_sales_activities:activityPanel"}}]},
+    ]}}];
+  const ago = d => new Date(Date.now() - d * 86400e3).toISOString().replace("Z", "+0000");
+  const stampIt = (t, name, key, created, by) => {
+    const r = (tables[t] || []).find(x => x[key] === name);
+    if (r) Object.assign(r, {CreatedDate: ago(created), LastModifiedDate: r.LastModifiedDate || ago(created), LastModifiedBy: r.LastModifiedBy || {Name: by}});
+  };
+  stampIt("flowdefinition", "Case_Route_VIP", "DeveloperName", 3, "Priya Nair");
+  stampIt("flowdefinition", "Notify_Support_Team", "DeveloperName", 40, "Priya Nair");
+  stampIt("flowdefinition", "Case_Defaults", "DeveloperName", 60, "Rakesh Sharma");
+  stampIt("apexclass", "CaseService", "Name", 2, "Priya Nair");
+  stampIt("apextrigger", "CaseTrigger", "Name", 45, "Priya Nair");
+  stampIt("validationrule", "Closed_Needs_Resolution", "ValidationName", 50, "Rakesh Sharma");
+}
+
+// Mock "Ask the org" answer: cites what the context gave it.
+export function askOrgLlm(system, user) {
+  if (!/Ask the org, in an Org Handbook/.test(system)) return null;
+  const refs = [...new Set([...String(user).matchAll(/\[((?:flow|rule|process|trigger):[^\]]+)\]/g)].map(m => m[1]))].slice(0, 3);
+  const q = (String(user).match(/QUESTION: (.*)$/m) || [])[1] || "";
+  return `Here's what happens, from this org's handbook (you asked: "${q}"):\n\n` +
+    refs.map(r => `- **${r.split(":")[0]}** [${r}] is involved.`).join("\n") +
+    "\n\nAsk me about any of those for the details.";
+}
