@@ -10,6 +10,8 @@ import {flowStory, simpleFlowDiagram, storyText} from "../../core/flow-story.js"
 import {layoutGraph} from "../../core/diagram-layout.js";
 import {diagramSvg, legendKinds} from "../../core/diagram-svg.js";
 import {loadGuideData, loadHandbookExtras, loadRecordAccess, loadRecordPages} from "../shared/org-guide-data.js";
+import {loadBook, saveBook} from "../shared/org-guide-store.js";
+import {handbookToHtml, handbookToMarkdown} from "../../core/handbook-export.js";
 import {orgGuideBusiness, orgGuideEli5, askOrg} from "../shared/ai.js";
 import {askContext, parseCitations, suggestedQuestions, buildChecklist, checklistProgress, accessSummary, explainFlexiPage, changesSince} from "../../core/handbook-plus.js";
 import {ffGetObjects} from "../shared/describe.js";
@@ -386,8 +388,81 @@ function OrgGuideView() {
   const [chat, setChat] = React.useState([]); // Ask the org, kept while the panel is open
   const abortRef = React.useRef(null);
   React.useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
-  const setHb = v => { setHbState(v); HB_CACHE = v ? {host: hostNow(), hb: v} : null; };
+  // ELI5 notes per flow id, saved with the handbook.
+  const [eli5, setEli5State] = React.useState(() => Object.fromEntries(ELI5_CACHE));
+  const [savedAt, setSavedAt] = React.useState(null);
+  const persist = (book, notes) => {
+    if (!book || !SHARED) return;
+    saveBook(hostNow(), {hb: book, items: SHARED.items, notes: SHARED.notes || [], eli5: notes || Object.fromEntries(ELI5_CACHE)})
+      .then(() => setSavedAt(Date.now()));
+  };
+  const setHb = (v, {save = true} = {}) => {
+    setHbState(v);
+    HB_CACHE = v ? {host: hostNow(), hb: v} : null;
+    if (v && save) persist(v);
+  };
+  const setEli5 = add => {
+    for (const [k, v] of Object.entries(add)) ELI5_CACHE.set(k, v);
+    const all = Object.fromEntries(ELI5_CACHE);
+    setEli5State(all);
+    persist(HB_CACHE && HB_CACHE.hb, all);
+  };
+  // Opened again (even after a reload): the handbook saved in this browser.
+  React.useEffect(() => {
+    if (hb) return;
+    loadBook(hostNow()).then(v => {
+      if (!v || !v.hb || !v.items || (HB_CACHE && HB_CACHE.host === hostNow())) return;
+      SHARED = {host: hostNow(), items: v.items, notes: v.notes || []};
+      for (const [k, x] of Object.entries(v.eli5 || {})) ELI5_CACHE.set(k, x);
+      setEli5State(Object.fromEntries(ELI5_CACHE));
+      setSavedAt(v.savedAt || null);
+      setHb(v.hb, {save: false});
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const busy = !!status;
+
+  // ELI5 for every flow: a few batched AI requests (confirmed first).
+  const explainAll = async () => {
+    const todo = hb.flows.filter(f => !ELI5_CACHE.has(f.id));
+    const byId = new Map(((SHARED && SHARED.items.flows) || []).map(x => [`flow:${x.name.toLowerCase()}`, x]));
+    const sections = todo.map(f => {
+      const meta = (byId.get(f.id) || {}).meta;
+      return {id: f.id, aiInput: [`ID: ${f.id}`, "Type: Flow", `Name: ${f.label}`, meta ? storyText(flowStory(meta)) : f.summary].join("\n").slice(0, 1800)};
+    });
+    const batches = eli5Batches(sections, {size: 8, maxChars: 12000});
+    if (!batches.length) return;
+    const cfg = getSavedConfig() || {};
+    const ok = await confirmDialog({
+      title: "Explain every flow simply?",
+      message: `${batches.length} request${batches.length === 1 ? "" : "s"} to ${(LLM_PROVIDERS[cfg.provider] || {}).name || "your AI provider"} for ${todo.length} flow${todo.length === 1 ? "" : "s"}. ` +
+        "Only each flow's step-by-step story is sent: no record data, no code.",
+      confirmLabel: "Explain them", cancelLabel: "Cancel"
+    });
+    if (!ok) return;
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setError(null);
+    try {
+      for (let i = 0; i < batches.length && !ctrl.signal.aborted; i++) {
+        setStatus(`Explaining the flows… ${i + 1} of ${batches.length}`);
+        const got = await orgGuideEli5(batches[i].text, batches[i].ids, {signal: ctrl.signal}).catch(e => {
+          if (!ctrl.signal.aborted) setError(`Some flows have no ELI5 note: ${e.message}`);
+          return {};
+        });
+        if (Object.keys(got).length) setEli5(got);
+      }
+    } finally {
+      if (abortRef.current === ctrl) abortRef.current = null;
+      setStatus("");
+    }
+  };
+  const fileBase = "org-handbook-" + String(hostNow() || "org").split(".")[0].replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const exportAs = kind => {
+    const items = SHARED ? SHARED.items : {flows: []};
+    if (kind === "html") downloadText(fileBase + ".html", handbookToHtml(hb, items, {eli5}), "text/html");
+    else downloadText(fileBase + ".md", handbookToMarkdown(hb, items, {eli5}), "text/markdown");
+  };
   const copyMd = (key, text) => { try { safeCopyText(text); } catch (e) { /* ignore */ } setCopied(key); setTimeout(() => setCopied(null), 1200); };
 
   const writeSummary = async (base, ctrl) => {
@@ -454,7 +529,11 @@ function OrgGuideView() {
         busy
           ? h("button", {className: "btn btn-secondary btn-sm", onClick: cancel}, "Cancel")
           : h("button", {className: "btn btn-primary btn-sm", onClick: () => build(!!hb)}, hb ? "↻ Refresh from the org" : "Build the handbook"),
-        hb && h("span", {className: "insp-meta"}, `Built ${new Date(hb.builtAt).toLocaleString()}`)),
+        hb && h("span", {className: "insp-meta", title: savedAt ? "Kept in this browser: it opens straight away next time" : ""},
+          `Built ${new Date(hb.builtAt).toLocaleString()}${savedAt ? " · saved in this browser" : ""}`),
+        hb && !busy && h("span", {className: "og-exports og-hb-exports"},
+          h("button", {className: "btn btn-secondary btn-sm", title: "One page with every process and flow diagram: share it or print it to PDF", onClick: () => exportAs("html")}, "⬇ HTML"),
+          h("button", {className: "btn btn-secondary btn-sm", title: "Markdown with Mermaid diagrams, for a wiki or Git", onClick: () => exportAs("md")}, "⬇ Markdown"))),
       busy && h("div", {className: "tr-progress"}, h("div", {className: "cov-progress"}, h("div", {className: "cov-progress-fill"})),
         h("span", {className: "insp-meta"}, status)),
       error && h("div", {className: "insp-error"}, error),
@@ -477,7 +556,8 @@ function OrgGuideView() {
         : tab === "changes"
           ? h(WhatsNew, {hb, go})
         : tab === "flows"
-          ? h(FlowLibrary, {hb, sel: flowSel, setSel: setFlowSel, go, copied, copyMd, onOpen: id => setDone(id)})
+          ? h(FlowLibrary, {hb, sel: flowSel, setSel: setFlowSel, go, copied, copyMd, onOpen: id => setDone(id), eli5, setEli5, busy,
+            onExplainAll: hasValidConfig() ? explainAll : null})
           : tab === "processes"
             ? h(Processes, {hb, sel: procSel || (hb.processes[0] && hb.processes[0].object), setSel: setProcSel, go})
             : h(HandbookHome, {hb, go, copied, copyMd, canAi: hasValidConfig(), busy, done, setDone,
@@ -551,7 +631,7 @@ function HandbookHome({hb, go, copied, copyMd, canAi, busy, onSummary, done, set
 }
 
 // ─── Flow library ────────────────────────────────────────────────────
-function FlowLibrary({hb, sel, setSel, go, copied, copyMd, onOpen}) {
+function FlowLibrary({hb, sel, setSel, go, copied, copyMd, onOpen, eli5 = {}, setEli5, busy, onExplainAll}) {
   const [term, setTerm] = React.useState("");
   const [kind, setKind] = React.useState("all");
   const t = term.trim().toLowerCase();
@@ -573,7 +653,10 @@ function FlowLibrary({hb, sel, setSel, go, copied, copyMd, onOpen}) {
         [["all", "All"], ...kinds.map(k => [k, FLOW_KIND_LABEL[k]])].map(([id, label]) => h("button", {
           key: id, type: "button", "aria-pressed": kind === id, className: "insp-chip rel-chip" + (kind === id ? " on" : ""), onClick: () => setKind(id)},
         id !== "all" ? KIND_ICON[id] + " " : "", label,
-        h("span", {className: "og-chip-n"}, id === "all" ? hb.flows.length : hb.flows.filter(f => f.kind === id).length))))),
+        h("span", {className: "og-chip-n"}, id === "all" ? hb.flows.length : hb.flows.filter(f => f.kind === id).length)))),
+      onExplainAll && h("div", {className: "og-lib-ai"},
+        h("span", {className: "insp-meta"}, `🧸 ${hb.flows.filter(f => eli5[f.id]).length} of ${hb.flows.length} flows have a simple explanation.`),
+        hb.flows.some(f => !eli5[f.id]) && h("button", {className: "btn btn-secondary btn-sm", disabled: busy, onClick: onExplainAll}, "✨ Explain all flows simply"))),
     !shown.length && h("div", {className: "insp-meta"}, "No flow matches."),
     ordered.map(([group, list]) => h("section", {key: group, className: "og-lib-group"},
       h("div", {className: "og-phase"}, group, h("span", {className: "og-chip-n"}, list.length)),
@@ -582,18 +665,18 @@ function FlowLibrary({hb, sel, setSel, go, copied, copyMd, onOpen}) {
           h("span", {className: "og-flow-ico", "aria-hidden": "true"}, KIND_ICON[f.kind]),
           h("span", {className: "og-flow-main"},
             h("span", {className: "og-flow-name"}, f.label),
-            h("span", {className: "og-flow-sum"}, f.summary)),
+            h("span", {className: "og-flow-sum"}, f.summary),
+            eli5[f.id] && h("span", {className: "og-flow-eli5"}, "🧸 ", eli5[f.id].eli5)),
           h("span", {className: "og-flow-meta"},
             f.timing && h("span", {className: "og-type"}, f.timing),
             h("span", {className: "og-type"}, `${f.steps} step${f.steps === 1 ? "" : "s"}`),
             f.calledBy.length > 0 && h("span", {className: "og-type"}, `used by ${f.calledBy.length}`)),
           h("span", {className: "og-caret", "aria-hidden": "true"}, sel === f.id ? "▾" : "▸")),
-        sel === f.id && h(FlowDetail, {f, hb, go, copied, copyMd}))))));
+        sel === f.id && h(FlowDetail, {f, hb, go, copied, copyMd, eli5: eli5[f.id] || null, setEli5}))))));
 }
 
-function FlowDetail({f, hb, go, copied, copyMd}) {
+function FlowDetail({f, hb, go, copied, copyMd, eli5, setEli5}) {
   const [view, setView] = React.useState("simple");
-  const [eli5, setEli5] = React.useState(() => ELI5_CACHE.get(f.id) || null);
   const [aiBusy, setAiBusy] = React.useState(false);
   const [aiErr, setAiErr] = React.useState(null);
   const item = SHARED && SHARED.items.flows.find(x => `flow:${x.name.toLowerCase()}` === f.id);
@@ -616,7 +699,7 @@ function FlowDetail({f, hb, go, copied, copyMd}) {
     try {
       const text = [`ID: ${f.id}`, "Type: Flow", `Name: ${f.label}`, storyText(story)].join("\n").slice(0, 6000);
       const got = await orgGuideEli5(text, [f.id]);
-      if (got[f.id]) { ELI5_CACHE.set(f.id, got[f.id]); setEli5(got[f.id]); }
+      if (got[f.id]) setEli5({[f.id]: got[f.id]});
       else setAiErr("The AI gave no answer for this flow.");
     } catch (e) {
       setAiErr(e.message === "NO_LLM_CONFIG" ? "Set up an AI provider in Settings first." : e.message);

@@ -102,3 +102,23 @@ test("what changed: new vs changed, newest first, older ones left out", () => {
   assert.equal(c[0].by, "Priya");
   assert.ok(!c.some(x => x.label === "Route VIP Cases"));
 });
+
+test("the whole handbook exports as Markdown (Mermaid) and one HTML page (SVG), escaped", async () => {
+  const {handbookToMarkdown, handbookToHtml} = await import("../../addon/core/handbook-export.js");
+  const book = {...hb(), business: "WHAT THIS BUSINESS DOES\n- Support <cases>", orgName: "Demo"};
+  const eli5 = {"flow:route_vip": {eli5: "Like a mail sorter."}};
+  const md = handbookToMarkdown(book, items(), {eli5});
+  assert.match(md, /^# Org Handbook: Demo/);
+  assert.match(md, /### The life of a Case/);
+  assert.match(md, /\| When \| Any change \| New \| Escalated \| Closed \|/);
+  assert.match(md, /### Route VIP Cases/);
+  assert.match(md, /```mermaid\nflowchart TD/);
+  assert.match(md, /1\. ✎ Update this Case/);
+  assert.match(md, /> 🧸 Like a mail sorter\./);
+  const html = handbookToHtml(book, items(), {eli5});
+  assert.ok(html.startsWith("<!doctype html>"));
+  assert.ok((html.match(/<svg/g) || []).length >= 2, "a diagram per flow");
+  assert.ok(html.includes("Support &lt;cases&gt;"));
+  assert.ok(!html.includes("<cases>"));
+  assert.match(html, /set by Route VIP Cases/);
+});
