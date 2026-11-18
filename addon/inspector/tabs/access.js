@@ -2,20 +2,29 @@ import {hasValidConfig} from "../../llm/llm-service.js";
 import {safeCopyText} from "../../utils.js";
 import {
   buildCompareMatrix, filterMatrix, effectiveAccess, summarizeRiskyAccess,
-  humanizePermission, OBJECT_PERM_FLAGS
+  humanizePermission, OBJECT_PERM_FLAGS, pickKey, splitPick, mergeCompareData,
+  columnLabels, describeRowDiff, diffSummary, COMPARE_PARTS, matchUser, matchPermSet, buildRoleGroupMatrix, sharingRulesSection,
+  markUnreadSections
 } from "../../core/access.js";
+import {baseUsername} from "../../core/manual-steps.js";
+import {toCsv as toCsvCore} from "../../core/csv.js";
+import {confirmDialog} from "../../ui/confirm.js";
 import {
-  loadPermSetList, loadPermFieldNames, loadCompareData, userPermSources,
+  ROW_CAP, loadPermSetList, loadPermFieldNames, loadCompareData, userPermSources,
+  loadUserList, loadUserAccess, loadRoleGroupList, loadRoleGroupData, loadSharingRules,
   objectPermRows, fieldPermRows, systemPermRows, riskyAssignments
 } from "../shared/access-data.js";
 import {ffGetObjects} from "../shared/describe.js";
-import {toCsv, downloadText} from "../shared/csv.js";
+import {downloadText} from "../shared/csv.js";
 import {logsAskLlm} from "../shared/ai.js";
 import {AnalysisReport} from "../shared/analysis-report.js";
 import {FFBadge, EmptyState} from "../shared/ui.js";
 import {useFfSession} from "../shared/session-state.js";
 import {ApprovalsView} from "./approvals.js";
+import {SharingCompareCard} from "./sharing-compare.js";
 import {SearchSelect} from "../shared/combo.js";
+import {useRelease, loadOrgs, orgByHost} from "./release-state.js";
+import {orgOptions, OrgTag} from "./release-ui.js";
 
 const h = React.createElement;
 const MAX_COMPARE = 5;
@@ -33,112 +42,330 @@ function CardHead({icon, title, children}) {
 }
 
 // ─── Compare 2-5 permission sets / profiles side by side ─────────────
+// One cell of the compare matrix in words: object access as Read / Create /
+// … labels (the ones that differ along the row highlighted), Yes / No for
+// system permissions and apps, "Not set" for tabs.
+function AccessCell({section, value, row}) {
+  if (section === "objects") {
+    if (!value || value === "—") return h("span", {className: "acc-none"}, "No access");
+    const varies = l => row.values.some(v => String(v).includes(l)) && !row.values.every(v => String(v).includes(l));
+    return h("span", {className: "acc-flags"}, OBJECT_PERM_FLAGS.filter(([, , l]) => String(value).includes(l)).map(([, label, l]) =>
+      h("span", {key: l, className: "acc-flag" + (varies(l) ? " diff" : ""), title: varies(l) ? "Not the same in every column" : ""}, label)));
+  }
+  if (ACCESS_EMPTY[section]) return value ? h("span", {className: "acc-tab"}, value) : h("span", {className: "acc-none"}, ACCESS_EMPTY[section]);
+  return value ? h("span", {className: "acc-yes" + (row.differs ? " diff" : "")}, "✓ Yes") : h("span", {className: "acc-no"}, "No");
+}
+
+// Two sides, Compare (left) and With (right), each from its own org (this org
+// or another you're logged into); host "" = this org. Three kinds of thing:
+// profiles & permission sets, users (their combined access), roles & groups.
+const KIND_TAG = {profile: ["Profile", "info"], set: ["Permission set", "ok"], group: ["Group", "violet"], queue: ["Queue", "warn"],
+  role: ["Role", "info"], user: ["User", "ok"]};
+const ACCESS_EMPTY = {tabs: "Not set", fields: "No access", owd: "—", general: "—", rgSettings: "—", sharingRules: "Not in this org"};
+const SECTION_HEAD = {objects: "Object", fields: "Field", tabs: "Tab", apps: "App", apex: "Apex class", pages: "Visualforce page",
+  customPerms: "Custom permission", connectedApps: "Connected app", flows: "Flow", owd: "Object", general: "Setting",
+  rgSettings: "Setting", members: "Member", queueObjects: "Object", sharingRules: "Rule"};
+const COMPARE_KINDS = [
+  ["perm", "Profiles & permission sets", "profiles, permission sets or groups"],
+  ["users", "Users", "users"],
+  ["roles", "Roles & groups", "roles, public groups or queues"]
+];
+const SHARING_PART = ["sharingRules", "Sharing rules"];
+const KIND_PARTS = {
+  perm: [...COMPARE_PARTS, SHARING_PART],
+  users: [...COMPARE_PARTS, SHARING_PART],
+  roles: [["rgSettings", "Settings"], ["members", "Members"], ["queueObjects", "Queue objects"], SHARING_PART]
+};
+const ORG_PARTS = new Set(["owd", "sharingRules"]); // need the two sides in different orgs
+
+function CompareSide({title, kind, host, onHost, keys, onKeys, total, orgs, current, lists, orgName, children}) {
+  const list = Array.isArray(lists[kind + "|" + host]) ? lists[kind + "|" + host] : null;
+  const itemOf = k => { const {id} = splitPick(k); return ((list || []).find(p => p.id === id) || {}).name || id; };
+  const what = (COMPARE_KINDS.find(x => x[0] === kind) || COMPARE_KINDS[0])[2];
+  return h("div", {className: "acc-side"},
+    h("div", {className: "acc-side-h"}, title),
+    orgs.length > 1
+      ? h("div", {className: "acc-side-org"},
+        h(SearchSelect, {value: host || (current ? current.host : ""), options: orgOptions(orgs),
+          onChange: v => onHost(current && v === current.host ? "" : v), ariaLabel: title + " org", className: "acc-org"}),
+        h(OrgTag, {org: host ? orgByHost(host) : current}))
+      : h("div", {className: "insp-meta"}, orgName(host)),
+    h(SearchSelect, {
+      value: "",
+      options: (list || []).filter(p => !keys.includes(pickKey(host, p.id))).map(p => ({
+        value: pickKey(host, p.id), label: p.name,
+        sub: kind === "users" ? p.username : kind === "roles" ? p.dev : undefined,
+        tag: kind === "users" ? (p.active ? "" : "Inactive") : (KIND_TAG[p.kind] || [""])[0],
+        tagTone: kind === "users" ? "muted" : (KIND_TAG[p.kind] || ["", "info"])[1]
+      })),
+      onChange: k => { if (k && !keys.includes(k) && total < MAX_COMPARE) onKeys([...keys, k]); },
+      placeholder: !list ? "Loading…" : total >= MAX_COMPARE ? `Up to ${MAX_COMPARE} in all` : `Search ${what}…`,
+      emptyText: "No match", disabled: !list || total >= MAX_COMPARE,
+      ariaLabel: `${title}: ${what}`, className: "acc-pick"
+    }),
+    list && list.capped && h("div", {className: "insp-meta"},
+      `Only the first ${list.length.toLocaleString()} ${what} are listed: this org has more.`),
+    h("div", {className: "insp-chips acc-side-chips"},
+      keys.length ? keys.map(k => h("button", {key: k, className: "insp-chip", title: "Remove", onClick: () => onKeys(keys.filter(x => x !== k))}, itemOf(k), " ×"))
+        : h("span", {className: "insp-meta"}, "Nothing picked yet")),
+    children);
+}
+
 function CompareCard() {
-  const [list, setList] = React.useState(null);
+  const rel = useRelease();
+  React.useEffect(() => { if (!rel.orgs && !rel.orgsBusy) loadOrgs(); }, []);
+  const orgs = (rel.orgs || []).filter(o => !o.isGit);
+  const current = orgs.find(o => o.isCurrent);
+  const orgOf = host => host ? orgByHost(host) : current || null;
+  const orgName = host => { const o = orgOf(host); return o ? o.name : host || "This org"; };
+  const [kind, setKind] = useFfSession("access", "compareKind", "perm");
+  const [hostA, setHostA] = useFfSession("access", "orgA", "");
+  const [hostB, setHostB] = useFfSession("access", "orgB", "");
+  const [pickedA, setPickedA] = useFfSession("access", "pickedA", []);
+  const [pickedB, setPickedB] = useFfSession("access", "pickedB", []);
+  const [oldPicked, setOldPicked] = useFfSession("access", "picked", []);
+  const [partsByKind, setPartsByKind] = useFfSession("access", "partsByKind", {});
+  const kindParts = KIND_PARTS[kind] || KIND_PARTS.perm;
+  const parts = partsByKind[kind] || kindParts.map(p => p[0]);
+  const setParts = p => setPartsByKind({...partsByKind, [kind]: p});
+  const [lists, setLists] = React.useState({}); // "kind|host" → items
   const [listErr, setListErr] = React.useState(null);
-  const [picked, setPicked] = useFfSession("access", "picked", []);
   const [matrix, setMatrix] = useFfSession("access", "matrix", null);
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState("");
   const [error, setError] = React.useState(null);
   const [onlyDiff, setOnlyDiff] = React.useState(true);
   const [term, setTerm] = React.useState("");
 
+  // A selection saved by the one-list version goes on the left.
   React.useEffect(() => {
-    loadPermSetList().then(setList).catch(e => setListErr(e.message));
+    if (oldPicked.length && !pickedA.length && !pickedB.length) setPickedA(oldPicked.map(k => k.includes("|") ? k : pickKey("", k)));
+    if (oldPicked.length) setOldPicked([]);
   }, []);
+  const ensureList = host => {
+    const lk = kind + "|" + host;
+    if (lists[lk]) return;
+    const o = host ? orgByHost(host) : null;
+    if (host && !o) return;
+    setLists(l => ({...l, [lk]: l[lk] || "loading"}));
+    const load = kind === "users" ? loadUserList : kind === "roles" ? loadRoleGroupList : loadPermSetList;
+    load(o ? o.conn : undefined)
+      .then(list => setLists(l => ({...l, [lk]: list})))
+      .catch(e => { setLists(l => ({...l, [lk]: []})); setListErr(`${orgName(host)}: ${e.message}`); });
+  };
+  React.useEffect(() => { ensureList(hostA); ensureList(hostB); }, [kind, hostA, hostB, rel.orgs]);
+  const listOf = host => Array.isArray(lists[kind + "|" + host]) ? lists[kind + "|" + host] : null;
+  const keysA = pickedA.filter(k => splitPick(k).host === hostA);
+  const keysB = pickedB.filter(k => splitPick(k).host === hostB);
+  const keys = [...keysA, ...keysB];
+  const total = keys.length;
+  const itemFor = key => { const {host, id} = splitPick(key); return (listOf(host) || []).find(p => p.id === id) || null; };
+  const itemOf = key => (itemFor(key) || {}).name || splitPick(key).id;
+  const colOf = key => {
+    const {host} = splitPick(key);
+    const o = orgOf(host);
+    return {item: itemOf(key), org: orgName(host), kind: o ? (o.isSandbox ? "Sandbox" : "Production") : "", host: host || (o ? o.host : "")};
+  };
+  // "Same as left": the left side's items in the right side's org.
+  const listB = listOf(hostB);
+  const sameAsLeft = listB ? keysA.map(k => {
+    const p = itemFor(k);
+    if (!p) return null;
+    if (kind === "users") return matchUser(p, listB, baseUsername);
+    if (kind === "roles") return listB.find(x => x.dev === p.dev && x.kind === p.kind);
+    return matchPermSet(p, listB);
+  }).filter(p => p && !keysB.includes(pickKey(hostB, p.id)) && !(hostA === hostB && keysA.includes(pickKey(hostB, p.id))))
+    .filter((p, i, a) => a.findIndex(x => x.id === p.id) === i).slice(0, MAX_COMPARE - total) : [];
+  const twoOrgs = hostA !== hostB;
+  // A compare that ends after a newer one (or a kind switch) is ignored.
+  const runRef = React.useRef(0);
 
-  const nameOf = id => (list && (list.find(p => p.id === id) || {}).name) || id;
+  const switchKind = async k => {
+    if (k === kind || loading) return;
+    if (total && !(await confirmDialog({title: "Switch what you compare?", message: "The items picked on both sides are cleared.", confirmLabel: "Switch"}))) return;
+    runRef.current++;
+    setPickedA([]); setPickedB([]); setMatrix(null); setError(null); setLoading(""); setKind(k);
+  };
+
   const compare = async () => {
-    setLoading(true);
+    const run = ++runRef.current;
+    const live = () => runRef.current === run;
+    setLoading("Reading permissions…");
     setError(null);
     try {
-      const data = await loadCompareData(picked);
-      setMatrix({ids: picked, names: picked.map(nameOf), sections: buildCompareMatrix(data)});
+      const hosts = [...new Set(keys.map(k => splitPick(k).host))];
+      const conns = Object.fromEntries(hosts.map(h => [h, h ? orgByHost(h) : null]));
+      for (const h of hosts) if (h && !conns[h]) throw new Error(`Log in to ${h} in this browser first (it isn't in your org list).`);
+      const idsOf = host => keys.filter(k => splitPick(k).host === host).map(k => splitPick(k).id);
+      const notes = [];
+      const failed = {}; // section key → org names it could not be read in
+      const addFailed = (host, list) => {
+        for (const k of list || []) { failed[k] = failed[k] || []; if (!failed[k].includes(orgName(host))) failed[k].push(orgName(host)); }
+      };
+      const addCut = (host, list) => {
+        if (list && list.length) notes.push(`Some data was cut off at ${ROW_CAP.toLocaleString("en-US")} rows in ${orgName(host)} (${list.join(", ")}): differences may be incomplete.`);
+      };
+      let sections;
+      let found;
+      const origins = {};
+      if (kind === "roles") {
+        const byKey = {};
+        await Promise.all(hosts.map(async host => {
+          // Not listed yet: the id says which (00E role; 00G group or queue, read the same way).
+          const items = idsOf(host).map(id => ({id, kind: (itemFor(pickKey(host, id)) || {}).kind || (/^00E/.test(id) ? "role" : "group")}));
+          const info = {cut: []};
+          const got = await loadRoleGroupData(items, conns[host] ? conns[host].conn : undefined, info);
+          addCut(host, info.cut);
+          for (const id of Object.keys(got)) byKey[pickKey(host, id)] = got[id];
+        }));
+        found = keys.filter(k => byKey[k]);
+        sections = buildRoleGroupMatrix(found.map(k => byKey[k]));
+      } else {
+        const loaded = await Promise.all(hosts.map(async host => {
+          const conn = conns[host] ? conns[host].conn : undefined;
+          const r = kind === "users" ? await loadUserAccess(idsOf(host), conn, parts) : {data: await loadCompareData(idsOf(host), conn, parts)};
+          for (const id of Object.keys(r.origins || {})) origins[pickKey(host, id)] = r.origins[id];
+          addFailed(host, r.data.failed);
+          addCut(host, r.data.cut);
+          return {host, data: r.data};
+        }));
+        const merged = mergeCompareData(loaded, keys);
+        found = keys.filter(k => !merged.missing.includes(k));
+        sections = buildCompareMatrix(merged);
+      }
+      // Picks deleted since they were picked: left out, so the columns stay aligned.
+      const missing = keys.filter(k => !found.includes(k)).map(k => `${itemOf(k)} no longer exists in ${orgName(splitPick(k).host)}.`);
+      if (!found.length) throw new Error(missing.join(" ") || "Nothing to compare.");
+      // Sharing rules: each column's org (only when the sides are in different orgs).
+      // An org that can't be read leaves the section out rather than making every rule "only in" the other.
+      if (parts.includes("sharingRules") && twoOrgs) {
+        if (live()) setLoading("Reading sharing rules…");
+        const colHosts = found.map(k => splitPick(k).host);
+        const rulesByHost = {};
+        await Promise.all([...new Set(colHosts)].map(async host => {
+          const o = orgOf(host);
+          try {
+            if (!o || !o.conn) throw new Error("not connected");
+            rulesByHost[host] = await loadSharingRules(o.conn);
+          } catch (e) {
+            addFailed(host, ["sharingRules"]);
+          }
+        }));
+        sections.push(failed.sharingRules ? {key: "sharingRules", title: "Sharing rules", rows: []} : sharingRulesSection(colHosts, rulesByHost));
+      }
+      if (!live()) return;
+      const cols = found.map(colOf);
+      setMatrix({kind, ids: found, picked: keys, hosts: [hostA, hostB], parts: [...parts], cols, names: columnLabels(cols),
+        sections: markUnreadSections(sections, failed), origins: kind === "users" ? origins : null, notes: [...missing, ...notes]});
     } catch (e) {
-      setError(e.message);
+      if (live()) setError(e.message);
     } finally {
-      setLoading(false);
+      if (live()) setLoading("");
     }
   };
-  const shown = matrix ? filterMatrix(matrix.sections, {onlyDiff, term}) : [];
+  // A result of another kind (from before a switch) is never shown.
+  const m = matrix && matrix.kind === kind ? matrix : null;
+  const changed = m && m.picked && (m.picked.join(",") !== keys.join(",") || m.hosts[0] !== hostA || m.hosts[1] !== hostB ||
+    parts.some(p => !m.parts.includes(p)));
+  const visible = m ? m.sections.filter(s => parts.includes(s.key) || (s.key === "general" && parts.includes("general"))) : [];
+  const shown = m ? filterMatrix(visible, {onlyDiff, term}) : [];
+  const unread = visible.filter(s => s.unread);
+  // Users: which profile / permission set / group gives each column its access.
+  const fromText = (s, r) => {
+    if (!m.origins) return "";
+    const parts2 = r.values.map((v, i) => {
+      if (!v || v === "—") return "";
+      const o = (m.origins[m.ids[i]] || {})[`${s.key}|${r.key}`];
+      return o && o.length ? `${m.names[i]}: from ${o.join(", ")}` : "";
+    }).filter(Boolean);
+    return parts2.join(" · ");
+  };
+  // Cells by column position, so two columns with the same name never collide.
   const exportCsv = () => {
-    const cols = ["Section", "Permission", ...matrix.names];
-    const rows = [];
-    for (const s of matrix.sections) {
+    const rows = [["Section", "Item", ...m.names, "What differs", "Where it comes from"]];
+    for (const s of visible) {
       for (const r of s.rows) {
-        const row = {Section: s.title, Permission: r.label};
-        matrix.names.forEach((n, i) => { row[n] = r.values[i]; });
-        rows.push(row);
+        rows.push([s.title, r.label, ...m.names.map((_, i) => r.values[i]),
+          r.differs ? describeRowDiff(s.key, r.values, m.names) : "", fromText(s, r)]);
       }
     }
-    downloadText("permission-compare.csv", toCsv(cols, rows));
+    downloadText("access-compare.csv", toCsvCore(rows[0].map((_, i) => i), rows, {guardFormulas: true, headers: false}));
   };
-  const groups = [["profile", "Profiles"], ["set", "Permission sets"], ["group", "Permission set groups"]];
+  const sideProps = {kind, total, orgs, current, lists, orgName};
+  const kindLabel = (COMPARE_KINDS.find(x => x[0] === kind) || COMPARE_KINDS[0])[2];
 
   return h("div", {className: "org-card org-card-wide", "data-tour": "access-compare"},
-    h(CardHead, {icon: "⚖️", title: "Compare Profiles & Permission Sets"},
-      matrix && h("button", {className: "btn btn-secondary btn-sm", onClick: exportCsv}, "Download CSV")),
+    h(CardHead, {icon: "⚖️", title: "Compare access"},
+      m && h("button", {className: "btn btn-secondary btn-sm", onClick: exportCsv}, "Download CSV")),
+    h("div", {className: "acc-kinds", role: "group", "aria-label": "What to pick"},
+      h("span", {className: "rel-org-l"}, "Compare"),
+      COMPARE_KINDS.map(([id, label]) => h("button", {key: id, type: "button", "aria-pressed": kind === id, disabled: !!loading,
+        className: "insp-chip rel-chip" + (kind === id ? " on" : ""), onClick: () => switchKind(id)}, label))),
     h("div", {className: "sq3-card-sub"},
-      `Pick 2–${MAX_COMPARE} profiles, permission sets or groups to see system, object, tab and app permissions side by side.`),
-    listErr && h("div", {className: "insp-error"}, "Could not list permission sets: " + listErr),
-    h("div", {className: "soql-save-row acc-pick-row"},
-      // Searchable picker (a native <select> renders its list clipped in the
-      // wide full-screen layout); picking adds it to the comparison.
-      h(SearchSelect, {
-        value: "",
-        options: (list || []).filter(p => !picked.includes(p.id)).map(p => ({
-          value: p.id, label: p.name,
-          tag: (groups.find(g => g[0] === p.kind) || [null, ""])[1].replace(/s$/, ""),
-          tagTone: p.kind === "profile" ? "info" : p.kind === "group" ? "violet" : "ok"
-        })),
-        onChange: id => { if (id && !picked.includes(id) && picked.length < MAX_COMPARE) setPicked([...picked, id]); },
-        placeholder: !list ? "Loading…" : picked.length >= MAX_COMPARE ? `Up to ${MAX_COMPARE} at a time` : "Search profiles, permission sets or groups…",
-        emptyText: "No match",
-        disabled: !list || picked.length >= MAX_COMPARE,
-        ariaLabel: "Profile, permission set or group to compare",
-        className: "acc-pick"
-      }),
-      h("button", {
-        className: "btn btn-primary btn-sm",
-        disabled: picked.length < 2 || loading,
-        onClick: compare
-      }, loading ? "Comparing…" : "Compare")),
-    picked.length > 0 && h("div", {className: "insp-chips"},
-      picked.map(id => h("button", {
-        key: id,
-        className: "insp-chip",
-        title: "Remove from comparison",
-        onClick: () => setPicked(picked.filter(x => x !== id))
-      }, nameOf(id), " ×"))),
+      `Pick ${kindLabel} on each side (up to ${MAX_COMPARE} in all). Each side can be in its own org: this one or another you're logged into, such as a sandbox against production.` +
+      (kind === "users" ? " A user's access is everything their profile, permission sets and groups give them together." : "")),
+    listErr && h("div", {className: "insp-error"}, "Could not list: " + listErr),
+    orgs.length < 2 && rel.orgs && h("div", {className: "insp-meta acc-org-hint"},
+      "To compare with another org (a sandbox against production), log in to it in another tab of this browser."),
+    h("div", {className: "acc-sides"},
+      h(CompareSide, {...sideProps, title: "Compare", host: hostA, onHost: setHostA, keys: keysA, onKeys: setPickedA}),
+      h("div", {className: "acc-vs", "aria-hidden": "true"}, "vs"),
+      h(CompareSide, {...sideProps, title: "With", host: hostB, onHost: setHostB, keys: keysB, onKeys: setPickedB},
+        sameAsLeft.length > 0 && h("button", {className: "field-action-btn acc-same", onClick: () => setPickedB([...keysB, ...sameAsLeft.map(p => pickKey(hostB, p.id))])},
+          `＋ Same as left${sameAsLeft.length === 1 ? ": " + sameAsLeft[0].name : ` (${sameAsLeft.length})`}${twoOrgs ? " from " + orgName(hostB) : ""}`))),
+    h("div", {className: "acc-parts"},
+      h("span", {className: "rel-org-l"}, "What to compare"),
+      kindParts.map(([id, label]) => h("button", {key: id, type: "button", "aria-pressed": parts.includes(id),
+        className: "insp-chip rel-chip" + (parts.includes(id) ? " on" : ""),
+        title: ORG_PARTS.has(id) ? "Each side's org settings: only when the two sides are in different orgs" : "",
+        onClick: () => setParts(parts.includes(id) ? parts.filter(x => x !== id) : [...parts, id])},
+      (parts.includes(id) ? "✓ " : "") + label + (ORG_PARTS.has(id) && !twoOrgs ? " (two orgs)" : "")))),
+    h("div", {className: "acc-run"},
+      h("span", {className: "insp-meta"}, total < 2 ? "Pick at least one on each side (or two on one side)." : `${keysA.length} vs ${keysB.length}`),
+      h("button", {className: "btn btn-primary btn-sm", disabled: total < 2 || !!loading, onClick: compare}, loading ? "Comparing…" : "Compare")),
+    loading && h("div", {className: "tr-progress"}, h("div", {className: "cov-progress"}, h("div", {className: "cov-progress-fill"})),
+      h("span", {className: "insp-meta"}, loading)),
     error && h("div", {className: "insp-error"}, error),
-    !matrix && !loading && h(EmptyState, {art: "compare",
-      title: picked.length < 2 ? "Pick two or more to compare" : "Ready when you are",
-      text: picked.length < 2
-        ? "Search above and add profiles, permission sets or groups. You'll see what each grants side by side, with the differences highlighted."
-        : `Press Compare to see ${picked.length} of them side by side.`}),
-    matrix && h("div", {className: "acc-toolbar"},
+    !m && !loading && h(EmptyState, {art: kind === "users" ? "users" : "compare",
+      title: total < 2 ? "Pick what to compare" : "Ready when you are",
+      text: total < 2
+        ? `Left: what you start from. Right: what to compare it with, in the same org or another one. Use “＋ Same as left” to pick the same ${kind === "users" ? "person" : kind === "roles" ? "role or group" : "profile"} in the other org.`
+        : `Press Compare to see ${total} of them side by side.`}),
+    m && h("div", {className: "acc-toolbar"},
       h("label", {className: "sq3-check"},
         h("input", {type: "checkbox", checked: onlyDiff, onChange: e => setOnlyDiff(e.target.checked)}),
         h("span", null, "Only differences")),
       h("input", {
         className: "soql-save-input acc-filter",
         value: term,
-        placeholder: "filter permissions…",
-        "aria-label": "Filter permissions",
+        placeholder: "filter…",
+        "aria-label": "Filter rows",
         onChange: e => setTerm(e.target.value)
       })),
-    matrix && shown.map(s => h("details", {key: s.key, className: "acc-section", open: s.key !== "tabs"},
-      h("summary", null, `${s.title} · ${s.rows.length}`),
-      s.rows.length
-        ? h("div", {className: "insp-table-wrap"},
-            h("table", {className: "insp-table acc-matrix"},
-              h("thead", null, h("tr", null,
-                h("th", null, "Permission"),
-                matrix.names.map((n, i) => h("th", {key: i}, n)))),
-              h("tbody", null, s.rows.map(r => h("tr", {key: r.key, className: r.differs ? "acc-diff" : ""},
-                h("td", {title: r.key}, r.label),
-                r.values.map((v, i) => h("td", {key: i}, v)))))))
-        : h("div", {className: "insp-meta"}, onlyDiff ? "No differences." : "Nothing granted."))));
+    m && changed && h("div", {className: "insp-warn"}, "Picks changed since this compare — press Compare to refresh."),
+    m && (m.notes || []).length > 0 && h("div", {className: "insp-warn"}, m.notes.join(" ")),
+    m && h("div", {className: "acc-summary" + (diffSummary(visible).total ? "" : " same")}, diffSummary(visible).text),
+    // Sections one org couldn't read: not compared, so they count no differences.
+    unread.length > 0 && h("div", {className: "insp-meta acc-empty-parts"},
+      "Not compared: " + unread.map(s => `${s.title.replace(/ \(.*\)$/, "")} (could not read in ${s.unread.join(", ")})`).join(", ") + "."),
+    // Sections with nothing to show: one line, not a heading each.
+    m && shown.some(s => !s.rows.length && !s.unread) && h("div", {className: "insp-meta acc-empty-parts"},
+      (onlyDiff || term ? "No differences in: " : "Nothing in: ") + shown.filter(s => !s.rows.length && !s.unread).map(s => s.title.replace(/ \(.*\)$/, "")).join(", ") + "."),
+    m && shown.filter(s => s.rows.length).map(s => h("details", {key: s.key, className: "acc-section", open: s.rows.length < 60},
+      h("summary", null, `${s.title.replace(/ \(R C E D.*\)$/, "")} · ${s.rows.length}`),
+      h("div", {className: "insp-table-wrap"},
+        h("table", {className: "insp-table acc-matrix"},
+          h("thead", null, h("tr", null,
+            h("th", null, SECTION_HEAD[s.key] || "Permission"),
+            m.names.map((n, i) => h("th", {key: i, title: m.cols ? `${m.cols[i].item} · ${m.cols[i].org}${m.cols[i].kind ? " (" + m.cols[i].kind + ")" : ""}` : n},
+              h("div", null, n),
+              m.cols && m.names[i] !== m.cols[i].item && h("div", {className: "acc-th-sub"}, m.cols[i].item))),
+            h("th", {className: "acc-what"}, "What differs"))),
+          h("tbody", null, s.rows.slice(0, 1000).map(r => h("tr", {key: r.key, className: r.differs ? "acc-diff" : ""},
+            h("td", {title: r.key}, r.label),
+            r.values.map((v, i) => h("td", {key: i}, h(AccessCell, {section: s.key, value: v, row: r}))),
+            h("td", {className: "acc-what"},
+              r.differs ? describeRowDiff(s.key, r.values, m.names) : h("span", {className: "insp-meta"}, "Same"),
+              r.differs && fromText(s, r) && h("div", {className: "acc-from"}, fromText(s, r)))))))))));
 }
 
 // ─── Risky access audit (facts first, AI summary optional) ──────────
@@ -154,10 +381,11 @@ function auditFacts(summary) {
   for (const p of summary.perms) {
     lines.push(`- ${p.label}: ${p.userCount} user(s); granted by ${p.sources.slice(0, 5).map(s => `${s.name} (${s.count})`).join(", ") || "—"}`);
   }
-  lines.push("", "Users holding the most risky permissions:");
-  for (const u of summary.users.slice(0, 25)) {
-    lines.push(`- ${u.name} (${u.username}): ${u.perms.join(", ")} — via ${u.sources.join(", ")}`);
-  }
+  // People stay anonymous to the AI provider: "User 1", not names or usernames.
+  lines.push("", `Users holding the most risky permissions (${summary.users.length} in all, anonymised):`);
+  summary.users.slice(0, 25).forEach((u, i) => {
+    lines.push(`- User ${i + 1}: ${u.perms.length} risky permission(s): ${u.perms.join(", ")} — via ${u.sources.join(", ")}`);
+  });
   return lines.join("\n");
 }
 
@@ -176,8 +404,8 @@ function RiskCard() {
     setError(null);
     setReport(null);
     try {
-      const byPerm = await riskyAssignments((done, total) => setProgress(`${done} of ${total} permissions checked`));
-      setSummary({...summarizeRiskyAccess(byPerm), at: Date.now()});
+      const {byPerm, notes} = await riskyAssignments((done, total) => setProgress(`${done} of ${total} permissions checked`));
+      setSummary({...summarizeRiskyAccess(byPerm), notes, at: Date.now()});
     } catch (e) {
       setError(e.message);
     } finally {
@@ -208,7 +436,7 @@ function RiskCard() {
       text: "Run the check to list active users with Modify All Data, View All Data, Manage Users, Author Apex and similar, and what grants them. Read-only."}),
     running && h("div", {className: "insp-status-info"}, progress || "Checking…"),
     error && h("div", {className: "insp-error"}, error),
-    aiErr === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},
+    aiErr === "NO_LLM_CONFIG" && !hasValidConfig() && h("div", {className: "insp-warn"},
       "AI summary needs a provider + API key. ",
       h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")),
     aiErr && aiErr !== "NO_LLM_CONFIG" && h("div", {className: "insp-error"}, "AI request failed: " + aiErr),
@@ -220,6 +448,7 @@ function RiskCard() {
         setTimeout(() => setCopied(false), 1200);
       }
     }),
+    summary && summary.notes && summary.notes.length > 0 && h("div", {className: "insp-warn"}, summary.notes.join(" ")),
     summary && h("div", {className: "org-grid acc-risk-grid"},
       h("div", null,
         h("div", {className: "sq3-card-sub"}, "Per permission"),
@@ -243,6 +472,7 @@ function RiskCard() {
 
 const ACCESS_VIEWS = [
   {id: "compare", label: "Compare", icon: "⚖️", hint: "Profiles, permission sets and groups side by side"},
+  {id: "sharing", label: "Sharing settings", icon: "🔐", hint: "Org-wide defaults and sharing, org against org"},
   {id: "risk", label: "Risky access", icon: "🛡️", hint: "Who holds powerful system permissions"},
   {id: "approvals", label: "Approvals", icon: "✅", hint: "Your approval inbox, approve, reject and submit"},
 ];
@@ -265,7 +495,7 @@ function AccessTab() {
           h("span", {className: "x-subnav-hint"}, v.hint))))),
     cur.id === "approvals"
       ? h(ApprovalsView, null)
-      : h("div", {className: "org-grid"}, cur.id === "risk" ? h(RiskCard, null) : h(CompareCard, null)));
+      : h("div", {className: "org-grid"}, cur.id === "risk" ? h(RiskCard, null) : cur.id === "sharing" ? h(SharingCompareCard, null) : h(CompareCard, null)));
 }
 
 // ─── Users tab: "why does this user have access to X?" ─────────────
@@ -277,11 +507,16 @@ function UserAccessCheck({userId}) {
   const [result, setResult] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
+  // Bumped per user and per check: an answer for an earlier one is dropped.
+  const reqRef = React.useRef(0);
 
   React.useEffect(() => {
     let stale = false;
+    reqRef.current++;
     setSources(null);
     setResult(null);
+    setError(null);
+    setBusy(false);
     userPermSources(userId).then(s => { if (!stale) setSources(s); })
       .catch(e => { if (!stale) setError(e.message); });
     return () => { stale = true; };
@@ -294,6 +529,8 @@ function UserAccessCheck({userId}) {
   const check = async () => {
     const t = target.trim();
     if (!t || !sources) return;
+    const req = ++reqRef.current;
+    const live = () => reqRef.current === req;
     setBusy(true);
     setError(null);
     setResult(null);
@@ -312,11 +549,11 @@ function UserAccessCheck({userId}) {
         rows = await systemPermRows(sources.ids, field);
         flags = [[field, humanizePermission(field)]];
       }
-      setResult({target: t, kind, ...effectiveAccess(rows, flags, sources.names)});
+      if (live()) setResult({target: t, kind, ...effectiveAccess(rows, flags, sources.names)});
     } catch (e) {
-      setError(e.message);
+      if (live()) setError(e.message);
     } finally {
-      setBusy(false);
+      if (live()) setBusy(false);
     }
   };
 

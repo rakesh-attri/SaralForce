@@ -1,6 +1,6 @@
 {
   "name": "saralforce",
-  "version": "2.3.1",
+  "version": "2.3.3",
   "description": "AI-Powered Salesforce Object & Field Creator Chrome Extension",
   "private": true,
   "scripts": {
@@ -9,7 +9,8 @@
     "test": "node --test \"test/unit/*.test.js\"",
     "package": "node scripts/package.js",
     "dev": "node scripts/dev-server.js",
-    "snapshots": "node scripts/visual-snapshots.js"
+    "snapshots": "node scripts/visual-snapshots.js",
+    "readme-shots": "node scripts/readme-screenshots.js"
   },
   "devDependencies": {
     "eslint": "^9.39.5",

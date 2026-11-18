@@ -648,7 +648,9 @@ function SoqlTab() {
               return h("span", {
                 className: "sq3-pill-state " + (ok ? "ok" : "warn"),
                 title: ok
-                  ? `Provider: ${cfg.provider}\nModel: ${cfg.model || "(default)"}\nKey: ${cfg.apiKey ? "••••" + String(cfg.apiKey).slice(-4) : "missing"}\n(uncheck to stop asking the LLM when a query fails)`
+                  ? (cfg.provider === "free_test"
+                    ? "Provider: Free (test), no key needed\n(uncheck to stop asking the LLM when a query fails)"
+                    : `Provider: ${cfg.provider}\nModel: ${cfg.model || "(default)"}\nKey: ${cfg.apiKey ? "••••" + String(cfg.apiKey).slice(-4) : "missing"}\n(uncheck to stop asking the LLM when a query fails)`)
                   : "Open Settings (gear in the sidebar header) → choose provider, paste API key, Save Settings"
     }, ok ? (def ? def.name : cfg.provider) : "Not configured");
             })(),
@@ -823,7 +825,7 @@ function SoqlTab() {
               onClick: () => askAiFor("explain")
             }, aiBusy === "explain" ? "Explaining…" : "Explain")
           ),
-          aiNote && aiNote.error === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},
+          aiNote && aiNote.error === "NO_LLM_CONFIG" && !hasValidConfig() && h("div", {className: "insp-warn"},
             "AI needs a provider + API key. ",
             h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")),
           aiNote && aiNote.error && aiNote.error !== "NO_LLM_CONFIG" &&
@@ -898,7 +900,7 @@ function SoqlTab() {
         ),
     error && h("div", {className: "insp-error"}, error),
         fixing && h("div", {className: "insp-meta"}, "✨ Asking LLM to fix the query…"),
-        fixError === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},
+        fixError === "NO_LLM_CONFIG" && !hasValidConfig() && h("div", {className: "insp-warn"},
           "LLM fix needs a provider + API key. ",
           h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")
         ),

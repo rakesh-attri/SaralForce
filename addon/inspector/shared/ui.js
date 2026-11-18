@@ -41,8 +41,12 @@ function FriendlyError({error, className = ""}) {
 // The SVG is a fixed string from empty-art.js, never user text.
 function EmptyState({art = "table", title, text, children, compact = false, className = ""}) {
   return h("div", {className: "empty-state" + (compact ? " compact" : "") + (className ? " " + className : "")},
-    h("svg", {className: "empty-art", viewBox: "0 0 160 120", width: compact ? 112 : 150, height: compact ? 84 : 112,
-      role: "img", "aria-hidden": "true", focusable: "false", dangerouslySetInnerHTML: {__html: emptyArtSvg(art)}}),
+    // The SaralForce wolf next to the picture (mascot-mini.webp, 5 KB).
+    h("div", {className: "empty-visual"},
+      h("svg", {className: "empty-art", viewBox: "0 0 160 120", width: compact ? 112 : 150, height: compact ? 84 : 112,
+        role: "img", "aria-hidden": "true", focusable: "false", dangerouslySetInnerHTML: {__html: emptyArtSvg(art)}}),
+      h("img", {className: "empty-mascot", src: "mascot-mini.webp", alt: "", width: compact ? 52 : 68, height: compact ? 52 : 68,
+        draggable: false, loading: "lazy"})),
     title && h("div", {className: "empty-title"}, title),
     text && h("div", {className: "empty-text"}, text),
     children);

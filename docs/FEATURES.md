@@ -22,11 +22,11 @@ what you can **change**, how to do it, and where the limits are.
 9. [API Explorer](#9-api-explorer)
 10. [Code Coverage](#10-code-coverage)
 11. [Users](#11-users)
-12. [Access](#12-access) — Compare · Risky access · Approvals
-13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · New · package.xml
+12. [Access](#12-access) — Compare · Sharing settings · Risky access · Approvals
+13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · Org Handbook · New · package.xml
 14. [Org Info](#14-org-info)
 15. [App Tab Manager](#15-app-tab-manager)
-16. [SandShift (release center)](#16-sandshift-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · GitHub
+16. [SandShift (release center)](#16-sandshift-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · Sandbox Studio · GitHub
 17. [Settings & AI providers](#17-settings--ai-providers)
 18. [Safety, privacy and limits](#18-safety-privacy-and-limits)
 19. [Quick "can I…?" answers](#19-quick-can-i-answers)
@@ -37,15 +37,16 @@ what you can **change**, how to do it, and where the limits are.
 
 | Feature | What it does |
 |---|---|
-| **Launcher button** | A floating SaralForce button on every Salesforce page opens the side panel. A one-time tip points it out on your first visit. |
-| **Two-row tool bar** | Top row = Records, SOQL, Run-Apex, Export, Import, API Explorer, Logs, Users. Bottom row = Access, Metadata, Org Info, App Tab Manager, Code Coverage. Each row stays on one line; tabs tighten as the panel narrows. A glass divider separates them; nothing scrolls sideways. |
+| **Launcher button** | A floating SaralForce button on every Salesforce page opens the side panel. A one-time tip points it out on your first visit. **Drag it** anywhere if it covers something on the page: it stays there on every Salesforce tab, and **right-click** puts it back on the right edge. |
+| **Two-row tool bar** | Top row = Records, SOQL, Run-Apex, Export, Import, API Explorer, Logs, Users, Code Coverage. Bottom row = Access, Metadata, Org Info, App Tab Manager, SandShift. Each row stays on one line; tabs tighten as the panel narrows. A glass divider separates them; nothing scrolls sideways. |
 | **Header buttons** | **AI Object Builder ⇄ Inspector** switch · **Show / Hide API Names** · **Theme** (System → Light → Dark) · **?** Help menu · user initials. |
 | **Show API Names** 👁 | Adds each field's API name next to its label on the Salesforce record page behind the panel. The button changes to *Hide API Names* only once names are actually showing. |
 | **Help menu (?)** | Take the tour · Tour this tool · What's new · Open Settings · **Help** (opens the GitHub issues page). |
-| **Guided tours** | Welcome tour on first open, a one-tip intro the first time you open each tool, an Object Builder tour, a Settings tour after install, and a "What's new" card after each update. Replay any time from **?**. |
+| **Guided tours** | Welcome tour on first open (tools don't pop up their own tips; use **? → Tour this tool**), an Object Builder tour, a Settings tour after install, and a "What's new" card after each update. Replay any time from **?**. |
 | **Remembers your place** | The last tool, your queries, filters and results are kept when you close and reopen the panel. |
 | **Messages come to you** | When an action finishes with a success, warning or error message (e.g. *trace flag created*, an import error), the panel scrolls to it and flashes it once. |
-| **Empty panes** | Blank areas (Users before you pick a user, Access Compare and Risky access, Approvals with nothing pending, Run-Apex before a run, API Explorer before you send a request, Logs before you load any and its AI pane, the Export preview, App Tab Manager before you pick an app) show a small original illustration with what to do next. |
+| **Empty panes** | Blank areas (Users before you pick a user, Access Compare and Risky access, Approvals with nothing pending, Run-Apex before a run, API Explorer before you send a request, Logs before you load any and its AI pane, the Export preview, App Tab Manager before you pick an app) show a small original illustration with the SaralForce wolf (a 5 KB image) and what to do next. |
+| **Progress comes to you** | When you start something with a progress bar (deploy, validation, compare, import, coverage run), the panel scrolls to the bar so you can watch it. |
 | **Theme** | Follows your device's light/dark setting by default; the header button overrides it. |
 
 ---
@@ -267,19 +268,36 @@ they hold, shows the **effective** result (✓ / ✗ per permission) and lists e
 
 ## 12. Access
 
-A small menu at the top: **Compare · Risky access · Approvals**.
+A small menu at the top: **Compare · Sharing settings · Risky access · Approvals**.
 
 ### 12.1 Compare 👁
 
 | You can | Details |
 |---|---|
-| Pick 2–5 items | Any mix of **profiles**, **permission sets** and **permission set groups**. |
-| Side-by-side matrix | **System permissions** (✓ per item) · **Object permissions** shown as letters R C E D V M (Read, Create, Edit, Delete, View All, Modify All) · **Tab settings** (Visible / Available) · **Assigned apps**. |
+| What you compare | Chips above both sides: **Profiles & permission sets** · **Users** · **Roles & groups**. Both sides use the same kind; switching asks first because it clears the picks. |
+| Users (effective access) | Each user's access combined from their profile, permission sets and permission set groups (granted if any of them grants it), plus **General** rows: profile, role, user license, active. A **Where it comes from** column says which profile or permission set grants each difference ("Modify All Data: from Profile: System Administrator"). **＋ Same as left** finds the same person in the other org by e-mail, or by username without the sandbox suffix. |
+| Roles & groups | Roles, public groups and queues. **Settings** (role: reports to, opportunity / case / contact access for account owners; group: include bosses; queue: e-mail), **Members** (users by username without the sandbox suffix, groups, roles, roles & subordinates; for a role, its users) and **Queue objects**. **＋ Same as left** matches by API name. |
+| Sharing rules | Each org's criteria, owner, territory and guest sharing rules (read with the Metadata API), when the two sides are in different orgs. One row per rule ("Criteria · Status equals Open → Role & subordinates Sales_Manager · Read/Write"); **What differs** says which org lacks it, or only the part that changed ("Demo: Read Only · UAT: Read/Write"). |
+| Two sides | **Compare** (left) and **With** (right), each with its own **org** (this one or any org you're logged into in this browser), search and picked items; up to 5 in all, any mix of **profiles**, **permission sets** and **permission set groups**. **＋ Same as left** picks the left side's items, found by name, in the right side's org: the quickest way to put a sandbox profile next to production's. |
+| What to compare | Chips to turn sections on or off: **General** (user license, kind) · **System permissions** · **Object permissions** · **Field permissions** (Read / Edit per field) · **Tab settings** · **Assigned apps** · **Apex class access** · **Visualforce page access** · **Custom permissions** · **Connected app access** · **Flow access** · **Sharing defaults** (each org's internal / external org-wide defaults per object, when the two sides are in different orgs). Sections with no differences are listed on one line. |
 | Only differences | Hide rows where all items agree (on by default). |
+| Readable differences | A summary line ("4 differences: 2 system permissions, 2 object permissions"), a **What differs** column in plain words ("Create, Edit, Delete: only in Production", "No access in UAT"), object access as Read / Create / Edit / Delete / View All / Modify All labels with the ones that differ in green, Yes / No for system permissions and apps, "Not set" for tabs. Columns are named by org when the same item is compared across orgs (with Sandbox / Production when two org names look alike). The CSV includes What differs. |
 | Filter | Find a permission or object by name. |
 | Download CSV | The whole matrix. |
 
-### 12.2 Risky access 👁 ✨
+### 12.2 Sharing settings 👁
+
+Setup's **Sharing Settings** page in two orgs side by side (a sandbox against production, say), section by section, with **What differs** in the last column.
+
+| You can | Details |
+|---|---|
+| Two orgs | **From org** and **Compare with org**: this org or any org you're logged into in this browser. |
+| What to compare | **Org-wide defaults** (default internal and external access per object, as on the Setup page) · **Other settings** (external sharing model, manager groups, standard report visibility, portal / site user visibility, secure guest record access and every other Sharing setting, new ones included) · **Sharing rules** (owner, criteria, guest and territory, under their object) · **Sharing sets** (which Experience Cloud profiles reach which records, per object) · **Restriction & scoping rules**. Rules and sets are read with one Metadata API retrieve per org. |
+| Page by page | **Manage sharing settings for**: all objects or one object, like the Setup dropdown; objects that differ are tagged, and ◀ ▶ step through them. |
+| Readable differences | A summary line ("8 differences: 3 org-wide defaults, 1 other setting, 2 sharing rules…") and, per row, "Internal: Private → Public Read Only", "On → Off", "Only in Production" or only the part of a rule that changed ("Read Only → Read/Write"). **Only differences** and a filter; **Download CSV**. |
+| Not compared | "Grant access using hierarchies": Salesforce doesn't expose it through any API (it is always on for standard objects). |
+
+### 12.3 Risky access 👁 ✨
 
 | You can | Details |
 |---|---|
@@ -288,7 +306,7 @@ A small menu at the top: **Compare · Risky access · Approvals**.
 | Per user | Users ranked by how many risky permissions they hold, and via what. |
 | ✨ **Summarize with AI** | A short report: summary, highest risks, who to review, next steps. |
 
-### 12.3 Approvals ✏️
+### 12.4 Approvals ✏️
 
 | You can | Details |
 |---|---|
@@ -440,6 +458,31 @@ Add any class, trigger, page, component, flow, rule, object, custom metadata typ
 custom metadata record with **＋ package.xml**. The bar at the top shows the count;
 **Download package.xml** (sorted, de-duplicated, your API version) or **Clear**.
 
+### 13.13 Org Handbook 👁 ✨
+
+For someone who just joined: what the business does, how its records move through their stages, and every flow explained step by step with a simple diagram. **Build the handbook** reads the org once (read-only, Cancel stops it); it is then **kept in this browser** per org, so it opens straight away next time, even after a reload, with its ELI5 notes; **↻ Refresh** reads the org again. **⬇ HTML** downloads the whole handbook as one page (every process table and every flow's simple diagram, story and ELI5; share it or print it to PDF); **⬇ Markdown** does the same with Mermaid diagrams for a wiki or Git.
+
+| Tab | What you get |
+|---|---|
+| 🏠 **Handbook** | ✅ **My onboarding**: a checklist for this org (learn its main processes, read its key flows, try its screen flows in a sandbox, learn the words, ask a question, see what changed) with a progress bar; items tick themselves when you open them and are kept in this browser per org. Then counts; ✨ **How the business works** (optional AI summary from app, object, stage and flow names, 1 request, you confirm); **🚀 Start here**, a reading order for day one (the busiest process, its key flows, screen flows to try in a sandbox, the Apex everything uses); **🏢 Departments**: each app with the records its team works on; **🔄 Business processes**: the records with the most automation and their stages (New → Working → Closed); **📖 Glossary**: those records' stages, options and record types. Everything links to its page. |
+| ⇢ **Flows** | Every active flow, grouped by the record it runs on (or by kind: screen flows, scheduled, platform events, called by other automation), each with a one-line summary in plain words ("When a Case is created or updated: finds the Account linked to this Case, checks "Gold customer?", updates this Case…"). Search by name, object or what it does. Open one for: when it starts; a **Simple diagram** (plain labels and icons, field updates in a row folded into one box, outcomes on the arrows, 🖐 where a person does something, failures in red) or the **Detailed** flowchart; **the story, step by step** (numbered, with "Gold → step 3, Other tiers → step 4", "if it fails → step 5"); what it is **used by** and **uses** (flows and Apex, clickable); ✨ **Explain it simply** (ELI5, 1 AI request); **Open in Flow Builder**; **Copy the story**. ✨ **Explain all flows simply** writes an ELI5 note for every flow in a few batched AI requests (you confirm; only the flows' stories are sent) and shows it under each flow's summary. |
+| 🔄 **Business processes** | **The life of a record**: its stage values across (from the Status / Stage picklist), and down when the automation runs (Before save · Checks · After save · Later / scheduled), with each flow, trigger and validation rule in the stage where it acts (from its entry conditions, decisions or ISPICKVAL formula) and "set by …" where a flow moves the record to a stage. Plus the flows on that record and its words (stages, options, record types); 👥 **Who works on it**: the profiles and permission sets that can see it, what they can do (Read, Create, Edit, Delete, View all, Modify all) and how many active people have each; 🧩 **What people see on its page**: each Lightning record page by area (header, main, sidebar…), standard parts in words ("Highlights: the key fields and the main buttons", "Path: the stage bar"), and the org's own components and flows on the page as links. |
+| 💬 **Ask the org** | Ask in plain words ("What happens when a case is escalated?", "Why can't I save a Case?", "Which flows send emails?"); suggested questions come from this org. The answer is written only from the handbook parts that match the question (record stages, flow stories, validation rules, triggers) and links every flow, rule and process it relies on; **See also** lists what matched. One AI request per question, no record data or code sent. Without AI you still get the matching parts. |
+| 🆕 **What's new** | Flows, triggers, Apex, LWC, Aura and validation rules created or changed in the last 7 / 30 / 90 days or **since I joined** (pick the date once), by day, with who changed them, **New** / **Changed**, and each flow's summary; click to open it. |
+| 🛠 **Technical map** | For developers: one business area (or the whole org) component by component, as below. |
+
+**Technical map** details:
+
+| You can | Details |
+|---|---|
+| Pick a scope | **One business area**: an object such as Case, Opportunity or Invoice__c, and everything that runs around it (its triggers, record-triggered flows and validation rules, the Apex they call, subflows and Apex actions, and the LWC / Aura that use that Apex, two steps out). **Whole org overview**: the busiest objects (triggers, flows, rules per object) with **Open guide →**, and a business map. |
+| Read the org | Non-managed Apex classes and triggers, active flows (their full definition), LWC, Aura, validation rules (formulas for the area's object), object relationships and Salesforce's dependency data. Read-only; Cancel stops it. Large orgs: the first 200 active flows. |
+| **The big picture** | A system map: the record being saved → triggers, flows and rules → the classes they call → the objects they read and change. Click a box to jump to its section. |
+| One section per component | In the order Salesforce runs a save: before-save flows, before triggers, validation rules, after triggers, after-save flows, then Apex classes, other flows and components. Each has: **Flow** diagram (flows as a real flowchart: decisions as diamonds with their branch conditions, loops, fault paths in red, subflow and Apex steps linking to their own sections; code as who calls it → it → what it calls and touches), **What this shows** in plain words (no AI needed), **Related flows and components** with why they're related, **ELI5**, and **Good to know** (no fault path, without sharing, callouts, logic in a trigger body, several triggers on one object, steps never reached). |
+| ✨ AI notes | Optional: a **How the business works** summary and an **ELI5** note per component, in a few batched requests (you confirm first). Only names, outlines and step summaries are sent: no record data, no full code. |
+| Diagrams | Zoom, **Fit**, drag to pan, legend, light and dark. Drawn by SaralForce itself (no library, nothing loaded from the internet). |
+| Export | **Download HTML** (one self-contained page with the diagrams, ready to share or print to PDF), **Download Markdown** (Mermaid diagrams that render on GitHub, Azure DevOps and Notion), **Copy** the whole guide or one section. |
+
 ---
 
 ## 14. Org Info 👁
@@ -480,6 +523,7 @@ Move changes between any two orgs you're logged into in this browser (sandbox �
 | Last run | A finished validation or deploy belongs to the selection it ran for: pick something else and it becomes a one-line "Last run" note (Show / Dismiss / History) instead of looking like this selection's result. |
 | Deploy errors by root cause | A failed validation or deploy shows **N errors · M root causes** instead of a flat list. Rows with the same cause are one card (100 "Unable to find Apex action class 'X'" rows on one LWC → **Missing Apex class X · 100 errors**), with the category (missing dependency, missing user or record, Apex compile, org feature, can't change in place, access or lock, name conflict, package), the affected components, **Why** and **Fix**. A failure caused by another failed item (a permission set group whose permission set failed) is folded under it. When the missing item is in the source, **＋ Add it to the deploy** ticks it, then **Validate again**. **Show all errors** keeps the full text (no more "…"), with a filter, **Copy summary** and **Export CSV**. **Explain failures** sends the grouped summary to the AI. |
 | Ask AI about failures | **✨ Explain failures / ask AI** (or **✨ Ask AI** on an error card) opens a chat about this run. The AI gets the target, run type, test level, what was sent (counts by type), what SaralForce can add, and the errors grouped by root cause, plus how Salesforce deploys work (one package is one transaction ordered by Salesforce, so missing dependencies go in the same package; when a separate first deploy really is needed). Ask follow-ups such as "same package or a separate deploy?"; answers show bold, code and lists. **Stop**, **Clear**, **Copy** per answer. No file contents are sent. The full error list has a **Fix** column next to each problem. |
+| Find unused fields & objects | Impact → **Find unused**: for the custom fields of an object, or every custom object, checks Salesforce's dependency data, the code of Apex classes, triggers and Visualforce pages, and how many records hold a value. Each gets **Unused** (nothing uses it, no data), **Nothing uses it, has data**, **Couldn't fully check** (never called unused) or **Used**, with created and last-modified dates. Click a "used by" count for the full impact analysis; tick unused ones to **Add to the delete list**; **Export CSV**. Reports, list views, email templates and integrations aren't in the dependency data, so check those before deleting. |
 | Compare runs | One compare at a time, even if you switch to another sub-tab and back; **Cancel** stops it and a cancelled run never replaces the results. Types an org could not list are named in Compare and in Deploy (they are left out, not "deleted"). |
 | Git source notes | Compare from GitHub warns when GitHub cut the branch listing short, lists object subfolders it left out, and honours the repository's root **.forceignore** (gitignore rules). |
 | AI release notes | The tooltip says what goes to your AI provider: each component's name and type plus up to 15 added / 15 removed lines (or the first 600 characters of a new one); named credentials, connected apps, certificates and similar types are never sent. |
@@ -524,11 +568,30 @@ History and snapshots live in this browser (IndexedDB); nothing is uploaded. Cle
 
 Before you deploy, the checks call out profiles (they overwrite), flows (arrive inactive in production unless set otherwise), Apex still using `WITH SECURITY_ENFORCED`, and deletes.
 
+### 16.1 Sandbox Studio 🏖️ ✏️
+
+Sandbox manager, run from **production** (sign in to it in this browser as an admin; pick it under *Production org*). Uses the Tooling API (SandboxInfo / SandboxProcess).
+
+| You can | Details |
+|---|---|
+| See them all | Stats (total, Developer, Developer Pro, Partial Copy, Full Copy, processing; click to filter), a table with license, status (with a copy-progress bar), last refresh, age (amber after 30 days, red after 90), description and login URL. Search, type and status filters, **Columns**, **Export CSV**, URL style (**Domain** `mydomain--name.sandbox.my.salesforce.com` or test.salesforce.com). Running copies are re-read every 30 seconds and you're told when one is ready or waiting for activation. Deleted ones show under the *Deleted* filter. |
+| Stale sandboxes | A banner for sandboxes not refreshed in 30+ days, with **Refresh all stale (Developer)** (type REFRESH to confirm). |
+| Select several | **Copy URLs**, **Export selected**, **Refresh selected**, **Compare (2)** (opens SandShift Compare with both sandboxes; you must be logged in to them here). |
+| ＋ New sandbox | Name (1–10 letters and digits, checked as you type), type, description, template Id (Partial / Full), object history and Chatter (Full), **post-copy Apex class** (classes that implement SandboxPostCopy), **activation group** (who can log in), **auto-activate** (off by default so a refresh can still be discarded). |
+| ⧉ Clone | A new sandbox copied from an existing one (its metadata and data). |
+| ↻ Refresh | The same settings, prefilled; warns when Salesforce's interval (Developer / Developer Pro 1 day, Partial 5, Full 29) hasn't passed; **💾 Back up first** (metadata and the objects you pick, when you're logged in to the sandbox); **type the sandbox name** to confirm. |
+| Activate / Discard | When a refresh is *Pending activation*: **Activate** (the previous copy is deleted) or **Discard the refresh** (type the name; the previous copy stays: the real undo of a refresh). |
+| 🗑 Delete | Type the sandbox name to confirm. |
+| Details | Click a name: settings, refresh history (every SandboxProcess), when the next refresh is allowed, its org Id. |
+| 💾 Backups | Metadata snapshot (Apex, components, flows, objects, security) and data of the objects you pick (Bulk API), kept in this browser with storage use shown. **Restore metadata** opens Deploy with a restore plan (validate, then deploy); **Restore data** inserts the records again, parents first, with lookups between restored objects pointed at the new records (createable fields; up to 50,000 rows per object; files, attachments and history aren't restored). Download each object's CSV. |
+| ✅ Post-refresh steps | Run inside the refreshed sandbox (log in to it here), with a progress bar kept per sandbox. **Email deliverability**: open Setup → Deliverability and **Check** whether this sandbox may send email (no email is sent; Salesforce has no API to change it). **".invalid" emails**: list active users and fix the ones you pick. **Scheduled jobs**: list, pause (abort) the picked ones, or re-create production's Apex schedules. **Flows that reach the outside world**: active flows with email alerts, email, callouts or Apex actions, deactivate the picked ones. **Integrations**: named credentials and remote sites with production-looking endpoints flagged (with Setup links), and custom setting values containing the production domain, replaced with the sandbox host for the picked ones. **Who can log in**: freeze everyone outside a public group (type FREEZE). **Restore my backup**, and **your own steps**. Nothing changes without a click and a confirmation. |
+
 ## 17. Settings & AI providers
 
 | Setting | Details |
 |---|---|
-| Providers | **OpenAI**, **Anthropic Claude**, **Google Gemini**, **OpenRouter**, any **OpenAI-compatible** endpoint. |
+| Providers | **Free (test)**, **OpenAI**, **Anthropic Claude**, **Google Gemini**, **OpenRouter**, any **OpenAI-compatible** endpoint. |
+| **Free (test)** | Try the ✨ features with no key and no model to pick. Requests go to free public OpenAI-compatible endpoints — **LLM7** (`api.llm7.io`), then **Pollinations** (`text.pollinations.ai`), then **Cehpoint** (`ai-api.cehpoint.co.in`) — and move to the next one automatically when one errors, times out or hits its rate limit (a failing endpoint rests for a minute; the one that last worked goes first). It never switches after a reply has started streaming, after a cancel, or when a reply was cut off. **Save settings** asks for access to all three hosts at once; **Test connection** tries each and shows which answered and how fast. The AI usage note names the endpoint that answered. For testing only: these are third-party services, so prompts (SOQL, metadata, log excerpts) go to them — use your own key for real org data. |
 | AI is optional | The Settings page opens with a note: every core tool works with just your Salesforce login; AI only adds the ✨ helpers. The AI assistant card shows **Ready** or **Not set up**. |
 | Key & model | Pick a provider tile, paste your API key (**Get a key ↗** links to the provider), pick a model; **Refresh list** loads the models your key can use. **Save settings**, **Test connection**, **Remove key**. |
 | Without a key | Everything except ✨ features works. |
@@ -562,7 +625,7 @@ Before you deploy, the checks call out profiles (they overwrite), flows (arrive 
 | See field-level access for a user? | **Yes** — Access Check → Field (`Object.Field`). |
 | See who can read/edit a field (all profiles)? | **Yes** — Metadata → Schema → field → **Access**. |
 | Change a user's permissions? | **Yes**, by **assigning / removing permission sets and groups** (Users → Permission Sets). Editing a profile's object permissions is done in Setup. |
-| Compare two profiles? | **Yes** — Access → **Compare** (up to 5, only differences). |
+| Compare two profiles? | **Yes** — Access → **Compare** (up to 5, only differences), in one org or across orgs (sandbox vs production). |
 | Find over-privileged users? | **Yes** — Access → **Risky access**. |
 | Approve or reject requests? | **Yes** — Access → **Approvals**. |
 | Turn a validation rule on/off? | **Yes** — Metadata → Validation Rules → **Active** switch. |

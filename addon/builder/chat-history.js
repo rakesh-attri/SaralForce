@@ -11,14 +11,56 @@ export const INTERRUPTED_DEPLOY_MSG = "The previous deployment was interrupted b
 export function loadChatHistory(sfHost) {
   try {
     const raw = localStorage.getItem(CHAT_HISTORY_KEY + "_" + sfHost);
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
   } catch (e) { return []; }
 }
 
+const chatTime = c => Number(c?.timestamp) || 0;
+
+// Oldest chat in another host's saved history: {key, list, idx} or null.
+function oldestOtherHostChat(ownKey) {
+  let best = null;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || key === ownKey || !key.startsWith(CHAT_HISTORY_KEY + "_")) continue;
+    let list;
+    try { list = JSON.parse(localStorage.getItem(key)); } catch (e) { continue; }
+    if (!Array.isArray(list)) continue;
+    list.forEach((c, idx) => {
+      if (!best || chatTime(c) < chatTime(best.list[best.idx])) best = {key, list, idx};
+    });
+  }
+  return best;
+}
+
+// Save, and on a quota error free space by dropping the oldest chats (this
+// host's first, then other hosts' oldest) and retrying. Returns true when
+// saved, false when it still could not be (callers can warn).
 export function saveChatHistory(sfHost, chats) {
+  const key = CHAT_HISTORY_KEY + "_" + sfHost;
+  const mine = [...(Array.isArray(chats) ? chats : [])];
+  const tryWrite = list => {
+    try { localStorage.setItem(key, JSON.stringify(list)); return true; } catch (e) { return false; }
+  };
+  if (tryWrite(mine)) return true;
+  // Drop this host's oldest (keeping order), but keep its newest chat while
+  // other hosts' chats can still give way.
+  while (mine.length > 1) {
+    let oldest = 0;
+    mine.forEach((c, i) => { if (chatTime(c) < chatTime(mine[oldest])) oldest = i; });
+    mine.splice(oldest, 1);
+    if (tryWrite(mine)) return true;
+  }
   try {
-    localStorage.setItem(CHAT_HISTORY_KEY + "_" + sfHost, JSON.stringify(chats));
-  } catch (e) { /* quota exceeded, ignore */ }
+    for (let other = oldestOtherHostChat(key); other; other = oldestOtherHostChat(key)) {
+      other.list.splice(other.idx, 1);
+      if (other.list.length) localStorage.setItem(other.key, JSON.stringify(other.list));
+      else localStorage.removeItem(other.key);
+      if (tryWrite(mine)) return true;
+    }
+  } catch (e) { /* storage unavailable */ }
+  return false;
 }
 
 // Snapshot of the current builder conversation for the history list.

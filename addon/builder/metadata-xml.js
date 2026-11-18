@@ -2,14 +2,36 @@
 // no React — every function returns a string so it can be unit-tested in Node.
 import {normalizeFieldType, supportsRequired, resolveNameField, CALCULATED_TYPES, FORMULA_RETURN_TYPES} from "../core/object-builder-rules.js";
 
+// Characters XML 1.0 forbids (tab, LF and CR are allowed).
+// eslint-disable-next-line no-control-regex
+const XML_INVALID_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
+
 export function escXml(str) {
   if (!str) return "";
   return String(str)
+    .replace(XML_INVALID_CHARS, "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+// Whole number from an LLM plan value, clamped to [min, max]; the default
+// when missing or not a number. 0 is respected when min allows it.
+export function clampInt(value, min, max, def) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(min, n));
+}
+
+const MASK_TYPES = ["all", "lastFour", "creditCard", "nino", "ssn", "sin"];
+
+// precision 1-18, scale 0-precision.
+function numberPrecisionScale(fieldDef, defScale) {
+  const precision = clampInt(fieldDef.precision, 1, 18, 18);
+  const scale = clampInt(fieldDef.scale, 0, precision, Math.min(defScale, precision));
+  return [`  <met:precision>${precision}</met:precision>`, `  <met:scale>${scale}</met:scale>`];
 }
 
 // Valid CustomTab motifs: format MUST be "CustomNN: IconName" (bare "CustomNN"
@@ -146,21 +168,20 @@ export function buildFieldXml(objectName, fieldDef) {
 
   switch (type) {
     case "Text":
-      parts.push(`  <met:length>${fieldDef.length || 255}</met:length>`);
+      parts.push(`  <met:length>${clampInt(fieldDef.length, 1, 255, 255)}</met:length>`);
       if (fieldDef.unique) parts.push(`  <met:unique>true</met:unique>`);
       if (fieldDef.externalId) parts.push(`  <met:externalId>true</met:externalId>`);
       break;
     case "TextArea":
       break;
     case "LongTextArea":
-      parts.push(`  <met:length>${fieldDef.length || 32768}</met:length>`);
-      parts.push(`  <met:visibleLines>${fieldDef.visibleLines || 6}</met:visibleLines>`);
+      parts.push(`  <met:length>${clampInt(fieldDef.length, 256, 131072, 32768)}</met:length>`);
+      parts.push(`  <met:visibleLines>${clampInt(fieldDef.visibleLines, 2, 50, 6)}</met:visibleLines>`);
       break;
     case "Number":
     case "Currency":
     case "Percent":
-      parts.push(`  <met:precision>${parseInt(fieldDef.precision) || 18}</met:precision>`);
-      parts.push(`  <met:scale>${parseInt(fieldDef.scale) || 0}</met:scale>`);
+      parts.push(...numberPrecisionScale(fieldDef, 0));
       if (type === "Number") {
         if (fieldDef.unique) parts.push(`  <met:unique>true</met:unique>`);
         if (fieldDef.externalId) parts.push(`  <met:externalId>true</met:externalId>`);
@@ -183,7 +204,7 @@ export function buildFieldXml(objectName, fieldDef) {
         parts.push(`    <met:restricted>true</met:restricted>`);
         parts.push(`    <met:valueSetName>${escXml(fieldDef.globalValueSet)}</met:valueSetName>`);
         parts.push(`  </met:valueSet>`);
-        if (type === "MultiselectPicklist") parts.push(`  <met:visibleLines>${parseInt(fieldDef.visibleLines) || 4}</met:visibleLines>`);
+        if (type === "MultiselectPicklist") parts.push(`  <met:visibleLines>${clampInt(fieldDef.visibleLines, 3, 10, 4)}</met:visibleLines>`);
         break;
       }
       // Empty/null values or a defaultValue outside the set →
@@ -208,7 +229,8 @@ export function buildFieldXml(objectName, fieldDef) {
       if (defVal && !values.some(v => v.toLowerCase() === defVal.toLowerCase())) {
         defVal = "";
       }
-      if (!defVal) defVal = values[0];
+      // No usable default → the first value, unless the plan says "no default".
+      if (!defVal && !fieldDef.noDefault) defVal = values[0];
       parts.push(`  <met:valueSet>`);
       // Dependent picklist: which values show for each controlling value.
       if (fieldDef.controllingField) {
@@ -217,7 +239,7 @@ export function buildFieldXml(objectName, fieldDef) {
       parts.push(`    <met:valueSetDefinition>`);
       parts.push(`      <met:sorted>${fieldDef.sortValues ? "true" : "false"}</met:sorted>`);
       for (const v of values) {
-        const isDefault = v.toLowerCase() === defVal.toLowerCase();
+        const isDefault = !!defVal && v.toLowerCase() === defVal.toLowerCase();
         parts.push(`      <met:value>`);
         parts.push(`        <met:fullName>${escXml(v)}</met:fullName>`);
         parts.push(`        <met:default>${isDefault ? "true" : "false"}</met:default>`);
@@ -248,7 +270,7 @@ export function buildFieldXml(objectName, fieldDef) {
       }
       parts.push(`  </met:valueSet>`);
       if (type === "MultiselectPicklist") {
-        parts.push(`  <met:visibleLines>${parseInt(fieldDef.visibleLines) || 4}</met:visibleLines>`);
+        parts.push(`  <met:visibleLines>${clampInt(fieldDef.visibleLines, 3, 10, 4)}</met:visibleLines>`);
       }
       break;
     }
@@ -304,14 +326,14 @@ export function buildSpecialFieldXml(objectName, fieldDef) {
       parts.push(`  <met:formula>${escXml(fieldDef.formula)}</met:formula>`);
       parts.push(`  <met:formulaTreatBlanksAs>${fieldDef.treatBlanksAs === "BlankAsBlank" ? "BlankAsBlank" : "BlankAsZero"}</met:formulaTreatBlanksAs>`);
       if (["Number", "Currency", "Percent"].includes(rt)) {
-        parts.push(`  <met:precision>${parseInt(fieldDef.precision) || 18}</met:precision>`);
-        parts.push(`  <met:scale>${parseInt(fieldDef.scale) || (rt === "Number" ? 0 : 2)}</met:scale>`);
+        parts.push(...numberPrecisionScale(fieldDef, rt === "Number" ? 0 : 2));
       }
       break;
     }
     case "Summary": {
       parts = head("Summary");
-      const op = String(fieldDef.summaryOperation || "count").toLowerCase();
+      const rawOp = String(fieldDef.summaryOperation || "count").toLowerCase();
+      const op = ["count", "sum", "min", "max"].includes(rawOp) ? rawOp : "count";
       parts.push(`  <met:summaryForeignKey>${escXml(fieldDef.summaryForeignKey)}</met:summaryForeignKey>`);
       parts.push(`  <met:summaryOperation>${op}</met:summaryOperation>`);
       if (op !== "count") parts.push(`  <met:summarizedField>${escXml(fieldDef.summarizedField)}</met:summarizedField>`);
@@ -320,13 +342,13 @@ export function buildSpecialFieldXml(objectName, fieldDef) {
     case "AutoNumber":
       parts = head("AutoNumber");
       parts.push(`  <met:displayFormat>${escXml(fieldDef.displayFormat || "{0000}")}</met:displayFormat>`);
-      parts.push(`  <met:startingNumber>${parseInt(fieldDef.startingNumber) || 1}</met:startingNumber>`);
+      parts.push(`  <met:startingNumber>${clampInt(fieldDef.startingNumber, 0, 999999999, 1)}</met:startingNumber>`);
       if (fieldDef.externalId) parts.push(`  <met:externalId>true</met:externalId>`);
       break;
     case "Location":
       parts = head("Location");
       parts.push(`  <met:displayLocationInDecimal>${fieldDef.displayLocationInDecimal === false ? "false" : "true"}</met:displayLocationInDecimal>`);
-      parts.push(`  <met:scale>${Number.isInteger(Number(fieldDef.scale)) ? Number(fieldDef.scale) : 5}</met:scale>`);
+      parts.push(`  <met:scale>${clampInt(fieldDef.scale, 0, 15, 5)}</met:scale>`);
       if (required) parts.push(`  <met:required>true</met:required>`);
       parts.push(...track);
       break;
@@ -337,15 +359,15 @@ export function buildSpecialFieldXml(objectName, fieldDef) {
       break;
     case "Html":
       parts = head("Html");
-      parts.push(`  <met:length>${parseInt(fieldDef.length) || 32768}</met:length>`);
-      parts.push(`  <met:visibleLines>${parseInt(fieldDef.visibleLines) || 25}</met:visibleLines>`);
+      parts.push(`  <met:length>${clampInt(fieldDef.length, 256, 131072, 32768)}</met:length>`);
+      parts.push(`  <met:visibleLines>${clampInt(fieldDef.visibleLines, 10, 50, 25)}</met:visibleLines>`);
       parts.push(...track);
       break;
     case "EncryptedText":
       parts = head("EncryptedText");
-      parts.push(`  <met:length>${Math.min(175, parseInt(fieldDef.length) || 175)}</met:length>`);
+      parts.push(`  <met:length>${clampInt(fieldDef.length, 1, 175, 175)}</met:length>`);
       parts.push(`  <met:maskChar>${fieldDef.maskChar === "X" ? "X" : "asterisk"}</met:maskChar>`);
-      parts.push(`  <met:maskType>${fieldDef.maskType || "all"}</met:maskType>`);
+      parts.push(`  <met:maskType>${MASK_TYPES.includes(fieldDef.maskType) ? fieldDef.maskType : "all"}</met:maskType>`);
       if (required) parts.push(`  <met:required>true</met:required>`);
       parts.push(...track);
       break;

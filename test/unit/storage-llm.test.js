@@ -1,6 +1,6 @@
 import {test, beforeEach} from "node:test";
 import assert from "node:assert/strict";
-import {initSettings, getSetting, setSetting, _resetSettingsForTests} from "../../addon/core/storage.js";
+import {initSettings, getSetting, setSetting, onSettingsChange, _resetSettingsForTests} from "../../addon/core/storage.js";
 import {getSavedConfig, saveConfig, hasValidConfig} from "../../addon/llm/llm-service.js";
 import {askAi, askAiJson, excerptLog, NO_LLM_CONFIG} from "../../addon/core/llm.js";
 
@@ -60,6 +60,21 @@ test("saves write through and changes from other pages update the cache", async 
   assert.equal(getSavedConfig().apiKey, "changed");
   emit({llmConfig: {newValue: undefined}});
   assert.equal(getSavedConfig(), null);
+});
+
+test("open pages hear about settings saved elsewhere, after the cache has them", async () => {
+  const {emit} = installFakes();
+  await initSettings();
+  const seen = [];
+  const stop = onSettingsChange(keys => seen.push([keys, hasValidConfig()]));
+  emit({llmConfig: {newValue: {provider: "free_test", model: "auto"}}, unrelated: {newValue: 1}});
+  assert.deepEqual(seen, [[["llmConfig"], true]]);
+  emit({unrelated: {newValue: 2}});
+  assert.equal(seen.length, 1, "keys outside the settings list are ignored");
+  stop();
+  emit({llmConfig: {newValue: undefined}});
+  assert.equal(seen.length, 1, "no calls after unsubscribe");
+  assert.equal(hasValidConfig(), false);
 });
 
 test("before init, reads fall back to not-yet-migrated legacy values", () => {

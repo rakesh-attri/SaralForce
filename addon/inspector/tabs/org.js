@@ -83,7 +83,7 @@ function OrgTab() {
         q("SELECT Id, Label, Name, Description, NamespacePrefix, LicenseId, IsOwnedByProfile, CreatedDate " +
           "FROM PermissionSet WHERE IsOwnedByProfile = false ORDER BY Label LIMIT 2000").catch(() => null),
         q("SELECT COUNT() FROM PermissionSetGroup").catch(() => null),
-        uid
+        uid && isSfIdLike(uid)
           ? q("SELECT COUNT() FROM PermissionSetAssignment WHERE AssigneeId = '" + uid + "'").catch(() => null)
           : Promise.resolve(null)
       ]);
@@ -129,7 +129,7 @@ function OrgTab() {
       ["Data Storage", ["DataStorageMB", "DataStorage"]],
       ["File Storage", ["FileStorageMB", "FileStorage"]],
       ["Daily API requests", ["DailyApiRequests"]],
-      ["Daily Bulk API", ["DailyBulkApiRequests", "DailyBulkBatches"]],
+      ["Daily Bulk API", ["DailyBulkApiBatches", "DailyBulkApiRequests", "DailyBulkBatches"]],
       ["Daily Streaming events", ["DailyStreamingApiEvents"]],
       ["Daily Scratch Orgs", ["DailyScratchOrgs"]],
       ["Concurrent Async GET", ["ConcurrentAsyncGet", "ConcurrentAsyncGetReportInstances"]],
@@ -139,7 +139,7 @@ function OrgTab() {
       let bucket = null;
       let matchedKey = null;
       for (const k of keys) {
-        if (L[k] != null) { bucket = L[k]; matchedKey = k; }
+        if (L[k] != null) { bucket = L[k]; matchedKey = k; break; }
       }
       if (bucket && typeof bucket === "object") {
         if (bucket.Max != null) {
@@ -337,12 +337,15 @@ function PermSetsCard({info}) {
 }
 
 // ─── Shared searchable list card (Org Info) ─────────────────────────
+// Only well-formed ids go into a SOQL literal.
+const isSfIdLike = id => /^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$/.test(String(id));
+
 // LoginHistory has no traversable `User` relationship (INVALID_FIELD on
 // `User.Name`), so we fetch ids only and resolve display names with a
 // second query. Best-effort: on failure rows keep their raw ids.
 const resolveUserNames = async (rows, idKey) => {
   const ids = [];
-  rows.forEach(r => { const id = r[idKey]; if (id && ids.indexOf(id) === -1) ids.push(id); });
+  rows.forEach(r => { const id = r[idKey]; if (id && isSfIdLike(id) && ids.indexOf(id) === -1) ids.push(id); });
   if (!ids.length) return rows;
   try {
     const q = "SELECT Id, Name FROM User WHERE Id IN (" +
@@ -809,7 +812,7 @@ function AuditCard({info}) {
         }, running ? "Auditing…" : report ? "Run again" : "Run audit")
       )
     ),
-    (!hasValidConfig() || auditErr === "NO_LLM_CONFIG") &&
+    !hasValidConfig() &&
       h("div", {className: "insp-warn"},
         "AI audit needs a provider + API key. ",
         h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")),

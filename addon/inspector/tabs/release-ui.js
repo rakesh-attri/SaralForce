@@ -4,6 +4,7 @@ import {TYPE_PRESETS, TYPE_PICK, TYPE_BY_NAME, ALL_TYPES, allTypes, otherTypes, 
 import {diffLines, diffStats, sideBySide} from "../../core/text-diff.js";
 import {useRelease, setRelease, loadOrgs, orgByHost, setGitBranch} from "./release-state.js";
 import {listBranches} from "../shared/github.js";
+import {hasValidConfig} from "../../llm/llm-service.js";
 
 const h = React.createElement;
 
@@ -338,6 +339,7 @@ export function AiAnswer({title, text, onClose}) {
 export function AiError({error}) {
   if (!error) return null;
   if (error === "NO_LLM_CONFIG") {
+    if (hasValidConfig()) return null;
     return h("div", {className: "insp-warn"}, "Add an AI provider key in Settings to use this. ",
       h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings"));
   }

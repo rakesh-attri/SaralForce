@@ -1,4 +1,4 @@
-import {LLM_PROVIDERS, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant, getLLMProvider, providerPermissionOrigin, checkProviderNetworkAccess, validateBaseUrl, getModelOptions, setCachedModels, hasValidConfig} from "./llm/llm-service.js";
+import {LLM_PROVIDERS, getSavedConfig, saveConfig, getCelebrateVariant, setCelebrateVariant, getLLMProvider, getFreeProvider, FREE_ENDPOINTS, providerPermissionOrigins, checkProviderNetworkAccess, validateBaseUrl, getModelOptions, setCachedModels, hasValidConfig} from "./llm/llm-service.js";
 
 import {initSettings} from "./core/storage.js";
 import {showUsageToast, setShowUsageToast} from "./core/ai-usage.js";
@@ -45,8 +45,9 @@ const MODEL_DESCRIPTIONS = {
 };
 
 // Provider tiles: short name, one line, where to get a key.
-const PROVIDER_SHORT = {openai: "OpenAI", claude: "Anthropic Claude", gemini: "Google Gemini", openrouter: "OpenRouter", openai_compatible: "OpenAI-compatible"};
+const PROVIDER_SHORT = {free_test: "Free (test)", openai: "OpenAI", claude: "Anthropic Claude", gemini: "Google Gemini", openrouter: "OpenRouter", openai_compatible: "OpenAI-compatible"};
 const PROVIDER_BLURB = {
+  free_test: "No key · for testing",
   openai: "GPT models",
   claude: "Claude models",
   gemini: "Gemini models",
@@ -59,6 +60,19 @@ const PROVIDER_KEY_LINKS = {
   gemini: "https://aistudio.google.com/apikey",
   openrouter: "https://openrouter.ai/keys"
 };
+
+const hostsOf = origins => origins.map(o => o.replace(/^https?:\/\//, "").replace(/\/\*$/, "")).join(", ");
+
+// Ask for every host in one prompt. Must start inside the click (user gesture).
+function requestOrigins(origins) {
+  if (!origins.length || typeof chrome === "undefined" || !chrome.permissions || !chrome.permissions.request) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    try { chrome.permissions.request({origins}, (ok) => resolve(!!ok)); }
+    catch (e) { resolve(false); }
+  });
+}
 
 class OptionsApp extends React.Component {
   constructor(props) {
@@ -102,12 +116,12 @@ class OptionsApp extends React.Component {
   // permissions, v1.4.22). No-op in the fixture harness (no chrome.permissions).
   refreshPermStatus = async () => {
     const {provider, baseUrl} = this.state;
-    const origin = providerPermissionOrigin(provider, baseUrl);
+    const origins = providerPermissionOrigins(provider, baseUrl);
     const allowed = await checkProviderNetworkAccess(provider, baseUrl);
     this.setState({
       permMissing: !allowed,
       permDenied: false,
-      permHost: origin ? origin.replace(/^https?:\/\//, "").replace(/\/\*$/, "") : ""
+      permHost: hostsOf(origins)
     });
   };
 
@@ -189,43 +203,46 @@ class OptionsApp extends React.Component {
       return;
     }
     this.setState({saveError: ""});
-    const origin = providerPermissionOrigin(provider, baseUrl);
+    const origins = providerPermissionOrigins(provider, baseUrl);
     // chrome.permissions.request must be kicked off synchronously inside
-    // the Save click (user gesture). It is a silent no-op when the origin
-    // is already granted or needs no permission (loopback / fixture).
-    const request = (origin && typeof chrome !== "undefined" &&
-      chrome.permissions && chrome.permissions.request)
-      ? new Promise((resolve) => {
-          try { chrome.permissions.request({origins: [origin]}, (ok) => resolve(!!ok)); }
-          catch (e) { resolve(false); }
-        })
-      : Promise.resolve(true);
-    request.then((granted) => {
+    // the Save click (user gesture). It is a silent no-op when the origins
+    // are already granted or need no permission (loopback / fixture).
+    requestOrigins(origins).then((granted) => {
       saveConfig({provider, apiKey, model, baseUrl});
       this.setState({
         saved: true,
         permDenied: !granted,
         permMissing: false,
-        permHost: origin ? origin.replace(/^https?:\/\//, "").replace(/\/\*$/, "") : ""
+        permHost: hostsOf(origins)
       });
       setTimeout(() => this.setState({saved: false}), 2000);
     });
   }
 
   grantPermission() {
-    const origin = providerPermissionOrigin(this.state.provider, this.state.baseUrl);
-    if (!origin || typeof chrome === "undefined" || !chrome.permissions || !chrome.permissions.request) return;
-    const host = origin.replace(/^https?:\/\//, "").replace(/\/\*$/, "");
-    try {
-      chrome.permissions.request({origins: [origin]}, (ok) => {
-        this.setState({permDenied: !ok, permMissing: !ok, permHost: host});
-      });
-    } catch (e) { /* ignore */ }
+    const origins = providerPermissionOrigins(this.state.provider, this.state.baseUrl);
+    if (!origins.length) return;
+    requestOrigins(origins).then((ok) => this.setState({permDenied: !ok, permMissing: !ok, permHost: hostsOf(origins)}));
   }
 
   async testConnection() {
     const {provider, apiKey, model, baseUrl} = this.state;
-    this.setState({testStatus: "testing", testMessage: "Testing connection..."});
+    this.setState({testStatus: "testing", testMessage: "Testing connection...", testResults: null});
+
+    if (LLM_PROVIDERS[provider] && LLM_PROVIDERS[provider].free) {
+      const results = await getFreeProvider().testEach([
+        {role: "system", content: "Reply with exactly: OK"},
+        {role: "user", content: "Test"}
+      ]);
+      const up = results.filter(r => r.ok).length;
+      this.setState({
+        testStatus: up ? "success" : "error",
+        testResults: results,
+        testTokens: null,
+        testMessage: up ? "" : "None of the free endpoints answered. Try again in a minute, or add your own key."
+      });
+      return;
+    }
 
     try {
       const providerImpl = getLLMProvider(provider);
@@ -315,7 +332,7 @@ class OptionsApp extends React.Component {
               "explain debug logs, flows and failing tests, and draft validation rules, Apex or Lightning components. " +
               "If you want them, add your own key below; if not, you can skip this page."),
             h("ul", {className: "opt-note-points"},
-              h("li", null, "Bring your own key — you choose the provider and pay it directly"),
+              h("li", null, "Bring your own key — you choose the provider and pay it directly — or pick Free (test) to try it with no key"),
               h("li", null, "Your key stays in this browser and goes only to that provider"),
               h("li", null, "Turn it off any time with Remove key")))),
 
@@ -343,6 +360,15 @@ class OptionsApp extends React.Component {
                 h("span", {className: "opt-provider-n"}, PROVIDER_SHORT[id] || def.name),
                 h("span", {className: "opt-provider-d"}, PROVIDER_BLURB[id] || ""))))),
 
+          providerDef.free ? h("div", {className: "opt-step"},
+            h("div", {className: "opt-step-h"}, h("span", {className: "opt-num"}, "2"), "No key needed"),
+            h("div", {className: "opt-free"},
+              h("p", null, "Uses ", FREE_ENDPOINTS.map((ep, i) => h(React.Fragment, {key: ep.id},
+                i ? ", then " : "", h("b", null, ep.name))),
+                ", switching to the next one automatically when one errors or hits its rate limit."),
+              h("p", {className: "opt-free-warn"},
+                "For testing only: these are free public services run by others. Do not send confidential org data; " +
+                "add your own key (any other provider) for real work."))) :
           h("div", {className: "opt-step"},
             h("div", {className: "opt-step-h"}, h("span", {className: "opt-num"}, "2"), "Add your API key",
               keyLink && h("a", {className: "opt-link", href: keyLink, target: "_blank", rel: "noopener noreferrer"}, "Get a key ↗")),
@@ -378,6 +404,10 @@ class OptionsApp extends React.Component {
               }),
               h("p", {className: "opt-help"}, "The full base URL, e.g. https://api.example.com/v1"))),
 
+          providerDef.free ? h("div", {className: "opt-step"},
+            h("div", {className: "opt-step-h"}, h("span", {className: "opt-num"}, "3"), "Model"),
+            h("input", {className: "opt-input", value: "Automatic", readOnly: true, "aria-label": "Model"}),
+            h("p", {className: "opt-help"}, FREE_ENDPOINTS.map(ep => `${ep.name}: ${ep.model}`).join(" · "))) :
           h("div", {className: "opt-step"},
             h("div", {className: "opt-step-h"}, h("span", {className: "opt-num"}, "3"), "Pick a model"),
             h("div", {className: "opt-inline"},
@@ -418,9 +448,9 @@ class OptionsApp extends React.Component {
             h("button", {
               className: "opt-btn opt-btn-secondary",
               onClick: () => this.testConnection(),
-              disabled: testStatus === "testing" || !apiKey
+              disabled: testStatus === "testing" || (!apiKey && !providerDef.free)
             }, testStatus === "testing" ? "Testing…" : "Test connection"),
-            (apiKey || aiReady) && h("button", {
+            !providerDef.free && (apiKey || aiReady) && h("button", {
               className: "opt-btn opt-btn-text",
               type: "button",
               title: "Delete the saved key — AI features switch off, everything else keeps working",
@@ -433,7 +463,13 @@ class OptionsApp extends React.Component {
           testStatus && h("div", {
             className: "opt-alert " + (testStatus === "success" ? "ok" : testStatus === "error" ? "err" : "info"),
             role: testStatus === "error" ? "alert" : "status"
-          }, testStatus === "success"
+          }, this.state.testResults
+            ? h("div", null,
+                testMessage || "✓ Ready: each request goes to the first endpoint that answers.",
+                h("ul", {className: "opt-free-results"}, this.state.testResults.map(r => h("li", {key: r.name, className: r.ok ? "ok" : "err"},
+                  r.ok ? "✓ " : "✕ ", h("b", null, r.name), " ",
+                  r.ok ? `answered in ${(r.ms / 1000).toFixed(1)} s${r.tokens ? `, ${r.tokens} tokens` : ""}` : r.error))))
+            : testStatus === "success"
             ? `✓ Connected — the AI features are ready to use.${this.state.testTokens ? ` This test used ${this.state.testTokens} tokens.` : ""}`
             : testMessage),
           this.state.permDenied && h("div", {className: "opt-alert warn"},
