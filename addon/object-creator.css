@@ -14308,7 +14308,8 @@ tr.sbx-open > td { background: rgba(57, 73, 171, 0.05); }
 .sbx-table .sbx-c-last { width: 100px; }
 .sbx-table .sbx-c-age { width: 58px; }
 .sbx-table .sbx-c-url { width: 22%; }
-.sbx-table .sbx-c-actions { width: 64px; }
+.sbx-table .sbx-c-actions { width: 76px; }
+.sbx-table thead th { white-space: normal; text-overflow: clip; }
 .sbx-table td.sbx-c-name, .sbx-table td.sbx-c-description { white-space: nowrap; }
 .sbx-table .sbx-c-name .sbx-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
 .sbx-table .sbx-desc { max-width: none; }

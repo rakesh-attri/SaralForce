@@ -1,210 +1,542 @@
-# SaralForce — AI Salesforce Inspector, Admin & Developer Toolkit
+# SaralForce | Build, Inspect & Deploy Salesforce
+
+**Admin & Developer Toolkit**
 
 <p align="center">
+  <a href="https://chromewebstore.google.com/detail/saralforce/fgapgjgejookdgliokajnbfkabkifclg"><img src="https://img.shields.io/badge/Google%20Chrome-Get%20it%20now-4285F4?logo=google-chrome&logoColor=white" alt="Get SaralForce from the Chrome Web Store"></a>
   <a href="https://microsoftedge.microsoft.com/addons/detail/saralforce/nabomjoibaaoialocfpphgcmfldjmeik"><img src="https://img.shields.io/badge/Microsoft%20Edge-Get%20it%20now-0C59A4?logo=microsoft-edge&logoColor=white" alt="Get SaralForce from the Microsoft Edge Add-ons store"></a>
-  <img src="https://img.shields.io/badge/Google%20Chrome-Coming%20Soon-4285F4?logo=google-chrome&logoColor=white" alt="Chrome Web Store - coming soon">
 </p>
 
-A Chrome browser extension that pairs an LLM (Large Language Models) object designer with a
-full Salesforce inspector — build custom objects from natural language, then run SOQL, execute
-Apex, manage users, read debug logs, export data to CSV and inspect your org without leaving
-the page.
+**SaralForce | Build, Inspect & Deploy Salesforce** is a free browser extension for Google
+Chrome and Microsoft Edge that puts a full Salesforce toolkit in a side panel on every
+Salesforce page. Design custom objects from plain English and deploy them; inspect and edit
+records; run SOQL and anonymous Apex; export and import data; profile debug logs; check user
+access and compare profiles across orgs; read, create and change metadata; onboard to an
+unfamiliar org with the Org Handbook; and move changes between orgs with SandShift, its
+release center, with rollback. AI helpers are optional: every core tool works with just your
+Salesforce login.
+
+<img src="docs/screenshots/inspector-tabs.png" alt="SaralForce side panel with the two-row tool bar: Records, SOQL, Run Apex, Export, Import, API Explorer, Logs, Users and Code Coverage on top; Access, Metadata, Org Info, App Tab Manager and SandShift below" width="720">
+
+## What's inside
+
+| Area | In one line |
+|---|---|
+| [Getting around](#getting-around) | Movable launcher, two-row tool bar, tours, themes, and the panel remembers your place. |
+| [AI Object Builder](#ai-object-builder-) | Describe an object in plain English, refine the plan, deploy it with field access and a tab. |
+| [Records](#records) | The record you are looking at: edit in place, related records, field history. |
+| [SOQL](#soql) | Editor with autocomplete, field explorer, paging past 20,000 rows, and AI write, explain and fix. |
+| [Run Apex](#run-apex) | Anonymous Apex with its own debug log, governor limit bars and an AI pre-check. |
+| [Export](#export) | Query builder with preview, Data API or Bulk API 2.0, and CSV, Excel or JSON output. |
+| [Import](#import) | Insert, update, upsert or delete from CSV with mapping templates, validation and result files. |
+| [Logs](#logs) | Trace flags, log search, AI analysis and a ⏱ profiler with hot spots and a timeline. |
+| [API Explorer](#api-explorer) | Call any REST, Composite, Tooling or SOAP API with your session. |
+| [Code Coverage](#code-coverage) | Coverage per class, covered and uncovered lines, test runs and AI failure explanations. |
+| [Users](#users) | Find, inspect and change users, and answer "why can this user see it?" with Access Check. |
+| [Access](#access) | Compare profiles, users and roles across orgs, sharing settings, risky access and approvals. |
+| [Metadata](#metadata) | Read, explain, create and deploy Apex, LWC, Aura, flows, rules and custom metadata, plus the Org Handbook. |
+| [Org Info](#org-info) | Limits, audit trail, jobs, logins and an AI hygiene audit. |
+| [App Tab Manager](#app-tab-manager) | Put tabs into Lightning apps and control who can see them. |
+| [SandShift](#sandshift-release-center) | Compare orgs, package, validate, deploy, roll back, check impact, use GitHub, and manage sandboxes. |
+| [Settings & AI providers](#settings--ai-providers) | Free (test), OpenAI, Claude, Gemini, OpenRouter or any OpenAI-compatible endpoint, with AI usage. |
+| [Safety, privacy and limits](#safety-privacy-and-limits) | What SaralForce never does without asking, and what stays in your browser. |
+
+> **Full feature guide:** [docs/FEATURES.md](docs/FEATURES.md) lists every tool, what it can
+> view and change, and where the limits are.
 
 ## FAQ
 
 **What is SaralForce?**
-SaralForce is a free, AI-powered Salesforce inspector extension for Microsoft Edge and Google Chrome. A sidebar on every Salesforce page gives you an AI object builder, a SOQL runner with CSV data export, an Apex executor, a debug-log analyzer, user management, org info and code coverage.
+SaralForce is a free Salesforce inspector and admin and developer toolkit for Google Chrome
+and Microsoft Edge. A side panel on every Salesforce page gives you an AI object builder,
+records, SOQL, Apex, data export and import, debug logs with a profiler, an API explorer,
+code coverage, user and access tools, a metadata workbench with the Org Handbook, org info,
+an app tab manager and SandShift, a release center for moving changes between orgs.
 
 **How is SaralForce different from other Salesforce inspector tools?**
-It covers the classic inspector workflows — SOQL queries, CSV data export, record lookup, user management — and adds an AI layer on top: build custom objects from plain-English descriptions, get failing SOQL auto-repaired, understand debug logs in plain English, and turn rough ideas into structured design briefs with Enhance Prompt.
+It covers the classic inspector workflows (SOQL, data export, record lookup, users) and goes
+further: deploy between orgs with validation, rollback and impact analysis; compare profiles,
+users and sharing settings across orgs; build objects, LWCs and Apex from plain English; and
+explain flows, logs and failures in plain words.
 
 **Is SaralForce free? Does it send my data anywhere?**
-The extension is free. AI features use your own provider API key (OpenAI, Anthropic Claude, Google Gemini, OpenRouter, or any OpenAI-compatible endpoint), stored only in your browser. Org data is sent to your chosen AI provider only when you explicitly ask. No accounts, no analytics, no tracking.
+The extension is free. There are no accounts, analytics or tracking, and no SaralForce server:
+the panel talks to Salesforce directly with your own session. Org data goes to an AI provider
+only when you press an ✨ button, and only to the provider you picked.
 
 **Do I need an AI API key to use it?**
-No. Everything except the AI features works with just your Salesforce login — SOQL, CSV data export and import, Apex execution, debug logs, users, org info and code coverage.
+No. Everything except the ✨ features works with just your Salesforce login. To try the ✨
+features without a key, pick the **Free (test)** provider in Settings.
+
+**What is the Free (test) AI provider?**
+A no-key option for testing only. Requests go to free public OpenAI-compatible endpoints,
+**LLM7**, then **Pollinations**, then **Cehpoint**, and move to the next one automatically when
+one errors, times out or hits its rate limit. These are third-party services, so prompts
+(SOQL, metadata, log excerpts) go to them. Use your own key for real org data.
+
+**Which AI providers are supported?**
+Free (test), OpenAI, Anthropic Claude, Google Gemini, OpenRouter, and any OpenAI-compatible
+endpoint. Your key is stored only in the extension's own storage.
 
 **Which browsers are supported?**
-Microsoft Edge (install from the Edge Add-ons store) and Google Chrome (Chrome Web Store version coming soon; or load the `addon` folder as an unpacked extension).
+Google Chrome ([Chrome Web Store](https://chromewebstore.google.com/detail/saralforce/fgapgjgejookdgliokajnbfkabkifclg))
+and Microsoft Edge ([Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/saralforce/nabomjoibaaoialocfpphgcmfldjmeik)).
+Developers can also load the `addon` folder as an unpacked extension.
 
 ## Features
 
-> **Full feature guide:** see [docs/FEATURES.md](docs/FEATURES.md) for every tool, what it can view and change, and step-by-step details.
+Legend: 👁 read-only · ✏️ changes the org · ✨ uses AI · 🔒 asks for confirmation first.
 
-- **Natural Language Object Design**: Describe what data you want to capture in plain English, and the AI proposes a complete Salesforce object with fields
-- **Multi-LLM Support**: Works with OpenAI, Anthropic Claude, Google Gemini, OpenRouter, and any OpenAI-compatible API (OpenCodeZen, etc.)
-- **Interactive Refinement**: Chat with the AI to modify the proposal - add fields, change types, adjust properties
-- **Visual Preview (Plan / Build)**: Review the schema before deploying — labels, API names, types, required flags — then refine inline in Plan mode
-- **One-Click Deploy**: Creates the custom object and all fields directly in your Salesforce org via the Tooling API, with profile tab-visibility targets
-- **Relationship Fields**: AI suggests Lookup and Master-Detail relationships when appropriate
-- **Field Permissions**: Configurable field-level security during deployment
-- **AI Query Repair**: SOQL errors are explained and auto-fixed by the LLM with one-click apply
-- **AI Log Analysis**: Debug logs get a plain-English verdict plus per-log AI chat
-- **Inspector Tools**: Records browser (View / Read / Edit modes), SOQL runner, Apex executor, CSV export/import, user management with clone wizard, debug-log viewer with AI analysis, org info, app-tab assignment, code coverage
+### Getting around
 
-## AI Object Builder
+- **Launcher button** on every Salesforce page opens the panel. Drag it anywhere if it covers
+  something: it stays there on every Salesforce tab, and right-click puts it back on the right edge.
+- **Two-row tool bar**: data and code tools on top, admin tools below; nothing scrolls sideways.
+- **Header**: switch between AI Object Builder and Inspector, Show / Hide API Names on the record
+  page, Theme (System, Light, Dark) and the **?** menu with tours, What's new, AI usage and Help.
+- **Remembers your place**: last tool, queries, filters and results survive closing the panel;
+  messages and progress bars scroll into view when they appear.
 
-Describe what you want in plain English and the AI proposes the complete object — labels,
-API names, data types, required flags, picklist values, and Lookup/Master-Detail
-relationships. Keep chatting to refine it ("add a field for resolution notes", "make
-Priority required") and deploy when the visual preview looks right.
+<img src="docs/screenshots/launcher.png" alt="The floating SaralForce launcher button on a Salesforce record page" width="720">
 
-**✨ Enhance Prompt** turns a rough one-liner into a structured design brief before you
-send it: business purpose, key fields and their data types, expected record volume,
-relationships to standard objects, must-have vs. nice-to-have features, and security and
-sharing recommendations — with **Accept** / **Discard** controls.
+Details → [docs/FEATURES.md#1-getting-around](docs/FEATURES.md#1-getting-around)
 
-<img src="docs/screenshots/ai-enhance-prompt.png" alt="Enhance Prompt — rough one-liner expanded into a structured design brief with Accept and Discard" width="720">
+### AI Object Builder ✨
 
-After the proposal arrives, the **Object Preview** opens in **Plan** mode: edit the object
-label, API name, sharing model and every field inline, pick deployment-target profiles,
-then switch to **Build** to lock the plan and deploy.
+- **Describe an object** in plain English; the AI proposes label, API name, fields, types,
+  picklist values and Lookup / Master-Detail relationships. ✨ **Enhance Prompt** turns a
+  one-liner into a full design brief.
+- **Plan mode**: edit everything inline, open **⚙** field details (formulas, roll-ups,
+  dependent picklists with a matrix, auto numbers, history tracking), add validation rules,
+  list views and a compact layout, or ✨ **Ask AI** to change the plan. Undo / Redo every change.
+- **23 field types**, including Formula, Roll-Up Summary, Auto Number, Geolocation, Time,
+  rich text and encrypted text.
+- **Field access** for your profile, the tab visibility profiles or a new permission set;
+  **Show in app** adds the tab to a Lightning app.
+- **✎ Edit an existing object**: add fields and rules, and edit labels, help text, lengths and
+  picklist values of existing fields.
+- **Build mode** deploys the object, fields, layouts, rules and tab, then checks and repairs
+  your access so the tab shows in the App Launcher.
 
-Plan mode also has **⚙ field details** for every type (formula, roll-up, dependencies…),
-**Object settings** (history, reports, activities, search, feeds, validation rules, list
-views, compact layout), **✨ Ask AI** to change the plan in plain English, and a **Field
-access** choice: your profile, the tab-visibility profiles, or a new permission set
-assigned to you. **✎ Edit an existing object** loads a custom object from the org so you
-can add fields, rules and list views beside the ones it already has.
+<img src="docs/screenshots/builder-chat.png" alt="AI Object Builder chat: a plain-English description turned into a proposed custom object" width="720">
 
-<img src="docs/screenshots/ai-object-creator.png" alt="Object Builder preview — Support Ticket plan with editable fields and deployment targets" width="720">
+<img src="docs/screenshots/builder-plan.png" alt="Object Builder Plan mode with editable fields, field details and deployment targets" width="720">
 
-## Inspector Tools
+Details → [docs/FEATURES.md#2-ai-object-builder-](docs/FEATURES.md#2-ai-object-builder-)
 
-Open the **Inspector** from the header (or the sidebar button) to reach every tool below.
-The last opened tab and scroll position are restored the next time you open the panel.
+### Records
+
+- 👁 **Detects the record** on the current Salesforce page; **↻ Reload page** follows you when
+  you move to another record. **Load Object** opens any object by API name.
+- ✏️ **Edit fields in place**, or in **Show All Data** with every field, layout or not.
+- 👁 **Related**: parents and every child list with counts; click through and come back
+  along the trail. 👁 **History** shows field changes as a timeline.
+- **Tooling API** toggle for setup records; export the record as CSV; open it in Salesforce.
+
+<img src="docs/screenshots/records.png" alt="Records tab showing the current record's fields with inline editing" width="720">
+
+Details → [docs/FEATURES.md#3-records](docs/FEATURES.md#3-records)
 
 ### SOQL
 
-A two-column workspace: LLM assistant chip, row limit, run button, query history and
-saved queries on the left; the syntax-highlighted editor, colour-coded field explorer
-(with category pills) and results table on the right — no horizontal scrolling.
-Tooling API and Recycle Bin toggles switch the backing API per query. Click any **ID**
-cell in the results to open **Show All Data** for that record.
+- **Editor** with highlighting, line numbers, Ctrl+Enter to run and Ctrl+/ to format.
+- **Autocomplete** for objects, fields, relationship paths up to 5 levels, sub-queries,
+  `FIELDS(ALL)` and keywords; a **field explorer** inserts fields with a click.
+- **Results** with sorting, search and CSV download; 300 rows a page, and **Fetch more rows**
+  past 20,000. Tooling API and Recycle Bin toggles; history and saved queries.
+- ✨ **Write SOQL** from plain English with your org's real fields, ✨ **Explain** a query, and
+  ✨ **Suggested fix** with **Apply & Run** when a query fails.
 
-When Salesforce rejects a query, the extension asks the LLM for a **✨ Suggested fix**:
-a plain-English explanation of what went wrong plus the corrected query, with
-**Apply & Run** and **Copy** buttons.
+<img src="docs/screenshots/soql.png" alt="SOQL editor with field explorer and paged results" width="720">
 
-<img src="docs/screenshots/ai-soql.png" alt="SOQL two-column editor with field explorer and results" width="720">
+<img src="docs/screenshots/soql-ai-fix.png" alt="SOQL AI suggested fix explaining a failed query and proposing a corrected one" width="720">
+
+Details → [docs/FEATURES.md#4-soql](docs/FEATURES.md#4-soql)
 
 ### Run Apex
 
-Execute anonymous Apex with a terminal-style editor: line numbers, syntax highlighting,
-**Quick Templates**, and saved/recent script chips. Choose the **Log Level** and
-**Timeout**, then **Execute** (or Ctrl+Enter) — or select a snippet and **Execute
-Highlighted**. Your code always runs exactly as written. With **Use AI** on, the AI steps in
-only when Salesforce reports a compile or runtime error: it suggests the smallest fix, shows
-how many lines it changes (and warns if it would remove code), and nothing changes until you
-click **Apply & Run**; **Keep my code** dismisses it. After a run, the **Execution Results** panel
-shows the debug log with event filters, a Debug-Only view, and the raw trace.
+- ✏️ **Execute anonymous Apex** or only the highlighted lines; error line numbers point at the
+  right place, with **Go to line N**.
+- **One call, exact log**: each run gets its own debug log back, with no trace flag.
+- **Limits** shows CPU, SOQL, DML and heap used as bars; quick templates, saved and recent scripts.
+- ✨ **Use AI** checks for compile errors before running and offers a fix or **Run anyway**.
 
-<img src="docs/screenshots/ai-run-apex.png" alt="Run Apex editor with execution results and debug log" width="720">
+<img src="docs/screenshots/apex.png" alt="Run Apex editor with execution results, debug log and governor limit bars" width="720">
 
-### Debug Logs
+Details → [docs/FEATURES.md#5-run-apex](docs/FEATURES.md#5-run-apex)
 
-- Load recent `ApexLog` rows for any user or Apex class in a chosen time window, with
-  trace-flag management built in.
-- **⚡ AI Quick Analysis (Plain English)** — a one-click verdict per log rendered as four
-  cards: *What happened*, *Errors*, *Debug highlights*, *Next step*. Results are cached
-  per log ID, so clicking **Analyzed** again shows the saved result without another AI
-  call; **Re-run** forces a fresh call when you want one.
-- **💬 Ask AI** — a per-log chat for drilling into any line of the trace.
-- Search across every loaded log body, view/download individual logs, or delete them
-  (single or bulk) straight from the panel.
+### Export
 
-<img src="docs/screenshots/ai-debug-logs.png" alt="Debug Logs with AI Quick Analysis panel" width="720">
+- **Build the query** with an object picker, field explorer, autocomplete, Validate and Format.
+- **Preview** real results with sorting and "load more from server".
+- **Data API** or **Bulk API 2.0** for very large exports, with job tracking and Cancel Job.
+- **CSV, Excel or JSON** with delimiter, line ending, encoding, quoting and date options;
+  cells starting with `= + - @` are made spreadsheet-safe. Saved exports and history per org.
+
+<img src="docs/screenshots/export.png" alt="Export workbench with query editor, preview and output options" width="720">
+
+Details → [docs/FEATURES.md#6-export](docs/FEATURES.md#6-export)
+
+### Import
+
+- ✏️ **Insert, Update, Upsert, Delete** 🔒 from a dropped, chosen or pasted CSV.
+- **Field mapping** with suggestions, saveable templates and External IDs for upserts.
+- **Validate Data** before sending, with an error CSV, and an optional duplicate check.
+- **Data API** (200 records per call, live progress, Stop) or **Bulk API 2.0** (live job
+  tracking, Cancel Job); success, failed and unprocessed result files from Salesforce.
+
+<img src="docs/screenshots/import.png" alt="Import workbench with CSV field mapping and validation" width="720">
+
+Details → [docs/FEATURES.md#7-import](docs/FEATURES.md#7-import)
+
+### Logs
+
+- ✏️ **Trace flags** for a user or an Apex class; 👁 load, search, view and download logs;
+  ✏️ delete one or all 🔒.
+- ✨ **AI Quick Analysis**: what happened, errors, debug highlights and next step, cached per log.
+  ✨ **Ask AI About This Log** opens a chat about one log.
+
+<img src="docs/screenshots/logs-ai.png" alt="Debug Logs with the AI Quick Analysis cards for one log" width="720">
+
+#### ⏱ Profile a log ✨
+
+- Switch a log from **Lines** to **⏱ Profile** for a summary (time, CPU, SOQL, DML, callouts).
+- **Hot spots**: queries and DML in loops, very large queries, slow callouts, limits over 70%.
+- **Timeline** of code units, methods, queries and callouts; slowest methods; query, DML and
+  callout tables.
+- ✨ **How to speed this up** sends only the summary, never the raw log. Needs Apex Code at
+  FINE or Apex Profiling at INFO.
+
+<img src="docs/screenshots/logs-profile.png" alt="Log profiler with summary, hot spots and a timeline of methods and queries" width="720">
+
+Details → [docs/FEATURES.md#8-logs-debug-logs](docs/FEATURES.md#8-logs-debug-logs) ·
+[docs/FEATURES.md#81-profile-a-log--](docs/FEATURES.md#81-profile-a-log--)
+
+### API Explorer
+
+- 👁 / ✏️ **REST and Composite**: GET, POST, PATCH, PUT and DELETE 🔒 to any path, with presets
+  for org, data, Tooling and Apex REST calls.
+- **SOAP**: Partner, Metadata and Apex APIs with a ready envelope.
+- **Response** with status, time, size, headers and body; paths in JSON are links. History of
+  the last 30 calls per org.
+
+<img src="docs/screenshots/api-explorer.png" alt="API Explorer with a REST request and its JSON response" width="720">
+
+Details → [docs/FEATURES.md#9-api-explorer](docs/FEATURES.md#9-api-explorer)
+
+### Code Coverage
+
+- 👁 **Coverage per class and trigger** with search and a test-class filter.
+- 👁 **Lines**: covered lines green, uncovered red, and **First uncovered line**.
+- ✏️ **Run tests**: all or one class, live progress, **Abort** 🔒, results per method with
+  messages and stack traces.
+- ✨ **Explain failure**: why a test failed and how to fix it.
+
+<img src="docs/screenshots/coverage.png" alt="Code Coverage with per-class percentages and a covered and uncovered lines view" width="720">
+
+Details → [docs/FEATURES.md#10-code-coverage](docs/FEATURES.md#10-code-coverage)
 
 ### Users
 
-Search and filter the org's users by profile or role, then select one to inspect:
-full detail tabs (**Details**, **Permission Sets**, **Groups**, **Profiles**, **Roles**,
-**Settings**), recent **Login IP** addresses, and quick actions — **Login As**, **Enable
-Logs** (30-minute debug trace), **Copy Id**, and **View in Salesforce**. Community users
-get an **Experience-site login** picker when live sites exist.
+<img src="docs/screenshots/users.png" alt="Users tab with live search, user details and quick actions" width="720">
 
-**Clone User** walks through a two-step wizard — pick the source user and the components
-to copy (permission sets, groups, role), review the summary, then create the new user
-and its assignments. **Reset Password** sends the standard Salesforce password-reset
-email via the User password API.
+#### Find users
 
-<img src="docs/screenshots/ai-users.png" alt="Users tab with detail tabs, login IP and quick actions" width="720">
+- **Live search** by name, username, email or alias, across the whole org; filter by profile and role.
 
-### Records, Export & Import
+#### Inspect a user 👁
 
-- **Records** — open any record in View, Read-only or Edit mode with a field summary,
-  related-record lookups, Show-All-Data popup, and CSV export of the current layout.
-- **Advanced Export** — a three-column workbench: object + Field Explorer on the left
-  (Standard / Custom / Relationship / Formula groups, click to insert into the query),
-  a syntax-highlighted SOQL editor with line numbers, autocomplete, validate and format
-  in the middle, and API, output-format and CSV-writing options on the right. Preview
-  pages through real results with client-side sorting, then download CSV, Excel or JSON
-  or copy the query. Saved exports and run history persist per org and user.
-- **Advanced Import** — the matching three-column layout for Insert, Update, Upsert and
-  Delete: drag-and-drop or pasted CSV, interactive field mapping with auto-suggestion
-  and saveable templates, client-side Validate Data with a downloadable error CSV, and
-  runs through the Data API in batches or Bulk API 2.0 ingest with live job tracking and
-  the success, failed and unprocessed result files pulled straight from Salesforce.
+- Sub-tabs: **Details** (login IP, active, frozen), **Permission Sets** (sets and groups),
+  **Access Check**, **Groups**, **Profiles** / **Roles** and **Settings**.
 
-<img src="docs/screenshots/ai-records.png" alt="Records tab in Read-only mode with field summary and CSV export" width="720">
+#### Change a user ✏️
 
-### Org Info, App Tabs & Code Coverage
+- **Assign** or **remove** 🔒 permission sets and permission set groups.
+- **Login As**, Experience Site login, **Freeze / Unfreeze** 🔒, **Reset Password** 🔒,
+  **Enable Logs** (30 minutes) and a **Clone User** wizard.
 
-- **Org Info** — org identity, storage and API limits, recent setup-audit events and
-  login history; an optional AI hygiene audit summarises what to fix first.
-- **App Tabs** — assign custom tabs to console applications so new objects show up where
-  your users work.
-- **Code Coverage** — per-class coverage from `ApexCodeCoverageAggregate`, test-class
-  filtering, and a one-click test run with freshness polling.
+#### Access Check 👁
 
-<img src="docs/screenshots/ai-coverage.png" alt="Code Coverage tab with per-class percentages and test-class filter" width="720">
+- Answers "why can this user see it?" for an **object**, a **field** or a **system permission**:
+  the effective result and every profile, permission set or group that grants it.
+
+<img src="docs/screenshots/users-access-check.png" alt="Access Check showing a user's object permissions and which profile or permission set grants each" width="720">
+
+Details → [docs/FEATURES.md#11-users](docs/FEATURES.md#11-users)
+
+### Access
+
+A menu at the top: **Compare · Sharing settings · Risky access · Approvals**.
+
+#### Compare 👁
+
+- Two sides, each in its own org (any org you're logged into): **profiles & permission sets**,
+  **users** (effective access, with where it comes from) or **roles & groups**.
+- Sections for system, object and field permissions, tabs, apps, Apex and Visualforce access,
+  custom permissions, flows, sharing rules and sharing defaults; **Only differences** on by default.
+- **What differs** in plain words, **＋ Same as left** to match items across orgs, Download CSV.
+
+<img src="docs/screenshots/access-compare.png" alt="Access Compare of a sandbox profile against production with differences in plain words" width="720">
+
+#### Sharing settings 👁
+
+- Setup's Sharing Settings page in two orgs side by side: org-wide defaults, other settings,
+  sharing rules, sharing sets and restriction and scoping rules, object by object.
+
+<img src="docs/screenshots/access-sharing.png" alt="Sharing settings compared between two orgs with a What differs column" width="720">
+
+#### Risky access 👁 ✨
+
+- Active users holding powerful permissions (Modify All Data, Author Apex, Manage Users…),
+  per permission and per user, with ✨ **Summarize with AI**.
+
+<img src="docs/screenshots/access-risky.png" alt="Risky access report listing users with powerful permissions and what grants them" width="720">
+
+#### Approvals ✏️
+
+- Your inbox (direct and through queues), all pending requests in the org and what you
+  submitted; **Approve / Reject** 🔒 with a comment, and submit a record for approval.
+
+<img src="docs/screenshots/access-approvals.png" alt="Approvals inbox with Approve and Reject actions" width="720">
+
+Details → [docs/FEATURES.md#12-access](docs/FEATURES.md#12-access)
+
+### Metadata
+
+Pick a kind from the chips at the top (each shows a count); **＋ New …** creates one.
+
+#### Common to every kind
+
+- **Overview** built from the source, **Source** with line numbers, ✨ **Explain** in plain words,
+  **Open in Setup ↗**, **＋ package.xml**, copy source, and **⛶ Full screen** in its own tab.
+
+#### Apex, triggers, Visualforce, LWC, Aura and flows 👁
+
+- **Apex classes**: sharing mode, annotations, SOQL / DML / callout counters and a method table
+  that jumps to the line.
+- **Triggers**: the object, which of the 7 events it runs on and the handler classes it calls.
+- **Visualforce pages**: controller and extensions, render-as, components and merge fields.
+- **LWC** and **Aura**: where it can be used, public properties or attributes, Apex and wire
+  calls, child components and a **Bundle** file tree.
+- **Flows**: what starts it, then every step in order with where each decision branch goes;
+  versions, outline and raw metadata.
+
+<img src="docs/screenshots/metadata-apex.png" alt="Metadata Apex class overview with counters and a method table" width="720">
+
+<img src="docs/screenshots/metadata-lwc.png" alt="Lightning Web Component overview with targets, public properties and bundle files" width="720">
+
+<img src="docs/screenshots/metadata-flow.png" alt="Flow steps in plain words, from the start conditions through each decision branch" width="720">
+
+#### Validation rules ✏️ ✨
+
+- Highlighted formula with its fields and functions, and a preview of the error the user sees.
+- **Active** switch, **Edit rule**, and ✨ **Use AI** to write the formula, message and error field.
+
+<img src="docs/screenshots/metadata-validation.png" alt="Validation rule with its formula, fields used, error preview and Active switch" width="720">
+
+#### Custom Metadata Types ✏️
+
+- Every `__mdt` type with all records and field values; **✎ Edit records** in a grid and save
+  them together; new and delete 🔒 records; **＋ New Metadata Type** with fields; CSV download.
+
+<img src="docs/screenshots/metadata-cmdt.png" alt="Custom Metadata Type records in an editable grid" width="720">
+
+#### Schema and Data quality 👁
+
+- Fields table with types, formulas and picklist values; per-field **Access** and **Where used**;
+  a **Relationships** diagram; schema JSON download.
+- **Data quality** profiles a record sample: fill rate, common values, inactive picklist values,
+  likely duplicates and a quality score, with ✨ **AI review**.
+
+<img src="docs/screenshots/metadata-schema.png" alt="Schema view of an object with its fields and the data quality profile" width="720">
+
+#### ＋ New ✏️ ✨
+
+- Create Apex classes (9 templates), triggers with a handler, Visualforce pages, **LWC** (5
+  templates), Aura, flows, validation rules and custom metadata types, or ✨ **Build with AI**.
+- The **draft editor** keeps drafts in this browser; a known-mistake check, **Check compile**,
+  ✨ **Ask AI to change** and ✨ **Fix with AI**, then **✓ Deploy** as one all-or-nothing package.
+
+<img src="docs/screenshots/metadata-new.png" alt="New Lightning Web Component form with templates and targets, and the draft editor" width="720">
+
+#### package.xml basket
+
+- **＋ package.xml** on any class, trigger, page, component, flow, rule, object or custom
+  metadata record; **Download package.xml** (sorted, de-duplicated) or Clear.
+
+#### Org Handbook 👁 ✨
+
+- For someone who just joined: **My onboarding** checklist, how the business works, a day-one
+  reading order, departments, business processes and a glossary.
+- **Flows**: every active flow in plain words, with a simple diagram and the story step by step;
+  ✨ **Explain all flows simply**.
+- **Business processes**: the life of a record across its stages, who works on it and what they
+  see on its page. 💬 **Ask the org** in plain words; 🆕 **What's new** in the last days or since you joined.
+- **Technical map** for developers; kept in this browser per org; download as **HTML** or
+  **Markdown** with Mermaid diagrams.
+
+<img src="docs/screenshots/org-handbook.png" alt="Org Handbook home with the onboarding checklist, business processes and flows" width="720">
+
+Details → [docs/FEATURES.md#13-metadata](docs/FEATURES.md#13-metadata) ·
+[Org Handbook](docs/FEATURES.md#1313-org-handbook--)
+
+### Org Info
+
+- 👁 Organization details, storage and API limits as bars, permission set counts.
+- 👁 Setup Audit Trail (newest 200), Apex jobs and login history.
+- ✨ **AI Org Hygiene Audit**: risks and next steps from read-only facts.
+
+<img src="docs/screenshots/org-info.png" alt="Org Info with organization details and org limits as bars" width="720">
+
+Details → [docs/FEATURES.md#14-org-info-](docs/FEATURES.md#14-org-info-)
+
+### App Tab Manager
+
+- ✏️ **Choose an app** from a searchable picker, or pin the exact one by URL or Id.
+- **Add, reorder and remove** tabs on the app; newly created tabs are suggested.
+- **Who can see a tab**: Default On / Off / Hidden for profiles and permission sets, or
+  **Just make it visible to me**; **Check access** explains the App Launcher, with Fix it.
+
+<img src="docs/screenshots/app-tabs.png" alt="App Tab Manager with an app's tabs and tab visibility controls" width="720">
+
+Details → [docs/FEATURES.md#15-app-tab-manager-%EF%B8%8F](docs/FEATURES.md#15-app-tab-manager-%EF%B8%8F)
+
+### SandShift (release center)
+
+Move changes between any two orgs you're logged into in this browser, either way. No extra login.
+
+#### Compare
+
+- Compares **every metadata type** both orgs have, with saved filters, date ranges, tabs for
+  New / Changed / Only in target, who changed what and when, and a side-by-side diff.
+- Dependency check with **Add missing**, deletes, ⇄ reverse deployment, ✨ release notes and CSV export.
+
+<img src="docs/screenshots/sandshift-compare.png" alt="SandShift Compare of two orgs with new, changed and only-in-target items" width="720">
+
+#### Changes
+
+- Everything changed in an org since today, 7 or 30 days, the last release or a date: New,
+  Updated or Deleted, by type and person, plus the Setup audit trail. **Add to package** in one click.
+
+#### Package
+
+- The same basket as Metadata → ＋ package.xml: add by name, paste or upload a package.xml or
+  destructiveChanges.xml, and download the package or a source zip. Save drafts and load them later.
+
+#### Validate and deploy
+
+- **Validate** with live progress and a test level; **Quick deploy** after a pass; **Deploy now**
+  in sandboxes.
+- Errors grouped **by root cause** with Why and Fix, **＋ Add it to the deploy**, and ✨ **Ask AI**
+  about the failures. Problem and overwrite checks run before every real deploy.
+
+<img src="docs/screenshots/sandshift-deploy.png" alt="SandShift deploy with validation progress and errors grouped by root cause" width="720">
+
+#### Manual steps
+
+- A runbook of what a deploy doesn't do. SaralForce can activate flows, copy permission set
+  assignments, group members and custom setting values, schedule Apex jobs and re-save tabs;
+  the rest get Setup links. ✨ **Write the runbook**, Download checklist.
+
+<img src="docs/screenshots/sandshift-manual.png" alt="SandShift manual steps runbook with automatic and by-hand steps" width="720">
+
+#### History and rollback
+
+- Every validation and deploy, versioned per target org, with a **rollback point** saved first;
+  **Roll back** (fully or partly), snapshots with drift compare and restore, check status of a
+  lost deploy, and deploy a release to the next org.
+
+<img src="docs/screenshots/sandshift-history.png" alt="SandShift release history with versions per org and rollback" width="720">
+
+#### Impact
+
+- What uses a field, object, class, flow or component, its data and active flows, with a
+  safe-to-delete verdict and ✨ **Risk summary**. **Find unused** lists fields and objects nothing uses.
+
+<img src="docs/screenshots/sandshift-impact.png" alt="SandShift impact analysis with a safe-to-delete verdict" width="720">
+
+#### GitHub (optional)
+
+- Connect a repository in Settings; **commit** releases and snapshots in Salesforce DX source
+  format, use a branch as a source in Compare and Deploy, and open pull requests.
+
+#### Sandbox Studio 🏖️ ✏️
+
+- Run from production: every sandbox with license, status, copy progress, age and login URL;
+  stale-sandbox banner; select several to copy URLs, refresh or compare.
+- **＋ New**, **⧉ Clone**, **↻ Refresh** (with 💾 **Back up first**), Activate or Discard a
+  refresh, and 🗑 Delete, each confirmed by typing the name.
+- **💾 Backups** of metadata and data with restore; ✅ **Post-refresh steps** for email,
+  scheduled jobs, outbound flows, integrations and who can log in.
+
+<img src="docs/screenshots/sandbox-studio.png" alt="Sandbox Studio listing sandboxes with type, status, last refresh and age" width="720">
+
+Details → [docs/FEATURES.md#16-sandshift-release-center-%EF%B8%8F-](docs/FEATURES.md#16-sandshift-release-center-%EF%B8%8F-) ·
+[Sandbox Studio](docs/FEATURES.md#161-sandbox-studio-%EF%B8%8F-%EF%B8%8F)
+
+### Settings & AI providers
+
+- **Providers**: **Free (test)**, OpenAI, Anthropic Claude, Google Gemini, OpenRouter and any
+  OpenAI-compatible endpoint. Paste a key, pick a model (**Refresh list**), **Save settings**,
+  **Test connection**. Changes apply to open panels without a reload.
+- **Free (test)**: no key and no model to pick. Tries LLM7, then Pollinations, then Cehpoint,
+  falling back automatically on errors, timeouts and rate limits; **Test connection** shows which
+  answered. For testing only: prompts go to those third-party services.
+- **AI usage**: a small note after every ✨ request with tokens and time; **? → AI usage** lists
+  every call of the session with its exact input and output, plus today and all-time totals.
+- **AI is optional**; preferences for the celebration animation and opening the Inspector in a new tab.
+
+<img src="docs/screenshots/settings-ai.png" alt="Settings page with AI provider tiles including Free (test)" width="720">
+
+<img src="docs/screenshots/ai-usage.png" alt="AI usage list with each call's tokens, input and output" width="720">
+
+Details → [docs/FEATURES.md#17-settings--ai-providers](docs/FEATURES.md#17-settings--ai-providers)
+
+### Safety, privacy and limits
+
+- **Your data stays yours**: no accounts, analytics or tracking; org data goes to an AI provider
+  only when you press ✨.
+- **Confirmations** before destructive or account-level actions; **AI never acts on its own**:
+  every result is shown first.
+- **Managed package items** are read-only; **your Salesforce permissions apply**; Apex classes and
+  triggers can't be created directly in production (Salesforce rule).
+- **Quick "can I…?" answers**: a question-by-question list of what SaralForce can do and where.
+
+Details → [docs/FEATURES.md#18-safety-privacy-and-limits](docs/FEATURES.md#18-safety-privacy-and-limits) ·
+[Quick "can I…?" answers](docs/FEATURES.md#19-quick-can-i-answers)
 
 ## Installation
 
-### Quick install (Microsoft Edge)
+### From the store
 
-Install directly from the Edge Add-ons store:
-**[SaralForce on Microsoft Edge](https://microsoftedge.microsoft.com/addons/detail/saralforce/nabomjoibaaoialocfpphgcmfldjmeik)**.
+- **Google Chrome**: [SaralForce on the Chrome Web Store](https://chromewebstore.google.com/detail/saralforce/fgapgjgejookdgliokajnbfkabkifclg)
+- **Microsoft Edge**: [SaralForce on Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/saralforce/nabomjoibaaoialocfpphgcmfldjmeik)
 
-The Chrome Web Store version is coming soon.
+Then open any Salesforce page and click the floating SaralForce button.
 
-### Prerequisites
+### Load unpacked (developers)
 
-- Google Chrome (v88+) or Microsoft Edge browser
-- Node.js with npm (for React dependencies)
-- A Salesforce org where you have System Administrator permissions
-- An API key from at least one LLM provider
-
-### Setup
+Prerequisites: Chrome or Edge, Node.js with npm, and a Salesforce org (System Administrator
+for setup and deploy features).
 
 1. **Clone or download this repository**
-
 2. **Install dependencies** (to get React):
    ```bash
    cd sf-object-creator
    npm install
    npm run copy-react
    ```
-
-3. **Load the extension in Chrome**:
-   - Open `chrome://extensions/`
-   - Enable **Developer mode** (toggle in top right)
-   - Click **Load unpacked**
-   - Select the `addon` subdirectory of this project
-
-4. **Configure your LLM provider**:
-   - Click the extension icon on any Salesforce page
-   - Click **Options** (or open `options.html` from the extension)
-   - Select your LLM provider (OpenAI, Claude, Gemini, OpenRouter, or OpenAI-compatible)
-   - Enter your API key
-   - Select a model
-   - Click **Save Settings** then **Test Connection**
-
-5. **Start creating objects**:
-   - Navigate to your Salesforce org
-   - Click the extension icon
-   - Click **SaralForce** sidebar button
-   - Describe the object you want to create!
+3. **Load the extension**:
+   - Open `chrome://extensions/` (or `edge://extensions/`)
+   - Enable **Developer mode**
+   - Click **Load unpacked** and select the `addon` folder of this project
+4. **Set up AI (optional)**:
+   - Open Settings (**?** → Open Settings, or the extension's options page)
+   - Pick **Free (test)** to try the ✨ features with no key, or pick a provider, paste your API
+     key and pick a model
+   - Click **Save settings** (the browser asks for access to the AI hosts) then **Test connection**
+5. **Start**: open your Salesforce org, click the SaralForce button, and pick a tool or describe
+   an object in the AI Object Builder.
 
 ## Usage Examples
 
@@ -228,12 +560,26 @@ Create a customer support ticket object that relates to Accounts and Contacts, w
 **AI Output**: Creates a `Support_Ticket__c` object with Lookup fields to Account and Contact, plus Priority picklist, Status picklist, and assignment fields.
 
 ### Example 3: Refinement
-After the initial proposal, you can say:
+After the initial proposal, you can say (or use ✨ **Ask AI** in Plan mode):
 ```
 Add a field for the resolution notes and make the priority field required
 ```
 
 The AI will update the proposal accordingly.
+
+### Example 4: Write SOQL from plain English
+In SOQL, tick *Enable LLM assistance* and ask:
+```
+open cases for gold accounts created this month, newest first
+```
+
+The AI writes the query with your org's real field names and picklist values; **Use & Run**.
+
+### Example 5: A validation rule without formulas
+In Metadata → Validation Rules → ✨ **Use AI**:
+```
+close date can't be in the past when stage is Closed Won
+```
 
 ## Supported Field Types
 
@@ -242,11 +588,14 @@ The AI will update the proposal accordingly.
 | Text | Short text (up to 255 chars) |
 | Text Area | Multi-line text |
 | Text Area (Long) | Very long text content |
+| Text Area (Rich) | Formatted text with images and links |
+| Text (Encrypted) | Sensitive text shown masked (up to 175 chars) |
 | Number | Numeric values |
 | Currency | Monetary amounts |
 | Percent | Percentage values |
 | Date | Date only |
 | Date/Time | Date and time |
+| Time | Time of day without a date |
 | Checkbox | Boolean true/false |
 | Picklist | Single select from values |
 | Picklist (Multi-Select) | Multiple select from values |
@@ -259,26 +608,23 @@ The AI will update the proposal accordingly.
 | Roll-Up Summary | COUNT, SUM, MIN or MAX of child records (master side of a Master-Detail) |
 | Auto Number | System-generated sequence, e.g. INV-{0000} |
 | Geolocation | Latitude and longitude |
-| Time | Time of day without a date |
-| Text Area (Rich) | Formatted text with images and links |
-| Text (Encrypted) | Sensitive text shown masked (up to 175 chars) |
 
 Picklists can also use an org **global value set**, or depend on a **controlling field**
 (picklist or checkbox) with a value-by-value dependency matrix. Any field can turn on
 **history tracking** and **help text**.
 
-## LLM Provider Configuration
-
-OpenAI, Anthropic Claude, Google Gemini, OpenRouter, and any OpenAI-compatible endpoint
-(OpenCodeZen, etc.) are supported. One configuration drives every AI feature —
-the object-builder chat, Enhance Prompt, SOQL query repair, Apex pre-check, and
-debug-log analysis.
-
-- **API Key**: your provider's key (stored only in your browser's local storage)
-- **Base URL**: only needed for OpenAI-compatible endpoints and OpenRouter
-- **Models**: the Options page always lists the currently supported models
-
 ## What's New
+
+### Next release
+- **Sandbox Studio** (SandShift) — create, clone, refresh, activate or discard and delete sandboxes from
+  production; back up metadata and data before a refresh and restore it; post-refresh steps for email,
+  scheduled jobs, outbound flows, integrations and who can log in
+- **Org Handbook** (Metadata) — an onboarding view of any org: a checklist, business processes and the life
+  of a record, every flow in plain words with a simple diagram, Ask the org, What's new and people; kept in
+  this browser, exported whole as HTML or Markdown
+- **Free (test) AI provider** — try the ✨ features with no key; requests go to free public endpoints (LLM7,
+  Pollinations, Cehpoint) with automatic fallback. For testing only
+- **AI settings apply without a reload** — saving a provider, key or model takes effect in open panels at once
 
 ### v2.3.3
 - **Movable launcher** — drag the SaralForce button anywhere on the page; it stays there on every
@@ -673,24 +1019,31 @@ debug-log analysis.
 
 ```
 sf-object-creator/
-├── addon/
-│   ├── manifest.json          # Chrome Extension Manifest V3
-│   ├── background.js          # Service worker (session + LLM proxy)
-│   ├── inspector.js           # Salesforce API layer (REST/SOAP)
-│   ├── inspector-tools.js     # Inspector tabs (Records, SOQL, Run-Apex, Users, Logs, …)
-│   ├── object-creator.html/js # Main feature page (chat, preview, inspector shell)
-│   ├── options.html/js        # LLM provider settings
-│   ├── button.js/css          # Content script (injected into SF pages)
-│   ├── sf-time.js             # Shared time-zone helpers
+├── addon/                     # The shipped extension (no build step; React is the global h)
+│   ├── manifest.json          # Manifest V3
+│   ├── background.js          # Service worker (session lookup, LLM proxy)
+│   ├── button.js/css          # Content script: launcher button, Show API Names
+│   ├── inspector.js           # Salesforce API layer and apiVersion
+│   ├── inspector-tools.js     # Inspector tab registry
+│   ├── inspector/
+│   │   ├── inspector-panel.js # Inspector shell
+│   │   ├── tabs/              # One module per tool (Records, SOQL, SandShift, …)
+│   │   └── shared/            # Shared panel components and session state
+│   ├── core/                  # Logic without UI: sf-client, bulk, deploy, access, handbook, …
+│   ├── builder/               # AI Object Builder Metadata XML / SOAP and plan editor
+│   ├── object-creator.html/js # Main page: builder chat, preview, inspector shell
+│   ├── options.html/js        # Settings and AI providers
 │   ├── llm/
-│   │   ├── llm-service.js     # Provider abstraction + config
-│   │   ├── openai.js          # OpenAI adapter
-│   │   ├── claude.js          # Anthropic Claude adapter
-│   │   ├── gemini.js          # Google Gemini adapter
-│   │   └── openai-compatible.js
-│   ├── prompts/
-│   │   └── system-prompt.js   # AI prompt engineering
+│   │   ├── llm-service.js     # Provider registry, defaults and fallback models
+│   │   ├── free-test.js       # Free (test) provider with endpoint fallback
+│   │   ├── openai.js · claude.js · gemini.js · openai-compatible.js
+│   │   └── stream.js
+│   ├── prompts/system-prompt.js
+│   ├── ui/                    # Tours, confirmations, AI usage, GitHub settings
 │   └── styles/slds/           # Salesforce Lightning Design System CSS
+├── scripts/                   # Dev server with mock org, packaging, screenshots
+├── test/unit/                 # node --test unit tests
+├── docs/                      # FEATURES.md, screenshots
 └── package.json
 ```
 
@@ -703,35 +1056,46 @@ sf-object-creator/
   is no SaralForce server in between
 - AI requests carry only what the feature needs (your description, the relevant schema or code,
   or error text); record data stays in your org unless you paste it in
+- The **Free (test)** provider sends prompts to third-party public endpoints (LLM7, Pollinations,
+  Cehpoint): use it to try features, and your own key for real org data
 - Deploys, deletes, rollbacks and data changes ask first and name the target org; AI-written code
   must pass a lint and a Salesforce compile check before it can be deployed
 - Signs in with OAuth2 PKCE or your existing Salesforce session cookie
 
 ## Permissions
 
-- `cookies`: Read Salesforce session cookies for API authentication
-- `storage`: Keep settings, AI keys and the GitHub connection in the extension's storage
-- Host permissions for Salesforce domains (needed to inject the inspector on your pages)
-- **Optional** host permission for `https://*/*`: requested only when you save an AI
-  provider in Settings — it covers the chosen AI endpoint (or a custom OpenAI-compatible
-  URL) — or connect GitHub (`api.github.com`). Without it, everything except AI and GitHub
-  calls works as before
+- `cookies`: read Salesforce session cookies for API authentication
+- `storage`: keep settings, AI keys and the GitHub connection in the extension's storage
+- Host permissions for Salesforce domains (`*.salesforce.com`, `*.force.com`,
+  `*.visualforce.com` and the other Salesforce hosts), needed to run the panel on your pages
+- **Optional** host permission for `https://*/*`: requested only when you click **Save settings**
+  for an AI provider (just that provider's hosts; all three for Free (test), or your custom
+  OpenAI-compatible URL) or connect GitHub (`api.github.com`). Without it, everything except AI
+  and GitHub calls works
 
 ## Development
 
 ```bash
-# Install dependencies
+# Install dependencies and copy React into addon/
 npm install
-
-# Copy React files to addon directory
 npm run copy-react
 
-# Load in Chrome
-# 1. Open chrome://extensions/
-# 2. Enable Developer mode
-# 3. Click Load unpacked
-# 4. Select the addon/ directory
+# Lint and unit tests
+npm run lint
+npm test
+
+# Preview the panel against a mock org
+npm run dev
+
+# Regenerate the README screenshots (run while npm run dev is up)
+npm run readme-shots
+
+# Build the store zip
+npm run package
 ```
+
+To load the extension: open `chrome://extensions/`, enable Developer mode, click
+**Load unpacked** and select the `addon/` folder.
 
 ## License
 

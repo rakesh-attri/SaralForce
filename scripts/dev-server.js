@@ -421,6 +421,10 @@ function api(req, res, url) {
     if (limit) records = records.slice(0, Number(limit[1]));
     return json(res, 200, soqlPage(q, records, Number(cursor[1]), from ? from[1] : "SObject"));
   }
+  // A misspelt field fails like Salesforce does (the SOQL ✨ fix demo).
+  if (/\/(query|queryAll)\/?$/.test(p) && /\bNme\b/.test(url.searchParams.get("q") || "")) {
+    return json(res, 400, [{errorCode: "INVALID_FIELD", message: "\nSELECT Id, Nme FROM Account LIMIT 50\n           ^\nERROR at Row:1:Column:12\nNo such column 'Nme' on entity 'Account'. If you are attempting to use a custom field, be sure to append the '__c' after the custom field name."}]);
+  }
   if (/\/(query|queryAll)\/?$/.test(p)) return json(res, 200, soqlResult(url.searchParams.get("q") || "", p.includes("/tooling/")));
   if (/\/limits\/?$/.test(p)) return json(res, 200, limitsBody());
   if (/\/sobjects\/?$/.test(p)) return json(res, 200, {encoding: "UTF-8", maxBatchSize: 200, sobjects: sobjectList});
@@ -684,8 +688,18 @@ function mockLlm(req, res) {
         explanation: "Blocks saving an Energy account with no phone, unless you are a System Administrator."})
       : /request into ONE valid SOQL/.test(system)
       ? JSON.stringify({query: "SELECT Id, Name, Industry FROM Account WHERE Industry = 'Energy' LIMIT 200", explanation: "Accounts in the Energy industry, up to 200."})
+      : /rewrite the user's request for a Salesforce custom-object design assistant/.test(system)
+      ? "Create a Support Ticket object to track customer issues for Accounts. Must-have fields: Subject (text), Description (long text), " +
+        "Priority (picklist: Low, Medium, High, Critical), Status (picklist: New, In Progress, Waiting on Customer, Resolved), " +
+        "SLA Due Date (date/time) and a lookup to Account and Contact. Nice to have: Resolution Notes and a formula flag for overdue tickets. " +
+        "Expect about 2,000 tickets a month; agents own their tickets and managers see their team's."
+      : /reviewing ONE Salesforce debug log/.test(system)
+      ? "WHAT HAPPENED\nA trigger on Account called PaymentGateway.applyCredits, which ran a query and an update for each of 12 invoices, then stopped at line 22.\n\n" +
+        "ERRORS\nSystem.NullPointerException: Attempt to de-reference a null object (PaymentGateway, line 22).\n\n" +
+        "DEBUG HIGHLIGHTS\nThe same SELECT on Account ran 12 times from line 15, and Update Account ran 12 times from line 18. The callout to pay.example.com took 2.4 s.\n\n" +
+        "NEXT STEP\nCheck the variable used on line 22 for null before using it, and move the query and update out of the loop."
       : /suggest|fix/i.test(system) && /fixedQuery/.test(system)
-      ? JSON.stringify({explanation: "Mock fix.", fixedQuery: "SELECT Id, Name FROM Account LIMIT 50"})
+      ? JSON.stringify({explanation: "Account has no field called Nme: it is a typo for Name.", fixedQuery: "SELECT Id, Name FROM Account LIMIT 50"})
       : "Returns the Id and Name of up to 50 Account records. There is no filter, so any 50 accounts may come back.";
     // Token usage like a real endpoint (about 4 characters a token).
     const promptTokens = Math.round(JSON.stringify(body.messages || []).length / 4);
