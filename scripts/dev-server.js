@@ -13,6 +13,7 @@ import {fileURLToPath} from "node:url";
 import {accessTables, metadataTables, permissionSetDescribe, applyWhere} from "./mock-access-metadata.js";
 import {Readable} from "node:stream";
 import {releaseSoap, releaseRest, resetRelease} from "./mock-release.js";
+import {sandboxRest, addSandboxChecklistMock} from "./mock-sandboxes.js";
 import {addOrgGuideMock, orgGuideLlm, addOrgGuideDescribes, addOrgGuideApps, addOrgGuidePeople, askOrgLlm} from "./mock-org-guide.js";
 import {mockGithub, githubState, resetGithub} from "./mock-github.js";
 
@@ -172,6 +173,7 @@ const tables = {
 addOrgGuideMock(tables);
 addOrgGuideApps(tables);
 addOrgGuidePeople(tables);
+addSandboxChecklistMock(tables);
 addOrgGuideDescribes(describes, field);
 
 // Bundle files need ids so edits PATCH them in place.
@@ -389,6 +391,7 @@ function api(req, res, url) {
   }
   if (/\/tooling\/runTestsAsynchronous\/?$/.test(p) && req.method === "POST") return json(res, 200, TEST_JOB);
   if (p.startsWith("/services/Soap/s/") && req.method === "POST") return mockExecuteAnonymous(req, res);
+  if (sandboxRest(req, res, url, json, {soqlResult})) return undefined;
   if (releaseRest(req, res, url, json)) return undefined;
   if (p.startsWith("/services/Soap/m/") && req.method === "POST") {
     // Release Center calls (and the second mock org) first, then the rest.

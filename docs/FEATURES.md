@@ -26,7 +26,7 @@ what you can **change**, how to do it, and where the limits are.
 13. [Metadata](#13-metadata) — Apex · Triggers · Visualforce · LWC · Aura · Flows · Validation Rules · Custom Metadata · Schema · Org Handbook · New · package.xml
 14. [Org Info](#14-org-info)
 15. [App Tab Manager](#15-app-tab-manager)
-16. [SandShift (release center)](#16-sandshift-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · GitHub
+16. [SandShift (release center)](#16-sandshift-release-center) — Compare orgs · Changes · Package · Deploy · Manual steps · History · Impact · Sandbox Studio · GitHub
 17. [Settings & AI providers](#17-settings--ai-providers)
 18. [Safety, privacy and limits](#18-safety-privacy-and-limits)
 19. [Quick "can I…?" answers](#19-quick-can-i-answers)
@@ -567,6 +567,24 @@ Move changes between any two orgs you're logged into in this browser (sandbox �
 History and snapshots live in this browser (IndexedDB); nothing is uploaded. Clearing site data removes them, so download releases you want to keep.
 
 Before you deploy, the checks call out profiles (they overwrite), flows (arrive inactive in production unless set otherwise), Apex still using `WITH SECURITY_ENFORCED`, and deletes.
+
+### 16.1 Sandbox Studio 🏖️ ✏️
+
+Sandbox manager, run from **production** (sign in to it in this browser as an admin; pick it under *Production org*). Uses the Tooling API (SandboxInfo / SandboxProcess).
+
+| You can | Details |
+|---|---|
+| See them all | Stats (total, Developer, Developer Pro, Partial Copy, Full Copy, processing; click to filter), a table with license, status (with a copy-progress bar), last refresh, age (amber after 30 days, red after 90), description and login URL. Search, type and status filters, **Columns**, **Export CSV**, URL style (**Domain** `mydomain--name.sandbox.my.salesforce.com` or test.salesforce.com). Running copies are re-read every 30 seconds and you're told when one is ready or waiting for activation. Deleted ones show under the *Deleted* filter. |
+| Stale sandboxes | A banner for sandboxes not refreshed in 30+ days, with **Refresh all stale (Developer)** (type REFRESH to confirm). |
+| Select several | **Copy URLs**, **Export selected**, **Refresh selected**, **Compare (2)** (opens SandShift Compare with both sandboxes; you must be logged in to them here). |
+| ＋ New sandbox | Name (1–10 letters and digits, checked as you type), type, description, template Id (Partial / Full), object history and Chatter (Full), **post-copy Apex class** (classes that implement SandboxPostCopy), **activation group** (who can log in), **auto-activate** (off by default so a refresh can still be discarded). |
+| ⧉ Clone | A new sandbox copied from an existing one (its metadata and data). |
+| ↻ Refresh | The same settings, prefilled; warns when Salesforce's interval (Developer / Developer Pro 1 day, Partial 5, Full 29) hasn't passed; **💾 Back up first** (metadata and the objects you pick, when you're logged in to the sandbox); **type the sandbox name** to confirm. |
+| Activate / Discard | When a refresh is *Pending activation*: **Activate** (the previous copy is deleted) or **Discard the refresh** (type the name; the previous copy stays: the real undo of a refresh). |
+| 🗑 Delete | Type the sandbox name to confirm. |
+| Details | Click a name: settings, refresh history (every SandboxProcess), when the next refresh is allowed, its org Id. |
+| 💾 Backups | Metadata snapshot (Apex, components, flows, objects, security) and data of the objects you pick (Bulk API), kept in this browser with storage use shown. **Restore metadata** opens Deploy with a restore plan (validate, then deploy); **Restore data** inserts the records again, parents first, with lookups between restored objects pointed at the new records (createable fields; up to 50,000 rows per object; files, attachments and history aren't restored). Download each object's CSV. |
+| ✅ Post-refresh steps | Run inside the refreshed sandbox (log in to it here), with a progress bar kept per sandbox. **Email deliverability**: open Setup → Deliverability and **Check** whether this sandbox may send email (no email is sent; Salesforce has no API to change it). **".invalid" emails**: list active users and fix the ones you pick. **Scheduled jobs**: list, pause (abort) the picked ones, or re-create production's Apex schedules. **Flows that reach the outside world**: active flows with email alerts, email, callouts or Apex actions, deactivate the picked ones. **Integrations**: named credentials and remote sites with production-looking endpoints flagged (with Setup links), and custom setting values containing the production domain, replaced with the sandbox host for the picked ones. **Who can log in**: freeze everyone outside a public group (type FREEZE). **Restore my backup**, and **your own steps**. Nothing changes without a click and a confirmation. |
 
 ## 17. Settings & AI providers
 

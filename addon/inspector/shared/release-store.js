@@ -5,7 +5,7 @@ import {writeZip, readZip, textToBytes, bytesToText} from "../../core/zip.js";
 import {componentsFromZip} from "../../core/deploy.js";
 
 const DB = "saralforce-release";
-const VERSION = 3;
+const VERSION = 4; // 4: sandbox backups
 let dbPromise = null;
 
 function openDb() {
@@ -19,6 +19,7 @@ function openDb() {
       if (!db.objectStoreNames.contains("blobs")) db.createObjectStore("blobs", {keyPath: "id"});
       if (!db.objectStoreNames.contains("drafts")) db.createObjectStore("drafts", {keyPath: "id"});
       if (!db.objectStoreNames.contains("session")) db.createObjectStore("session", {keyPath: "id"});
+      if (!db.objectStoreNames.contains("backups")) db.createObjectStore("backups", {keyPath: "id"});
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => { dbPromise = null; reject(req.error || new Error("Could not open release history")); };
@@ -90,6 +91,23 @@ export async function saveSnapshot(meta, files) {
   await saveBytes(snap.id, zip);
   await tx("snapshots", "readwrite", s => s.put(snap));
   return snap;
+}
+
+// ── Sandbox backups: {id, sandbox, orgHost, at, snapshotId, data: [{object,
+// rows, blobId, fields, refs}], size}. Each object's CSV is its own blob.
+export async function saveBackup(b) {
+  const row = {...b, id: b.id || newId("bak"), at: b.at || new Date().toISOString()};
+  await tx("backups", "readwrite", s => s.put(row));
+  return row;
+}
+export async function listBackups() {
+  return byNewest(await tx("backups", "readonly", s => s.getAll()));
+}
+export async function deleteBackup(id) {
+  const b = await tx("backups", "readonly", s => s.get(id));
+  await tx("backups", "readwrite", s => s.delete(id));
+  for (const d of (b && b.data) || []) if (d.blobId) await tx("blobs", "readwrite", s => s.delete(d.blobId));
+  if (b && b.snapshotId) await deleteSnapshot(b.snapshotId);
 }
 
 // Snapshot zip → components (componentsFromZip shape).

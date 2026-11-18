@@ -82,12 +82,15 @@
               break;
             case "getSession":
               // "localhost" stands in for a second org (a UAT sandbox).
+              // "127.0.0.3" stands in for production (Sandbox Manager).
               respond(msg.sfHost === "localhost"
                 ? {key: "FAKE_SESSION_2", hostname: "localhost"}
+                : msg.sfHost === "127.0.0.3" ? {key: "FAKE_SESSION_PROD", hostname: "127.0.0.3"}
                 : {key: "FAKE_SESSION", hostname: "127.0.0.1"});
               break;
             case "listOrgs":
-              respond([{orgId: "00D5g000000DemoAAA", host: "127.0.0.1"}, {orgId: "00D5g000000UatAAA", host: "localhost"}]);
+              respond([{orgId: "00D5g000000DemoAAA", host: "127.0.0.1"}, {orgId: "00D5g000000UatAAA", host: "localhost"},
+                {orgId: "00D5g000000ProdAAA", host: "127.0.0.3"}]);
               break;
             case "openOptions":
               respond({ok: true});
@@ -208,7 +211,7 @@
   <script>
     (function () {
       // Rewrite to whichever local origin served this page (npm run dev).
-      var FIX_RE = /^https:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//;
+      var FIX_RE = /^https:\/\/(127\.0\.0\.[13]|localhost)(:\d+)?\//;
       // GitHub goes to the mock repo (scripts/mock-github.js).
       var GH_RE = /^https:\/\/api\.github\.com\//;
       var fix = function (u) {

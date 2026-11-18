@@ -9,11 +9,12 @@ import {ffStoppedError, ffSleep} from "./hooks.js";
 // responseType ("json" | "text"), signal. Resolves {status, headers, text, json}.
 async function ffBulkFetch(path, opts) {
   const o = opts || {};
-  if (!sfConn.instanceHostname || !sfConn.sessionId) throw new Error("No active Salesforce session");
+  // o.client: another org's client (SandShift org list); default this org.
+  if (!o.client && (!sfConn.instanceHostname || !sfConn.sessionId)) throw new Error("No active Salesforce session");
   const responseType = o.responseType || "json";
   let res;
   try {
-    res = await sf.request(path, {
+    res = await (o.client || sf).request(path, {
       method: o.method || "GET",
       headers: o.headers,
       body: o.body,
@@ -58,19 +59,20 @@ async function ffBulkQueryCreate(soql, opts) {
       operation: o.allRows ? "queryAll" : "query",
       query: String(soql || "").trim()
     },
-    signal: o.signal
+    signal: o.signal,
+    client: o.client
   });
   return r.json;
 }
 
 function ffBulkQueryStatus(jobId, opts) {
-  return ffBulkFetch(`/services/data/v${apiVersion}/jobs/query/${jobId}`, {signal: signalOf(opts)}).then(r => r.json);
+  return ffBulkFetch(`/services/data/v${apiVersion}/jobs/query/${jobId}`, {signal: signalOf(opts), client: opts && opts.client}).then(r => r.json);
 }
 
 async function ffBulkQueryResults(jobId, locator, opts) {
   const path = `/services/data/v${apiVersion}/jobs/query/${jobId}/results` +
     (locator ? `?locator=${encodeURIComponent(locator)}` : "");
-  const r = await ffBulkFetch(path, {headers: {Accept: "text/csv"}, responseType: "text", signal: signalOf(opts)});
+  const r = await ffBulkFetch(path, {headers: {Accept: "text/csv"}, responseType: "text", signal: signalOf(opts), client: opts && opts.client});
   // Sforce-Locator present => more result chunks remain.
   return {csv: r.text, locator: r.headers.get("Sforce-Locator")};
 }

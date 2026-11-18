@@ -20,6 +20,7 @@ import {DeployView, resumeDeploy} from "./release-deploy.js";
 import {HistoryView} from "./release-history.js";
 import {ManualView} from "./release-manual.js";
 import {ImpactView} from "./release-impact.js";
+import {SandboxesView} from "./release-sandboxes.js";
 import {listReleases, listDrafts, putDraft, deleteDraft} from "../shared/release-store.js";
 import {lastReleaseAt} from "../../core/release-history.js";
 
@@ -32,7 +33,8 @@ const RELEASE_VIEWS = [
   {id: "deploy", label: "Deploy", icon: "🚀", hint: "Validate, quick deploy, deploy now"},
   {id: "manual", label: "Manual steps", icon: "🧰", hint: "What a deploy can’t do: run or check off"},
   {id: "history", label: "History", icon: "🗂️", hint: "Versions, rollback, snapshots, drift"},
-  {id: "impact", label: "Impact", icon: "🎯", hint: "Safe to change or delete?"}
+  {id: "impact", label: "Impact", icon: "🎯", hint: "Safe to change or delete?"},
+  {id: "sandboxes", label: "Sandbox Studio", icon: "🏖️", hint: "Create, refresh, back up, post-refresh steps"}
 ];
 
 const SINCE_PICKS = [
@@ -510,5 +512,6 @@ export function ReleaseTab() {
           : cur.id === "history" ? h(HistoryView, {goTo})
             : cur.id === "manual" ? h(ManualView, {goTo})
               : cur.id === "impact" ? h(ImpactView, {goTo})
+              : cur.id === "sandboxes" ? h(SandboxesView, {goTo})
             : h(DeployView, {goTo}));
 }
