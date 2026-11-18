@@ -141,6 +141,9 @@ function TechnicalGuide({request, getItems}) {
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState(null);
   const [useAi, setUseAi] = React.useState(() => hasValidConfig());
+  // Saving AI settings in another tab turns this on without a reload.
+  const aiReady = hasValidConfig();
+  React.useEffect(() => { if (aiReady) setUseAi(true); }, [aiReady]);
   const [copied, setCopied] = React.useState(null);
   const abortRef = React.useRef(null);
   const focusRef = React.useRef(null);
@@ -378,6 +381,9 @@ function OrgGuideView() {
   const [status, setStatus] = React.useState("");
   const [error, setError] = React.useState(null);
   const [useAi, setUseAi] = React.useState(() => hasValidConfig());
+  // Saving AI settings in another tab turns this on without a reload.
+  const aiReady = hasValidConfig();
+  React.useEffect(() => { if (aiReady) setUseAi(true); }, [aiReady]);
   const [copied, setCopied] = React.useState(null);
   const [flowSel, setFlowSel] = React.useState(null);
   const [procSel, setProcSel] = React.useState(null);

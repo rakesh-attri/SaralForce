@@ -150,7 +150,7 @@ function useAiExplain() {
     try { setState({text: await explainMetadata(kind, name, source)}); }
     catch (e) { setState({error: e.message === "NO_LLM_CONFIG" ? "NO_LLM_CONFIG" : e.message}); }
   };
-  const view = state && (state.busy
+  const view = state && !(state.error === "NO_LLM_CONFIG" && hasValidConfig()) && (state.busy
     ? h("div", {className: "insp-status-info"}, "Asking the AI…")
     : state.error === "NO_LLM_CONFIG"
     ? h("div", {className: "insp-warn"}, "AI explain needs a provider + API key. ",

@@ -88,7 +88,7 @@ export function DataQualityPanel({describe, onFilter}) {
         h("div", {className: "dq-stat"}, h("div", {className: "dq-stat-v"}, state.n), h("div", {className: "dq-stat-l"}, "Records sampled")),
         h("div", {className: "dq-stat"}, h("div", {className: "dq-stat-v"}, state.profiles.length), h("div", {className: "dq-stat-l"}, "Fields profiled")),
         h("div", {className: "dq-stat"}, h("div", {className: "dq-stat-v"}, state.result.issues.length), h("div", {className: "dq-stat-l"}, "Issues"))),
-      ai && ai.error === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},
+      ai && ai.error === "NO_LLM_CONFIG" && !hasValidConfig() && h("div", {className: "insp-warn"},
         "AI review needs a provider + API key. ",
         h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")),
       ai && ai.error && ai.error !== "NO_LLM_CONFIG" && h("div", {className: "insp-error"}, "AI request failed: " + ai.error),

@@ -2,9 +2,27 @@ import {OpenAIProvider} from "./openai.js";
 import {ClaudeProvider} from "./claude.js";
 import {GeminiProvider} from "./gemini.js";
 import {OpenAICompatibleProvider} from "./openai-compatible.js";
+import {FreeTestProvider} from "./free-test.js";
 import {getSetting, setSetting} from "../core/storage.js";
 
+// Free OpenAI-compatible endpoints behind "Free (test)", tried in this order
+// (each checked by hand on 2026-11-18: chat, streaming, JSON). None needs a
+// real key: LLM7 accepts any placeholder, the others take none.
+export const FREE_ENDPOINTS = [
+  {id: "llm7", name: "LLM7", baseUrl: "https://api.llm7.io/v1", apiKey: "unused", model: "default"},
+  {id: "pollinations", name: "Pollinations", baseUrl: "https://text.pollinations.ai/openai", apiKey: "", model: "openai"},
+  {id: "cehpoint", name: "Cehpoint", baseUrl: "https://ai-api.cehpoint.co.in/v1", apiKey: "", model: "cehpoint-ai"}
+];
+
 export const LLM_PROVIDERS = {
+  free_test: {
+    name: "Free (test)",
+    models: [],
+    defaultModel: "auto",
+    requiresApiKey: false,
+    free: true,
+    apiKeyPlaceholder: ""
+  },
   openai: {
     name: "OpenAI",
     models: [
@@ -121,6 +139,29 @@ export function validateBaseUrl(providerId, baseUrl) {
 // Match pattern for the origin a provider will call, or null when no
 // permission is needed (loopback / unparseable / not configured).
 export function providerPermissionOrigin(providerId, baseUrl) {
+  return providerPermissionOrigins(providerId, baseUrl)[0] || null;
+}
+
+function originOf(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" || isLoopbackHost(u.hostname)) return null;
+    return u.origin + "/*";
+  } catch (e) {
+    return null;
+  }
+}
+
+// Every origin a provider may call ("Free (test)" calls several).
+export function providerPermissionOrigins(providerId, baseUrl) {
+  if (LLM_PROVIDERS[providerId] && LLM_PROVIDERS[providerId].free) {
+    return Array.from(new Set(FREE_ENDPOINTS.map(ep => originOf(ep.baseUrl)).filter(Boolean)));
+  }
+  const one = singleProviderOrigin(providerId, baseUrl);
+  return one ? [one] : [];
+}
+
+function singleProviderOrigin(providerId, baseUrl) {
   const fixed = FIXED_PROVIDER_ORIGINS[providerId];
   if (fixed) return fixed;
   const raw = effectiveBaseUrl(providerId, baseUrl);
@@ -133,14 +174,17 @@ export function providerPermissionOrigin(providerId, baseUrl) {
 }
 
 export function checkProviderNetworkAccess(providerId, baseUrl) {
-  const origin = providerPermissionOrigin(providerId, baseUrl);
-  if (!origin) return Promise.resolve(true);
+  return checkOrigins(providerPermissionOrigins(providerId, baseUrl));
+}
+
+function checkOrigins(origins) {
+  if (!origins.length) return Promise.resolve(true);
   if (typeof chrome === "undefined" || !chrome.permissions || !chrome.permissions.contains) {
     return Promise.resolve(true);
   }
   return new Promise((resolve) => {
     try {
-      chrome.permissions.contains({origins: [origin]}, (ok) => resolve(!!ok));
+      chrome.permissions.contains({origins}, (ok) => resolve(!!ok));
     } catch (e) {
       resolve(true);
     }
@@ -176,8 +220,17 @@ function wrapProviderAccess(providerId, impl) {
   return impl;
 }
 
+// The fallback skips an endpoint whose host this browser has not allowed.
+export function getFreeProvider() {
+  return new FreeTestProvider(FREE_ENDPOINTS, {
+    hasAccess: (ep) => checkOrigins([originOf(ep.baseUrl)].filter(Boolean))
+  });
+}
+
 export function getLLMProvider(providerId) {
   switch (providerId) {
+    case "free_test":
+      return getFreeProvider();
     case "openai":
       return wrapProviderAccess(providerId, new OpenAIProvider());
     case "claude":

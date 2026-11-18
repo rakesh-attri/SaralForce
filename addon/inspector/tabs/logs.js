@@ -16,6 +16,7 @@ import {appTabsResolveCurrentUserId, usersEnsureDebugLevel, parseApexLog} from "
 import {LogProfileView} from "../shared/log-profile-ui.js";
 import {isLogTruncated} from "../../core/apex-anon.js";
 import {EmptyState} from "../shared/ui.js";
+import {hasValidConfig} from "../../llm/llm-service.js";
 
 const h = React.createElement;
 
@@ -1070,7 +1071,7 @@ function LogsTab() {
                   "Saved result shown — no AI call made."),
               selAnalysis && selAnalysis.pending &&
                 h("div", {className: "insp-status-info"}, "Reading the log and asking the AI…"),
-              selAnalysis && selAnalysis.error === "NO_LLM_CONFIG" &&
+              selAnalysis && selAnalysis.error === "NO_LLM_CONFIG" && !hasValidConfig() &&
                 h("div", {className: "insp-error"},
                   "No AI provider configured — set one up in Options to use the AI panel.",
                   h("button", {

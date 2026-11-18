@@ -12,6 +12,21 @@ export const SETTING_KEYS = ["llmConfig", "llmModelCache", "sfoc_celebrate", "sf
 const cache = new Map();
 let ready = false;
 let initPromise = null;
+const listeners = new Set();
+
+// fn(changedKeys) runs when another page (Settings, another tab) saved a
+// setting, after the cache holds the new value. Returns an unsubscribe.
+export function onSettingsChange(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function notify(keys) {
+  if (!keys.length) return;
+  for (const fn of Array.from(listeners)) {
+    try { fn(keys); } catch (e) { console.warn("[SaralForce] settings listener failed:", e); }
+  }
+}
 
 // True inside the extension (chrome.storage.local is available).
 function hasChromeStorage() {
@@ -51,6 +66,15 @@ export function initSettings() {
         const v = readLegacy(key);
         if (v !== undefined) cache.set(key, v);
       }
+      // Another tab of the harness saved: same live update as the extension.
+      if (typeof window !== "undefined" && window.addEventListener) {
+        window.addEventListener("storage", (e) => {
+          if (!e || !SETTING_KEYS.includes(e.key)) return;
+          if (e.newValue == null) cache.delete(e.key);
+          else cache.set(e.key, parseLegacy(e.newValue));
+          notify([e.key]);
+        });
+      }
       ready = true;
       return;
     }
@@ -75,11 +99,14 @@ export function initSettings() {
     if (chrome.storage.onChanged) {
       chrome.storage.onChanged.addListener((changes, areaName) => {
         if (areaName !== "local") return;
+        const changed = [];
         for (const [key, change] of Object.entries(changes)) {
           if (!SETTING_KEYS.includes(key)) continue;
           if (change.newValue === undefined) cache.delete(key);
           else cache.set(key, change.newValue);
+          changed.push(key);
         }
+        notify(changed);
       });
     }
     ready = true;
@@ -132,6 +159,7 @@ export function setSetting(key, value) {
 // Test hook: forget cached state so initSettings() runs again.
 export function _resetSettingsForTests() {
   cache.clear();
+  listeners.clear();
   ready = false;
   initPromise = null;
 }

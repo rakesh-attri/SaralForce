@@ -3,6 +3,7 @@
 import {parseProfile, profileForPrompt} from "../../core/log-profile.js";
 import {explainLogProfile} from "./ai.js";
 import {FFBadge} from "./ui.js";
+import {hasValidConfig} from "../../llm/llm-service.js";
 
 const h = React.createElement;
 
@@ -57,7 +58,7 @@ export function LogProfileView({text}) {
           (i.level === "err" ? "⛔ " : i.level === "warn" ? "⚠ " : "ℹ ") + i.text,
           i.query && h("code", {className: "lp-q"}, i.query))))
         : h("div", {className: "insp-meta"}, "No hot spots: no repeated queries or DML, and limits are fine."),
-      err && h("div", {className: err === "NO_LLM_CONFIG" ? "insp-warn" : "insp-error"}, err === "NO_LLM_CONFIG" ? "Add an AI provider key in Settings to use this." : "AI request failed: " + err),
+      err && !(err === "NO_LLM_CONFIG" && hasValidConfig()) && h("div", {className: err === "NO_LLM_CONFIG" ? "insp-warn" : "insp-error"}, err === "NO_LLM_CONFIG" ? "Add an AI provider key in Settings to use this." : "AI request failed: " + err),
       ai && h("div", {className: "rel-ai"}, h("div", {className: "rel-ai-h"}, h("span", null, "✨ Suggestions")), h("div", {className: "rel-ai-body"}, ai))),
     h("div", {className: "lp-section"},
       h("div", {className: "lp-h"}, "Timeline"),

@@ -812,7 +812,7 @@ function AuditCard({info}) {
         }, running ? "Auditing…" : report ? "Run again" : "Run audit")
       )
     ),
-    (!hasValidConfig() || auditErr === "NO_LLM_CONFIG") &&
+    !hasValidConfig() &&
       h("div", {className: "insp-warn"},
         "AI audit needs a provider + API key. ",
         h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")),

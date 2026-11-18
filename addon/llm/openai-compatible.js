@@ -1,6 +1,14 @@
 import {usageFromOpenAI} from "../core/ai-usage.js";
 import {sseData, parseChunk, truncatedError, blockedError, streamError} from "./stream.js";
 
+// The HTTP status travels with the error, so a fallback can tell a rate
+// limit (429) or an outage (5xx) from a bad request.
+function httpError(message, status) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
 export class OpenAICompatibleProvider {
   constructor() {
     this.name = "OpenAI Compatible";
@@ -92,11 +100,12 @@ export class OpenAICompatibleProvider {
           const response = await fetch(endpoint, {method: "POST", headers, body, signal});
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error?.message || `API error: ${response.status}`);
+            throw httpError(errorData.error?.message || `API error: ${response.status}`, response.status);
           }
           return await response.text();
         } catch (e2) {
           if (signal && signal.aborted) throw e2;
+          if (e2.status) throw e2;
           throw new Error(`Cannot reach ${endpoint}. Reload the extension and check the Base URL in AI settings. (${e2.message})`);
         }
       }
@@ -112,7 +121,7 @@ export class OpenAICompatibleProvider {
           const data = JSON.parse(res.text || "{}");
           msg = data.error?.message || data.message || msg;
         } catch (e) { /* keep status */ }
-        throw new Error(msg);
+        throw httpError(msg, res.status);
       }
       return res.text;
     }
@@ -129,7 +138,7 @@ export class OpenAICompatibleProvider {
     }
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || `API error: ${response.status}`);
+      throw httpError(errorData.error?.message || `API error: ${response.status}`, response.status);
     }
     return response;
   }
@@ -138,10 +147,9 @@ export class OpenAICompatibleProvider {
   // returns them (stream_options is not sent: some endpoints reject it).
   async sendMessage(messages, apiKey, model, onChunk, baseUrl, {signal, onUsage} = {}) {
     const endpoint = this._endpoint(baseUrl);
-    const headers = {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
-    };
+    // Some free endpoints take no key: then no Authorization header at all.
+    const headers = {"Content-Type": "application/json"};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
     // No temperature and no token cap: reasoning models behind these endpoints
     // reject both (or need max_completion_tokens instead), and a fixed cap cut
     // long code replies short. The endpoint's own defaults apply.
@@ -182,7 +190,7 @@ export class OpenAICompatibleProvider {
       message: "llmFetch",
       url: modelsUrl,
       method: "GET",
-      headers: {"Authorization": `Bearer ${apiKey}`}
+      headers: apiKey ? {"Authorization": `Bearer ${apiKey}`} : {}
     });
     if (!res || res.error || !res.ok) {
       throw new Error(`Could not list models from ${modelsUrl}: ${res?.error || "HTTP " + (res?.status ?? "?")}`);

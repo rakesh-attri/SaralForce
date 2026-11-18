@@ -161,7 +161,18 @@
         },
         remove: function (k) { localStorage.removeItem("chrome.storage:" + k); }
       },
-      onChanged: {addListener: function () {}}
+      // Like Chrome: a write from another tab reaches this page's listeners.
+      onChanged: {addListener: function (fn) {
+        window.addEventListener("storage", function (e) {
+          if (!e.key || e.key.indexOf("chrome.storage:") !== 0) return;
+          var change = {};
+          change[e.key.slice("chrome.storage:".length)] = {
+            newValue: e.newValue == null ? undefined : JSON.parse(e.newValue),
+            oldValue: e.oldValue == null ? undefined : JSON.parse(e.oldValue)
+          };
+          fn(change, "local");
+        });
+      }}
     };
     chrome.i18n = {
       getMessage: function (k) {

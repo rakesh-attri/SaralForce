@@ -4,7 +4,7 @@ import {SYSTEM_PROMPT, REFINEMENT_PROMPT, USER_MESSAGE_TEMPLATE, ENHANCE_SYSTEM_
 import {createSpinForMethod, UserInfoModel, safeCopyText} from "./utils.js";
 import {InspectorPanel, ffApplyRestore, ffTakeSnapshot, ffSetAppTabPrefill} from "./inspector-tools.js";
 import {askAi, isAiConfigured} from "./core/llm.js";
-import {initSettings} from "./core/storage.js";
+import {initSettings, onSettingsChange} from "./core/storage.js";
 import {openInspectorInNewTab} from "./core/preferences.js";
 import {showMenu} from "./ui/tour.js";
 import {installMessageFocus} from "./ui/message-focus.js";
@@ -52,6 +52,15 @@ const HELP_URL = "https://github.com/rakesh-attri/SaralForce/issues/";
 // Experience Cloud guest-user profiles (unauthenticated site visitors).
 function isGuestProfile(r) {
   return !!(r && r.UserType === "Guest");
+}
+
+const isSetupWelcome = (m) => !!(m && m.role === "system" && /configure your LLM provider/i.test(m.text || ""));
+
+function connectedWelcome() {
+  const config = getSavedConfig() || {};
+  const def = getProviderConfig(config.provider) || {name: config.provider};
+  const model = config.model && config.model !== "auto" ? ` (${config.model})` : "";
+  return `Connected to ${def.name}${model}. Describe the Salesforce object you want to create, and I'll design it for you.`;
 }
 
 class App extends React.Component {
@@ -299,9 +308,7 @@ class App extends React.Component {
       if (!hasValidConfig()) {
         this.addSystemMessage("Welcome! Before we begin, please configure your LLM provider in the Options page.");
       } else {
-        const config = getSavedConfig();
-        const providerDef = getProviderConfig(config.provider);
-        this.addSystemMessage(`Connected to ${providerDef.name} (${config.model}). Describe the Salesforce object you want to create, and I'll design it for you.`);
+        this.addSystemMessage(connectedWelcome());
       }
     }
     this.sendUserCard();
@@ -311,18 +318,28 @@ class App extends React.Component {
     if (this.state.currentProposal) {
       this.loadProfiles().catch(e => console.warn("[SaralForce] mount loadProfiles:", e.message));
     }
-    this._onStorage = (e) => {
-      if (e && e.key !== "llmConfig") return;
-      this.setState({llmConfig: getSavedConfig()});
-    };
-    window.addEventListener("storage", this._onStorage);
+    // Settings saved in another page (Settings, another tab) apply here at
+    // once: the whole panel re-renders, so every ✨ button and "Not
+    // configured" pill reads the new config without a reload.
+    this._unwatchSettings = onSettingsChange((keys) => {
+      if (!keys.includes("llmConfig")) { this.forceUpdate(); return; }
+      this.setState(prev => {
+        const next = {llmConfig: getSavedConfig()};
+        // Swap a lone "configure your provider" welcome for the connected one.
+        const msgs = prev.messages || [];
+        if (hasValidConfig() && msgs.length === 1 && isSetupWelcome(msgs[0])) {
+          next.messages = [{...msgs[0], text: connectedWelcome()}];
+        }
+        return next;
+      });
+    });
   }
 
   componentWillUnmount() {
     window.removeEventListener("keydown", this._planKeys);
     if (this._unwatchTheme) this._unwatchTheme();
     (this._apiNamesChecks || []).forEach(clearTimeout);
-    window.removeEventListener("storage", this._onStorage);
+    if (this._unwatchSettings) this._unwatchSettings();
     saveInspectorState(this.props.sfHost, this.state,
       {hostBoot: urlParams.get("hostBoot"), takeSnapshot: ffTakeSnapshot});
     this._saveState();

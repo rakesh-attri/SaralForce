@@ -436,7 +436,7 @@ function RiskCard() {
       text: "Run the check to list active users with Modify All Data, View All Data, Manage Users, Author Apex and similar, and what grants them. Read-only."}),
     running && h("div", {className: "insp-status-info"}, progress || "Checking…"),
     error && h("div", {className: "insp-error"}, error),
-    aiErr === "NO_LLM_CONFIG" && h("div", {className: "insp-warn"},
+    aiErr === "NO_LLM_CONFIG" && !hasValidConfig() && h("div", {className: "insp-warn"},
       "AI summary needs a provider + API key. ",
       h("button", {className: "field-action-btn", onClick: openSettings}, "Open Settings")),
     aiErr && aiErr !== "NO_LLM_CONFIG" && h("div", {className: "insp-error"}, "AI request failed: " + aiErr),

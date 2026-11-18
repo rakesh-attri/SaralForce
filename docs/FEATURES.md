@@ -590,7 +590,8 @@ Sandbox manager, run from **production** (sign in to it in this browser as an ad
 
 | Setting | Details |
 |---|---|
-| Providers | **OpenAI**, **Anthropic Claude**, **Google Gemini**, **OpenRouter**, any **OpenAI-compatible** endpoint. |
+| Providers | **Free (test)**, **OpenAI**, **Anthropic Claude**, **Google Gemini**, **OpenRouter**, any **OpenAI-compatible** endpoint. |
+| **Free (test)** | Try the ✨ features with no key and no model to pick. Requests go to free public OpenAI-compatible endpoints — **LLM7** (`api.llm7.io`), then **Pollinations** (`text.pollinations.ai`), then **Cehpoint** (`ai-api.cehpoint.co.in`) — and move to the next one automatically when one errors, times out or hits its rate limit (a failing endpoint rests for a minute; the one that last worked goes first). It never switches after a reply has started streaming, after a cancel, or when a reply was cut off. **Save settings** asks for access to all three hosts at once; **Test connection** tries each and shows which answered and how fast. The AI usage note names the endpoint that answered. For testing only: these are third-party services, so prompts (SOQL, metadata, log excerpts) go to them — use your own key for real org data. |
 | AI is optional | The Settings page opens with a note: every core tool works with just your Salesforce login; AI only adds the ✨ helpers. The AI assistant card shows **Ready** or **Not set up**. |
 | Key & model | Pick a provider tile, paste your API key (**Get a key ↗** links to the provider), pick a model; **Refresh list** loads the models your key can use. **Save settings**, **Test connection**, **Remove key**. |
 | Without a key | Everything except ✨ features works. |

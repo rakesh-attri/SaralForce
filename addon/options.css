@@ -509,6 +509,35 @@ a {
   color: #1849A9;
 }
 
+/* ── Free (test) provider ───────────────────────────────── */
+.opt-free {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #B2DDFF;
+  background: #EFF8FF;
+  color: #1849A9;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.opt-free p { margin: 0; }
+.opt-free p + p { margin-top: 6px; }
+
+.opt-free-warn {
+  color: #7A2E0E;
+}
+
+.opt-free-results {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.opt-free-results li.err { color: #912018; }
+
 /* ── Preferences ────────────────────────────────────────── */
 .opt-pref {
   display: flex;
