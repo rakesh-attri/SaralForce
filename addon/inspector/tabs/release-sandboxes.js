@@ -2,8 +2,8 @@
 // delete sandboxes (from production), back them up before a refresh, restore
 // after, and walk through the post-refresh checklist (in the sandbox).
 import {
-  LICENSES, licenseOf, STATUS_GROUPS, sandboxNameError, ageDays, ageTone, staleRows, nextRefresh, statsOf, loginUrl, sandboxHost,
-  sandboxBody, myDomainOf
+  LICENSES, licenseOf, STATUS_GROUPS, sandboxNameError, ageDays, ageTone, staleRows, nextRefresh, statsOf, loginUrl,
+  sandboxBody, myDomainOf, matchSandboxOrg, backupMatchesOrg
 } from "../../core/sandboxes.js";
 import {
   listSandboxes, createSandbox, refreshSandbox, deleteSandbox, setRefreshAction, postCopyClasses, publicGroups,
@@ -28,18 +28,6 @@ import {CardHead, orgOptions, OrgTag} from "./release-ui.js";
 const h = React.createElement;
 const fmtDate = ms => (ms ? new Date(ms).toLocaleString(undefined, {year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"}) : "—");
 const COLS = [["license", "License"], ["status", "Status"], ["last", "Last refresh"], ["age", "Age"], ["description", "Description"], ["url", "Login URL"]];
-
-// The sandbox's own logged-in connection, if you're logged in to it here.
-// Matched by the sandbox's org id (SandboxProcess.SandboxOrganization), then
-// by its My Domain host.
-function sandboxOrg(orgs, row, prodHost) {
-  const host = sandboxHost(row, prodHost);
-  const name = String(row.name).toLowerCase();
-  const orgId = row.process && row.process.orgId ? String(row.process.orgId).slice(0, 15) : "";
-  const live = (orgs || []).filter(o => !o.isGit && o.isSandbox);
-  return live.find(o => orgId && String(o.orgId || "").slice(0, 15) === orgId) ||
-    live.find(o => o.host === host || new RegExp(`--${name}\\.`).test(o.host)) || null;
-}
 
 export function SandboxesView({goTo}) {
   const rel = useRelease();
@@ -158,7 +146,7 @@ export function SandboxesView({goTo}) {
           (f.autoActivate ? "\n\nIt will be activated as soon as it's copied: the current copy can't be kept." : "\n\nYou activate it when it's copied (until then you can still discard it and keep the current copy).")});
       if (!ok) return false;
     }
-    const sbx = sandboxOrg(rel.orgs, row, prod.host);
+    const sbx = matchSandboxOrg(rel.orgs, row, prod.host);
     if (f.backupFirst && sbx) {
       setBusy(`Backing up ${row.name} first…`);
       await backupSandbox(sbx, {sandboxName: row.name, objects: f.backupObjects || [], metadata: true, onStatus: setBusy});
@@ -219,8 +207,8 @@ export function SandboxesView({goTo}) {
   })();
 
   const compareTwo = (a, b) => {
-    const oa = a.isOrg ? a : sandboxOrg(rel.orgs, a, prod.host);
-    const ob = b.isOrg ? b : sandboxOrg(rel.orgs, b, prod.host);
+    const oa = a.isOrg ? a : matchSandboxOrg(rel.orgs, a, prod.host);
+    const ob = b.isOrg ? b : matchSandboxOrg(rel.orgs, b, prod.host);
     const missing = [[a, oa], [b, ob]].filter(([, o]) => !o).map(([r]) => r.name);
     if (missing.length) { setError(`Log in to ${missing.join(" and ")} in this browser first (open its login URL), then try again.`); return; }
     setRelease({sourceHost: oa.host, targetHost: ob.host, compare: null, compareOnly: null, selected: new Set()});
@@ -361,7 +349,7 @@ function SandboxForm({mode, row, rows, prod, orgs, onCancel, onSubmit}) {
   const [classes, setClasses] = React.useState(null);
   const [groups, setGroups] = React.useState(null);
   const [cands, setCands] = React.useState(null);
-  const sbx = mode === "refresh" ? sandboxOrg(orgs, base, prod.host) : null;
+  const sbx = mode === "refresh" ? matchSandboxOrg(orgs, base, prod.host) : null;
   React.useEffect(() => {
     postCopyClasses(prod.conn).then(setClasses).catch(() => setClasses([]));
     publicGroups(prod.conn).then(setGroups).catch(() => setGroups([]));
@@ -418,7 +406,7 @@ function SandboxForm({mode, row, rows, prod, orgs, onCancel, onSubmit}) {
 
 // ─── Drawer: overview, backups, post-refresh ────────────────────────
 function SandboxDrawer({row, prod, orgs, tab, setTab, goTo, url}) {
-  const sbx = sandboxOrg(orgs, row, prod.host);
+  const sbx = matchSandboxOrg(orgs, row, prod.host);
   return h("div", {className: "sbx-drawer"},
     h("div", {className: "og-view-tabs"},
       [["overview", "Overview"], ["backups", "💾 Backups"], ["post", "✅ Post-refresh steps"]].map(([id, label]) => h("button", {key: id, type: "button",
@@ -462,16 +450,26 @@ function Backups({row, sbx, goTo}) {
   const [err, setErr] = React.useState(null);
   const [result, setResult] = React.useState(null);
   const [space, setSpace] = React.useState(null);
-  const reload = () => listBackups().then(all => setList(all.filter(b => String(b.sandbox).toLowerCase() === String(row.name).toLowerCase())));
-  React.useEffect(() => { reload(); usage().then(setSpace); if (sbx) backupCandidates(sbx.conn).then(setCands).catch(() => setCands([])); }, []);
+  // Only backups taken from this sandbox org (by org id; older ones by host).
+  const reload = () => listBackups().then(all => setList(sbx ? all.filter(b => backupMatchesOrg(b, sbx)) : []));
+  React.useEffect(() => { reload(); usage().then(setSpace); if (sbx) backupCandidates(sbx.conn).then(setCands).catch(() => setCands([])); }, [sbx && sbx.host]);
   const run = (label, fn) => async () => { setBusy(label); setErr(null); setResult(null); try { await fn(); } catch (e) { setErr(e.message); } finally { setBusy(""); } };
   const backUp = run("Backing up…", async () => {
     await backupSandbox(sbx, {sandboxName: row.name, objects: pick, metadata: meta, onStatus: setBusy});
     setResult({text: "Backup saved in this browser."});
     await reload();
   });
-  const restoreMeta = b => run("Preparing the restore…", async () => {
+  const fromOrg = b => (b.orgName && b.orgHost ? `${b.orgName} (${b.orgHost})` : b.orgName || b.orgHost || "an unknown org");
+  // A backup goes back only into the org it was taken from.
+  const sameOrg = b => {
     if (!sbx) throw new Error(`Log in to ${row.name} first.`);
+    if (!backupMatchesOrg(b, sbx)) throw new Error(`This backup was taken from ${fromOrg(b)}, not ${sbx.host}: it can't be restored here.`);
+  };
+  const restoreMeta = b => run("Preparing the restore…", async () => {
+    sameOrg(b);
+    const ok = await confirmDialog({title: `Restore ${row.name}'s metadata?`, confirmLabel: "Continue",
+      message: `From the backup of ${fromOrg(b)} taken ${new Date(b.at).toLocaleString()}, into ${sbx.host}. You validate and deploy it on the next screen.`});
+    if (!ok) return;
     const comps = await snapshotComponents(b.snapshotId);
     const keys = [...comps.keys()];
     setRelease({pendingPlan: {kind: "restore", title: `Restore ${row.name}'s metadata from before the refresh`, since: new Date().toISOString(),
@@ -480,10 +478,10 @@ function Backups({row, sbx, goTo}) {
     goTo("deploy");
   })();
   const restoreRecs = b => run("Restoring data…", async () => {
-    if (!sbx) throw new Error(`Log in to ${row.name} first.`);
+    sameOrg(b);
     const total = b.data.reduce((s, d) => s + d.rows, 0);
     const ok = await confirmDialog({title: `Restore ${total.toLocaleString()} record(s) into ${row.name}?`, confirmLabel: "Restore data", danger: true,
-      message: `${b.data.map(d => `${d.label}: ${d.rows}`).join(", ")}.\n\nRecords are inserted again (new ids), parents first, with lookups between them pointed at the new records. ` +
+      message: `In ${sbx.host}, from the backup of ${fromOrg(b)}: ${b.data.map(d => `${d.label}: ${d.rows}`).join(", ")}.\n\nRecords are inserted again (new ids), parents first, with lookups between them pointed at the new records. ` +
         "Files, attachments and history are not restored. Existing records aren't changed, so restoring twice makes duplicates."});
     if (!ok) return;
     const res = await restoreData(sbx, b, {onStatus: setBusy});
@@ -599,7 +597,7 @@ function StepBody({id, sbx, prod, row, goTo, onDone}) {
       data && data.length > 0 && btn(`Fix ${pick.size} email(s)`, run("Fixing…", async () => {
         const users = data.filter(u => pick.has(u.id));
         if (!(await confirmDialog({title: `Fix ${users.length} email(s)?`, confirmLabel: "Fix emails", danger: true,
-          message: "These people can then receive emails from this sandbox (only if deliverability allows it). Salesforce may email them to confirm the change."}))) return;
+          message: `In ${sbx.host}. These people can then receive emails from this sandbox (only if deliverability allows it). Salesforce may email them to confirm the change.`}))) return;
         const r = await fixInvalidEmails(sbx, users);
         setNote({text: `${r.ok} fixed${r.failed.length ? `, ${r.failed.length} failed: ${r.failed[0]}` : ""}.`, ok: !r.failed.length});
         setData(await invalidEmailUsers(sbx)); setPick(new Set());
@@ -612,7 +610,7 @@ function StepBody({id, sbx, prod, row, goTo, onDone}) {
       data && (data.length ? listOf(data, j => j.id, j => h("span", null, j.name, " ", h("span", {className: "insp-meta"}, `${j.type} · ${j.cron} · next ${j.next ? new Date(j.next).toLocaleString() : "—"}`)))
         : h("div", {className: "insp-meta"}, "No scheduled jobs here.")),
       data && data.length > 0 && btn(`Pause ${pick.size} job(s)`, run("Pausing…", async () => {
-        if (!(await confirmDialog({title: `Stop ${pick.size} scheduled job(s)?`, confirmLabel: "Stop jobs", danger: true, message: "They're aborted in this sandbox. Note their timing if you'll want them back."}))) return;
+        if (!(await confirmDialog({title: `Stop ${pick.size} scheduled job(s)?`, confirmLabel: "Stop jobs", danger: true, message: `They're aborted in ${sbx.host}. Note their timing if you'll want them back.`}))) return;
         const log = await abortJobs(sbx, [...pick]);
         setNote({text: `${log.filter(x => x.ok).length} stopped${log.some(x => !x.ok) ? `, ${log.filter(x => !x.ok).length} failed` : ""}.`, ok: log.every(x => x.ok)});
         setData(await scheduledJobs(sbx)); setPick(new Set());
@@ -621,7 +619,7 @@ function StepBody({id, sbx, prod, row, goTo, onDone}) {
         const jobs = await connQuery(prod.conn, "SELECT ApexClass.Name FROM AsyncApexJob WHERE JobType = 'ScheduledApex' AND Status = 'Queued'");
         const classes = [...new Set(jobs.map(j => j.ApexClass && j.ApexClass.Name).filter(Boolean))];
         if (!classes.length) { setNote({text: "Production has no scheduled Apex."}); return; }
-        if (!(await confirmDialog({title: `Schedule ${classes.length} Apex class(es) here?`, confirmLabel: "Schedule", message: `${classes.join(", ")}, with production's timing. Already scheduled ones are skipped.`}))) return;
+        if (!(await confirmDialog({title: `Schedule ${classes.length} Apex class(es) here?`, confirmLabel: "Schedule", message: `${classes.join(", ")}, with production's timing, in ${sbx.host}. Already scheduled ones are skipped.`}))) return;
         const log = await runAction({id: "schedule-jobs", targets: classes}, {source: prod, target: sbx});
         setNote({text: log, ok: !/✗/.test(log)});
         setData(await scheduledJobs(sbx));
@@ -632,7 +630,7 @@ function StepBody({id, sbx, prod, row, goTo, onDone}) {
       !data && btn("Find flows", run("Reading flows…", async () => setData(await outsideFlows(sbx)))),
       data && (data.length ? listOf(data, f => f.name, f => h("span", null, f.label, " ", h("span", {className: "insp-meta"}, f.reasons.join(" · ")))) : h("div", {className: "insp-meta"}, "No active flow emails or calls out.")),
       data && data.length > 0 && btn(`Deactivate ${pick.size} flow(s)`, run("Deactivating…", async () => {
-        if (!(await confirmDialog({title: `Deactivate ${pick.size} flow(s) here?`, confirmLabel: "Deactivate", danger: true, message: "Only in this sandbox. Activate them again from Flows when you need them."}))) return;
+        if (!(await confirmDialog({title: `Deactivate ${pick.size} flow(s) here?`, confirmLabel: "Deactivate", danger: true, message: `Only in ${sbx.host}. Activate them again from Flows when you need them.`}))) return;
         const log = await deactivate(sbx, [...pick]);
         setNote({text: log, ok: !/✗/.test(log)});
         setData(await outsideFlows(sbx)); setPick(new Set());
@@ -653,7 +651,7 @@ function StepBody({id, sbx, prod, row, goTo, onDone}) {
         data.settings.length > 0 && btn(`Point ${pick.size} value(s) at this sandbox`, run("Updating…", async () => {
           const items = data.settings.filter(s => pick.has(s.id + s.field));
           if (!(await confirmDialog({title: `Replace ${prod.host} in ${items.length} value(s)?`, confirmLabel: "Replace",
-            message: `With ${sbx.host}. Only the picked custom setting values in this sandbox change.`}))) return;
+            message: `With ${sbx.host}. Only the picked custom setting values in ${sbx.host} change.`}))) return;
           const log = await replaceSettingValues(sbx, items, sbx.host, prod.host);
           setNote({text: `${log.filter(x => x.ok).length} updated${log.some(x => !x.ok) ? `, ${log.filter(x => !x.ok).length} failed` : ""}.`, ok: log.every(x => x.ok)});
           setData({...data, settings: await prodUrlSettings(sbx, prod.host)}); setPick(new Set());
@@ -668,7 +666,7 @@ function StepBody({id, sbx, prod, row, goTo, onDone}) {
       data && (data.length ? listOf(data, u => u.id, u => h("span", null, u.name, " ", h("span", {className: "insp-meta"}, `${u.username} · ${u.profile}`))) : h("div", {className: "insp-meta"}, "Everyone active is in the group.")),
       data && data.length > 0 && btn(`Freeze ${pick.size} user(s)`, run("Freezing…", async () => {
         if (!(await typedConfirm({title: `Freeze ${pick.size} user(s)?`, word: "FREEZE", confirmLabel: "Freeze",
-          message: "They can't log in to this sandbox until you unfreeze them (Users tab or Setup). Make sure you're not freezing yourself."}))) return;
+          message: `In ${sbx.host}. They can't log in to this sandbox until you unfreeze them (Users tab or Setup). Make sure you're not freezing yourself.`}))) return;
         const r = await freezeUsers(sbx, [...pick]);
         setNote({text: `${r.frozen} frozen${r.already ? `, ${r.already} already frozen` : ""}.`});
         setPick(new Set());

@@ -115,6 +115,8 @@
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // Only a real click opens the panel: a page script's btn.click() does not.
+      if (!e.isTrusted) return;
       // The click that ends a drag only moves the button.
       if (justDragged) { justDragged = false; return; }
       toggleSidebar();

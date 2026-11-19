@@ -1,6 +1,7 @@
 // Service worker: session pickup derived in part from Salesforce-Inspector-reloaded
 // (https://github.com/tprouvot/Salesforce-Inspector-reloaded)
 // MIT License, Copyright (c) 2023 Thomas Prouvot. See LICENSE.
+import {sameOrgDomain, myDomainLabel} from "./core/sf-host.js";
 
 // Id of the reusable Inspector tab. The worker sleeps between events, so it is
 // kept in storage (session where available) rather than in a variable.
@@ -22,6 +23,12 @@ function setInspectorTabId(id) {
 }
 
 const SESSION_COOKIE_DOMAINS = ["salesforce.com", "cloudforce.com", "salesforce.mil", "cloudforce.mil", "sfcrmproducts.cn", "force.com"];
+
+// A host under one of the Salesforce session domains (or Defender for Cloud Apps' proxy of one).
+function isSalesforceHost(host) {
+  const h = String(host || "").toLowerCase().replace(/\.mcas\.ms$/, "");
+  return /^[a-z0-9.-]+$/.test(h) && SESSION_COOKIE_DOMAINS.some(d => h === d || h.endsWith("." + d));
+}
 
 function isExtensionPage(sender) {
   return !!sender && sender.id === chrome.runtime.id &&
@@ -46,10 +53,14 @@ async function resolveSfHost(url, storeId) {
   const cookie = await getCookie({url, name: "sid", storeId});
   if (!cookie || currentDomain.endsWith(".mcas.ms")) return currentDomain;
   const [orgId] = cookie.value.split("!");
+  // The page's own sid can be planted by the page (document.cookie), so its
+  // org id alone proves nothing: only follow it to a session domain of the
+  // same My Domain as the page (acme.lightning.force.com → acme.my.salesforce.com).
   for (const domain of SESSION_COOKIE_DOMAINS) {
     const cookies = await getAllCookies({name: "sid", domain, secure: true, storeId});
-    const sessionCookie = cookies.find(c => c.value.startsWith(orgId + "!") && c.domain != "help.salesforce.com");
-    if (sessionCookie) return sessionCookie.domain;
+    const sessionCookie = cookies.find(c => c.value.startsWith(orgId + "!") && c.domain != "help.salesforce.com" &&
+      sameOrgDomain(currentDomain, c.domain));
+    if (sessionCookie) return sessionCookie.domain.replace(/^\./, "");
   }
   return currentDomain;
 }
@@ -109,7 +120,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.message == "getSession") {
-    chrome.cookies.get({url: "https://" + request.sfHost, name: "sid", storeId: sender.tab.cookieStoreId}, sessionCookie => {
+    // Only a Salesforce host, asked by our panel or by our content script on a
+    // Salesforce page of the same org.
+    const sfHost = String(request.sfHost || "");
+    const fromOurPage = isExtensionPage(sender);
+    const fromSfPage = !!(sender && sender.tab && sender.url) && (() => {
+      try { return sameOrgDomain(new URL(sender.url).hostname, sfHost); } catch (e) { return false; }
+    })();
+    if (!isSalesforceHost(sfHost) || !(fromOurPage || fromSfPage || (sender.tab && !myDomainLabel(sfHost)))) {
+      sendResponse(null);
+      return false;
+    }
+    chrome.cookies.get({url: "https://" + sfHost, name: "sid", storeId: sender.tab ? sender.tab.cookieStoreId : undefined}, sessionCookie => {
+      void chrome.runtime.lastError;
       if (!sessionCookie) {
         sendResponse(null);
         return;
@@ -118,12 +141,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse(session);
     });
     return true;
-  } else if (request.message == "createWindow") {
-    const brow = typeof browser === "undefined" ? chrome : browser;
-    brow.windows.create({
-      url: request.url,
-      incognito: request.incognito ?? false
-    });
   } else if (request.message == "openOptions") {
     const url = chrome.runtime.getURL("options.html" + (request.host ? `?host=${encodeURIComponent(request.host)}` : ""));
     chrome.tabs.create({url});
@@ -186,11 +203,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
     });
     return true;
-  } else if (request.message == "reloadPage") {
-    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-      const tab = tabs && tabs[0];
-      if (tab && tab.id != null) chrome.tabs.reload(tab.id);
-    });
   }
   return false;
 });

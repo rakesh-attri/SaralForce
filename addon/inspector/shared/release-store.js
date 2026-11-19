@@ -144,19 +144,38 @@ export async function exportRelease(release) {
   return writeZip(files);
 }
 
+// An imported release never keeps the file's own ids: they could match (and
+// overwrite) a release, snapshot or zip already in this browser. The release,
+// its deployed zip and its rollback point get fresh ids, and a reference with
+// nothing in the file behind it is dropped rather than left pointing at
+// whatever this browser stores under that id. Pure, for tests.
+export function reidentifyImport(release, snap, {hasZip = false, makeId = newId, now = new Date().toISOString()} = {}) {
+  const id = makeId("rel");
+  const snapshot = snap ? {...snap, id: makeId("snap"), imported: true, importedAt: now} : null;
+  return {
+    release: {...release, id, zipId: hasZip ? "zip-" + id : "", snapshotId: snapshot ? snapshot.id : "", imported: true, importedAt: now},
+    snapshot
+  };
+}
+
 export async function importRelease(bytes) {
   const files = await readZip(bytes);
   const json = files.get("release.json");
   if (!json) throw new Error("Not a SaralForce release file (no release.json).");
-  const release = JSON.parse(bytesToText(json));
-  if (!release || !release.id) throw new Error("The release file is damaged.");
-  if (files.get("deployed.zip") && release.zipId) await saveBytes(release.zipId, files.get("deployed.zip"));
-  if (files.get("snapshot.json") && files.get("snapshot.zip")) {
-    const snap = JSON.parse(bytesToText(files.get("snapshot.json")));
-    await saveBytes(snap.id, files.get("snapshot.zip"));
-    await tx("snapshots", "readwrite", s => s.put(snap));
+  const parsed = JSON.parse(bytesToText(json));
+  if (!parsed || typeof parsed !== "object" || !parsed.id) throw new Error("The release file is damaged.");
+  const deployed = files.get("deployed.zip");
+  const snapBytes = files.get("snapshot.zip");
+  const snapJson = files.get("snapshot.json");
+  const snapIn = snapJson && snapBytes ? JSON.parse(bytesToText(snapJson)) : null;
+  if (snapIn !== null && (typeof snapIn !== "object" || Array.isArray(snapIn))) throw new Error("The release file is damaged.");
+  const {release, snapshot} = reidentifyImport(parsed, snapIn, {hasZip: !!deployed});
+  if (release.zipId) await saveBytes(release.zipId, deployed);
+  if (snapshot) {
+    await saveBytes(snapshot.id, snapBytes);
+    await tx("snapshots", "readwrite", s => s.put(snapshot));
   }
-  await putRelease({...release, imported: true});
+  await putRelease(release);
   return release;
 }
 

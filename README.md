@@ -495,7 +495,10 @@ Details → [docs/FEATURES.md#17-settings--ai-providers](docs/FEATURES.md#17-set
 ### Safety, privacy and limits
 
 - **Your data stays yours**: no accounts, analytics or tracking; org data goes to an AI provider
-  only when you press ✨.
+  only when you press ✨, and then only what that feature needs (your text plus schema, log
+  excerpts, errors or metadata summaries). Free (test) uses public third-party services.
+- **Kept in your browser**: AI keys and the GitHub token in extension storage; SandShift history,
+  snapshots and Sandbox Studio backups (which can hold record data) in IndexedDB until you delete them.
 - **Confirmations** before destructive or account-level actions; **AI never acts on its own**:
   every result is shown first.
 - **Managed package items** are read-only; **your Salesforce permissions apply**; Apex classes and

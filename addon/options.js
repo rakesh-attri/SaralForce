@@ -539,8 +539,9 @@ class OptionsApp extends React.Component {
               "Metadata", "Org Info", "App tabs", "Code coverage", "✨ AI Object Builder"].map(t =>
               h("span", {key: t, className: "opt-chip" + (t.startsWith("✨") ? " ai" : "")}, t))),
           h("p", null,
-            "Privacy: org data travels only between your browser and Salesforce. When you use an ✨ feature, only the " +
-            "text you type and the minimal schema it needs go to the AI provider you chose."),
+            "Privacy: org data travels only between your browser and Salesforce. When you use an ✨ feature, what that " +
+            "feature needs goes to the AI provider you chose: your text, plus schema, log excerpts, error messages or " +
+            "metadata summaries depending on the feature. Free (test) sends it to public third-party services."),
           h("p", {className: "opt-foot"},
             h("a", {href: "https://rakesh-attri.github.io/SaralForce/privacy.html", target: "_blank", rel: "noopener noreferrer"}, "Privacy Policy"),
             " · ",

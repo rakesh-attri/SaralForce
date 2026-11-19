@@ -9,6 +9,7 @@ import {toCsv, downloadText} from "../shared/csv.js";
 import {detectSteps} from "../../core/manual-steps.js";
 import {useStepsAsk} from "./release-steps-ask.js";
 import {bytesToText} from "../../core/zip.js";
+import {escapeSoqlString} from "../../core/soql.js";
 import {listComponents, retrieve, queryAll, loadCatalog} from "../shared/deploy-api.js";
 import {releaseNotesFromChanges} from "../shared/ai.js";
 import {permissionHolders} from "../../core/analyzers.js";
@@ -52,7 +53,7 @@ async function dependencyEdges(conn, rows) {
   const edges = [];
   const keys = new Set(rows.map(r => r.key));
   for (let i = 0; i < pick.length; i += 100) {
-    const names = pick.slice(i, i + 100).map(r => "'" + r.fullName.replace(/'/g, "\\'") + "'").join(",");
+    const names = pick.slice(i, i + 100).map(r => "'" + escapeSoqlString(r.fullName) + "'").join(",");
     const recs = await queryAll(conn, "SELECT MetadataComponentName, MetadataComponentType, RefMetadataComponentName, RefMetadataComponentType " +
       `FROM MetadataComponentDependency WHERE MetadataComponentName IN (${names})`, {tooling: true});
     for (const d of recs) {

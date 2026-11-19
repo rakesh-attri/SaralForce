@@ -313,7 +313,7 @@ function ffFailChunk(send, message) {
 // Result files for a Data API run, shaped like the Bulk 2.0 ones: the source
 // CSV columns prefixed with sf__Id (+ sf__Created for upsert) or sf__Error.
 function ffDataResultFiles({headers, records, successes, failures, operation, lineEnding}) {
-  const opts = {delimiter: ",", lineEnding, guardFormulas: false};
+  const opts = {delimiter: ",", lineEnding, guardFormulas: true};
   const pick = (index) => (index != null && records && records[index]) || {};
   const okCols = ["sf__Id"].concat(operation === "upsert" ? ["sf__Created"] : [], headers || []);
   const okRows = (successes || []).map(s => Object.assign({}, pick(s.index), {
