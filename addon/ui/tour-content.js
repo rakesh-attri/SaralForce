@@ -70,6 +70,17 @@ export const SETTINGS_TOUR = {
 // Highlights per release, shown once after an update (newest first).
 export const RELEASE_NOTES = [
   {
+    version: "2.4.0",
+    title: "What's new in SaralForce 2.4.0",
+    items: [
+      "Sandbox Studio (SandShift): create, refresh, activate and delete sandboxes, back up before a refresh and restore after, and walk through the post-refresh steps.",
+      "Org Handbook (Metadata): an onboarding view of any org, with every flow explained step by step and a simple diagram. Export it as HTML or Markdown.",
+      "Free (test) AI: try the ✨ features with no API key (for testing only).",
+      "Saved AI settings now apply to open panels straight away, no reload needed.",
+      "Security fixes: the panel only opens inside pages of its own org, and sandbox, backup and release actions always target the exact org."
+    ]
+  },
+  {
     version: "2.3.3",
     title: "What's new in SaralForce 2.3.3",
     items: [

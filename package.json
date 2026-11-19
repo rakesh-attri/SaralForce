@@ -1,6 +1,6 @@
 {
   "name": "saralforce",
-  "version": "2.3.3",
+  "version": "2.4.0",
   "description": "AI-Powered Salesforce Object & Field Creator Chrome Extension",
   "private": true,
   "scripts": {
