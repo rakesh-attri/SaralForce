@@ -46,13 +46,34 @@ export function bytesToBase64(bytes) {
   return btoa(s);
 }
 
-async function inflateRaw(bytes) {
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+// Limits for opening a zip: past these it is a zip bomb or not ours.
+export const ZIP_MAX_BYTES = 300 * 1024 * 1024;
+export const ZIP_MAX_ENTRIES = 20000;
+const TOO_LARGE = "This zip is too large to open here.";
+
+// Inflates at most `limit` bytes: the sizes a zip declares can lie.
+async function inflateRaw(bytes, limit = Infinity) {
+  const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+  const parts = [];
+  let total = 0;
+  for (;;) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > limit) { await reader.cancel().catch(() => {}); throw new Error(TOO_LARGE); }
+    parts.push(value);
+  }
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const part of parts) { out.set(part, p); p += part.length; }
+  return out;
 }
 
-// bytes → Map(path → Uint8Array). Directory entries are skipped.
-export async function readZip(bytes) {
+// bytes → Map(path → Uint8Array). Directory entries are skipped. Throws
+// before inflating anything when the central directory declares more than
+// ZIP_MAX_ENTRIES entries or ZIP_MAX_BYTES uncompressed, and while
+// inflating if the real output passes ZIP_MAX_BYTES.
+export async function readZip(bytes, {maxBytes = ZIP_MAX_BYTES, maxEntries = ZIP_MAX_ENTRIES} = {}) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = -1;
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) {
@@ -60,12 +81,17 @@ export async function readZip(bytes) {
   }
   if (eocd < 0) throw new Error("Not a zip file (no end of central directory)");
   const count = view.getUint16(eocd + 10, true);
-  let p = view.getUint32(eocd + 16, true);
-  const files = new Map();
+  if (count > maxEntries) throw new Error(TOO_LARGE);
+  const cdStart = view.getUint32(eocd + 16, true);
+  // First pass: the central directory alone (sizes as declared).
+  const entries = [];
+  let declared = 0;
+  let p = cdStart;
   for (let n = 0; n < count; n++) {
-    if (view.getUint32(p, true) !== 0x02014b50) throw new Error("Corrupt zip central directory");
+    if (p + 46 > bytes.length || view.getUint32(p, true) !== 0x02014b50) throw new Error("Corrupt zip central directory");
     const method = view.getUint16(p + 10, true);
     const compSize = view.getUint32(p + 20, true);
+    const size = view.getUint32(p + 24, true);
     const nameLen = view.getUint16(p + 28, true);
     const extraLen = view.getUint16(p + 30, true);
     const commentLen = view.getUint16(p + 32, true);
@@ -73,13 +99,25 @@ export async function readZip(bytes) {
     const name = bytesToText(bytes.subarray(p + 46, p + 46 + nameLen));
     p += 46 + nameLen + extraLen + commentLen;
     if (name.endsWith("/")) continue;
+    declared += size;
+    if (declared > maxBytes) throw new Error(TOO_LARGE);
+    entries.push({name, method, compSize, localOff});
+  }
+  const files = new Map();
+  let total = 0;
+  for (const {name, method, compSize, localOff} of entries) {
+    if (localOff + 30 > bytes.length) throw new Error("Corrupt zip entry " + name);
     const lNameLen = view.getUint16(localOff + 26, true);
     const lExtraLen = view.getUint16(localOff + 28, true);
     const start = localOff + 30 + lNameLen + lExtraLen;
     const raw = bytes.subarray(start, start + compSize);
-    if (method === 0) files.set(name, raw.slice());
-    else if (method === 8) files.set(name, await inflateRaw(raw));
+    let data;
+    if (method === 0) data = raw.slice();
+    else if (method === 8) data = await inflateRaw(raw, maxBytes - total);
     else throw new Error(`Unsupported zip compression (method ${method}) for ${name}`);
+    total += data.length;
+    if (total > maxBytes) throw new Error(TOO_LARGE);
+    files.set(name, data);
   }
   return files;
 }

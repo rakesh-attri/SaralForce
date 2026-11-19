@@ -495,7 +495,10 @@ Details → [docs/FEATURES.md#17-settings--ai-providers](docs/FEATURES.md#17-set
 ### Safety, privacy and limits
 
 - **Your data stays yours**: no accounts, analytics or tracking; org data goes to an AI provider
-  only when you press ✨.
+  only when you press ✨, and then only what that feature needs (your text plus schema, log
+  excerpts, errors or metadata summaries). Free (test) uses public third-party services.
+- **Kept in your browser**: AI keys and the GitHub token in extension storage; SandShift history,
+  snapshots and Sandbox Studio backups (which can hold record data) in IndexedDB until you delete them.
 - **Confirmations** before destructive or account-level actions; **AI never acts on its own**:
   every result is shown first.
 - **Managed package items** are read-only; **your Salesforce permissions apply**; Apex classes and
@@ -615,7 +618,7 @@ Picklists can also use an org **global value set**, or depend on a **controlling
 
 ## What's New
 
-### Next release
+### v2.4.0
 - **Sandbox Studio** (SandShift) — create, clone, refresh, activate or discard and delete sandboxes from
   production; back up metadata and data before a refresh and restore it; post-refresh steps for email,
   scheduled jobs, outbound flows, integrations and who can log in
@@ -625,6 +628,9 @@ Picklists can also use an org **global value set**, or depend on a **controlling
 - **Free (test) AI provider** — try the ✨ features with no key; requests go to free public endpoints (LLM7,
   Pollinations, Cehpoint) with automatic fallback. For testing only
 - **AI settings apply without a reload** — saving a provider, key or model takes effect in open panels at once
+- **Security fixes** — the panel only opens inside a page of the org it works with (a page that fakes a
+  session cookie can't embed it), Sandbox Studio and backups target only the exact org, imported releases
+  can't overwrite rollback points, and safer CSV, SOQL and Markdown output
 
 ### v2.3.3
 - **Movable launcher** — drag the SaralForce button anywhere on the page; it stays there on every

@@ -55,7 +55,9 @@ function KeyList({keys, del}) {
 
 function ReleaseDetail({r, onRollback, onDelete, onExport, onCommit, onPromote, onPullRequest, onCompareAgain, onCheck, busy}) {
   const s = r.summary || {};
-  const canRollback = r.kind !== "validation" && r.snapshotId && (r.success || r.status === "Unknown" || r.status === "InProgress");
+  // An imported rollback point (and its target host) came from a file and
+  // can't be checked, so it never drives a rollback.
+  const canRollback = !r.imported && r.kind !== "validation" && r.snapshotId && (r.success || r.status === "Unknown" || r.status === "InProgress");
   const unsure = r.deployId && (r.status === "Unknown" || r.status === "InProgress");
   return h("div", {className: "rel-hist-detail"},
     h("div", {className: "tr-summary"},
@@ -63,6 +65,7 @@ function ReleaseDetail({r, onRollback, onDelete, onExport, onCommit, onPromote, 
       s.tests && s.tests.total > 0 && h("span", {className: "tr-stat" + (s.tests.errors ? " bad" : " ok")}, `Tests ${s.tests.completed}/${s.tests.total}`),
       r.testLevel && h("span", {className: "tr-stat"}, "Test level: " + r.testLevel),
       r.imported && h(FFBadge, {kind: "info"}, "Imported")),
+    r.imported && r.kind !== "validation" && h("div", {className: "insp-meta"}, "Rollback points from another browser can't be checked; compare and deploy instead."),
     unsure && h("div", {className: "insp-warn"}, "SaralForce lost track of this deploy before it finished. ",
       h("button", {className: "field-action-btn", disabled: busy, onClick: onCheck}, "Check status"), r.error ? ` (${r.error})` : ""),
     (r.name || r.by) && h("div", {className: "insp-meta"}, [r.name && `Release: ${r.name}`, r.by && `Deployed by ${r.by}`].filter(Boolean).join(" · ")),
@@ -126,6 +129,7 @@ function DriftCard({drift, onClose, goTo}) {
   const shown = drift.rows.filter(r => filter[r.status]);
   const toggle = k => { const n = new Set(sel); if (n.has(k)) n.delete(k); else n.add(k); setSel(n); };
   const restore = () => {
+    if (drift.snap.imported) return;
     const {restore: keys, remove} = restoreFromDrift(drift.rows, sel);
     setRelease({pendingPlan: {
       kind: "restore", title: `Restore from snapshot · ${drift.org.name}`, since: new Date().toISOString(),
@@ -157,8 +161,9 @@ function DriftCard({drift, onClose, goTo}) {
             open === r.key && h("tr", {key: r.key + ":d", className: "rel-diff-row"},
               h("td", {colSpan: 4}, h(DiffView, {row: r, heading: "Now  →  Snapshot (what a restore puts back)"})))])))),
     h("div", {className: "rel-actionbar"},
-      h("span", {className: "insp-meta"}, `${sel.size} picked`),
-      h("button", {className: "btn btn-primary btn-sm", disabled: !sel.size, onClick: restore}, "Restore picked…")));
+      drift.snap.imported ? h("span", {className: "insp-meta"}, "Rollback points from another browser can't be checked; compare and deploy instead.")
+        : [h("span", {key: "n", className: "insp-meta"}, `${sel.size} picked`),
+          h("button", {key: "b", className: "btn btn-primary btn-sm", disabled: !sel.size, onClick: restore}, "Restore picked…")]));
 }
 
 // Every deployment Salesforce recorded in an org, whatever tool made it
@@ -277,6 +282,7 @@ export function HistoryView({goTo}) {
   };
 
   const rollback = r => work(async () => {
+    if (r.imported) throw new Error("Rollback points from another browser can't be checked; compare and deploy instead.");
     const target = orgByHost(r.targetHost);
     if (!target) throw new Error(`Log in to ${r.targetName || r.targetHost} in this browser first, then press ↻ in Compare.`);
     const snap = await getSnapshot(r.snapshotId);

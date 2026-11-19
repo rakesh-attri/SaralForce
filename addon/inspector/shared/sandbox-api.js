@@ -12,7 +12,7 @@ import {parseCsv} from "../../core/csv.js";
 import {textToBytes, bytesToText} from "../../core/zip.js";
 import {escapeSoqlString} from "../../core/soql.js";
 import {executeAnonymous, deactivateFlows} from "./manual-actions.js";
-import {mergeSandboxes, restoreOrder, restoreRecord, addIds, isInvalidEmail, stripInvalid, endpointKind, flowOutsideReasons} from "../../core/sandboxes.js";
+import {mergeSandboxes, backupMatchesOrg, restoreOrder, restoreRecord, addIds, isInvalidEmail, stripInvalid, endpointKind, flowOutsideReasons} from "../../core/sandboxes.js";
 
 const T = `/services/data/v${apiVersion}/tooling`;
 const rest = (conn, path, opts = {}) => conn.client.request(path, {useCache: false, ...opts});
@@ -137,7 +137,7 @@ export async function backupSandbox(org, {sandboxName, objects = [], metadata = 
     data.push({object, label: d.label || object, rows, blobId, fields, refs, bytes: csv.length});
   }
   const size = data.reduce((s, x) => s + x.bytes, 0);
-  return saveBackup({sandbox: sandboxName || org.name, orgHost: org.host, orgName: org.name, snapshotId, metaCount, data, size});
+  return saveBackup({sandbox: sandboxName || org.name, orgId: org.orgId || "", orgHost: org.host, orgName: org.name, snapshotId, metaCount, data, size});
 }
 
 // Rows of a backed-up object (header row → objects).
@@ -152,6 +152,7 @@ export async function backupRows(item) {
 // Data restore: parents first, new ids remapped into later lookups.
 // → [{object, inserted, failed, errors: [{row, message}]}]
 export async function restoreData(org, backup, {objects, maxRows = 50000, onStatus = () => {}, signal} = {}) {
+  if (!backupMatchesOrg(backup, org)) throw new Error(`This backup was taken from ${backup.orgName || backup.orgHost || "another org"}, not ${org.host}: it can only be restored there.`);
   const items = backup.data.filter(d => !objects || objects.includes(d.object));
   const order = restoreOrder(items.map(d => ({name: d.object, refs: d.refs})));
   const idMap = new Map();

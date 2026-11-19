@@ -604,7 +604,15 @@ Sandbox manager, run from **production** (sign in to it in this browser as an ad
 ## 18. Safety, privacy and limits
 
 - **Your data stays yours** — no accounts, analytics or tracking. Org data goes to your AI
-  provider **only** when you press an ✨ button.
+  provider **only** when you press an ✨ button, and then only what that feature needs: your text
+  plus schema, log excerpts, error messages or metadata summaries depending on the feature.
+  **Free (test)** sends it to public third-party services, so use your own key for real org data.
+- **Where things are kept** — AI keys and the GitHub token are stored in this browser's extension
+  storage. SandShift history, snapshots and Sandbox Studio backups (which can hold record data) are
+  kept unencrypted in this browser's IndexedDB until you delete them; storage use is shown.
+- **Same-org panel** — the panel only opens inside a page of the org it works with: a page of
+  another org (or a page that fakes a session cookie) can't embed it, and the launcher ignores
+  clicks made by page scripts.
 - **Confirmations** before destructive or account-level actions: removing permission
   sets, freezing users, resetting passwords, approving/rejecting, deleting records,
   logs or custom metadata, import deletes, job cancels.

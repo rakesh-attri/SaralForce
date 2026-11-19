@@ -116,6 +116,31 @@ export const sandboxHost = (row, prodHost) => {
   return dom ? `${dom}--${String(row.name).toLowerCase()}.sandbox.my.salesforce.com` : "";
 };
 
+// Org ids compare on their first 15 characters (SandboxProcess gives 15,
+// Organization.Id gives 18).
+const id15 = id => String(id || "").slice(0, 15);
+
+// The sandbox's own logged-in connection, if you're logged in to it here:
+// the org whose id is the sandbox's (SandboxProcess.SandboxOrganization), or
+// whose host is exactly this production's sandbox host. Nothing looser: a
+// same-named sandbox of another production (clientb--uat) must never match.
+export function matchSandboxOrg(orgs, row, prodHost) {
+  if (!row) return null;
+  const host = sandboxHost(row, prodHost);
+  const orgId = row.process && row.process.orgId ? id15(row.process.orgId) : "";
+  const live = asList(orgs).filter(o => o && !o.isGit && o.isSandbox);
+  return (orgId && live.find(o => id15(o.orgId) === orgId)) ||
+    (host && live.find(o => String(o.host || "").toLowerCase() === host)) || null;
+}
+
+// Was this backup taken from this org? By org id; older backups without one
+// by their host.
+export function backupMatchesOrg(backup, org) {
+  if (!backup || !org) return false;
+  if (backup.orgId) return !!org.orgId && id15(backup.orgId) === id15(org.orgId);
+  return !!backup.orgHost && String(backup.orgHost).toLowerCase() === String(org.host || "").toLowerCase();
+}
+
 // Request bodies. form: {name, license, description, autoActivate, apexClassId,
 // groupId, templateId, historyDays, copyChatter, sourceId}.
 export function sandboxBody(form, mode = "create") {
